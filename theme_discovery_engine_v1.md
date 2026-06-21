@@ -91,6 +91,10 @@ These limits are intentional. They keep the MVP self-consistent and honest. Impl
 - Winning Zone is not computable in a single-snapshot MVP because it depends on Birth Score, Momentum, and Novelty. See section 21.
 - Validation is illustrative only in the single-snapshot MVP. One `as_of_date` over 20-60 companies yields a single cross-sectional draw, which cannot support any statistical claim that themes are associated with future outcomes. MVP validation demonstrates pipeline connectivity, basket reproducibility, and return traceability, not statistical significance. Statistical association requires the multi-period walk-forward in section 22.
 - A meaningful research claim requires at least a minimal walk-forward (3+ time points). Until then, no excess-return claim may be stated as a finding.
+- Required behavior in single-snapshot mode:
+  - API/UI must explicitly label all temporal metrics as unavailable.
+  - Discovery outputs must never fabricate `0`, `"N/A"`, or fake confidence intervals for temporal fields.
+  - Validation outputs must clearly indicate pipeline-only interpretation (no causal or alpha claim).
 
 ---
 
@@ -996,6 +1000,21 @@ Single-snapshot metrics (valid with one `as_of_date`):
 - Saturation: breadth of coverage (crowding proxies only if available).
 
 Temporal metrics (require >= 2 snapshots; skip in single-snapshot MVP):
+- Implementation note:
+  - `metrics.require_lineage=false` indicates all temporal metrics should be omitted.
+  - `theme_metrics.parquet` may include only single-snapshot fields plus `metric_mode` and `lineage_mode`.
+  - If a caller requests temporal metrics while `lineage_mode="single_snapshot"`, return a typed validation error and suggest walk-forward execution.
+
+Temporal metric provenance fields:
+- `as_of_date`
+- `lineage_window_start` (null in single-snapshot mode)
+- `lineage_mode` (`single_snapshot` | `temporal`)
+- `lineage_gap_count`
+
+- `theme_metrics.parquet` validation:
+  - `single_snapshot` mode: contains only single-snapshot fields (`strength`, `cohesion`, `coverage`) and `metric_mode`.
+  - `lineage` mode: may contain `momentum`, `birth_score`, `novelty`, `acceleration`.
+- `theme_lineage.json` is required for lineage runs and may be empty (`[]`) for single-snapshot runs.
 
 - Momentum: change in mentions or edge weight versus prior window.
 - Birth Score: new high-confidence entities and edges versus prior window.
@@ -1033,7 +1052,13 @@ High Birth Score
 MVP note:
 
 - This is a research hypothesis, not an investment claim until validated.
-- Winning Zone depends on Birth Score, Momentum, and Novelty, which are temporal metrics. It is therefore not computable in a single-snapshot MVP and is only produced once lineage exists across >= 2 snapshots. See section 20.
+Winning Zone depends on Birth Score, Momentum, and Novelty, which are temporal metrics. It is therefore not computable in a single-snapshot MVP and is only produced once lineage exists across >= 2 snapshots. See section 20.
+
+For `lineage_mode="single_snapshot"`, `winning_zone.json` is still a schema-valid artifact with:
+- `status: "insufficient_lineage"`
+- `as_of_date`
+- `ready_metrics: ["strength","cohesion","coverage"]`
+- `missing_metrics: ["birth_score","momentum","novelty","acceleration","winning_zone_score"]`
 
 ---
 
@@ -1041,7 +1066,17 @@ MVP note:
 
 Target framework:
 
-Monthly walk-forward.
+Monthly walk-forward requires a minimum of 3 monthly points for any inferential claim.
+
+Single-snapshot behavior:
+
+- `backtest_status` in run artifacts must be `disabled_not_enough_snapshots`.
+- Validation outputs should state: "backtesting requires temporal panel and is not meaningful for single-snapshot inputs."
+
+Required minimum coverage:
+- 1M metrics require at least one month of market coverage after `as_of_date` for each snappoint.
+- 3M metrics require at least three months of market coverage after `as_of_date` for each snappoint.
+- Backtest execution should fail-fast with a typed validation error if any snappoint lacks required coverage and list exact missing date ranges.
 
 At time `t`:
 
