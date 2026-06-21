@@ -83,6 +83,19 @@ The v1 MVP must be a small but extensible vertical slice. It should be able to r
 - Social-media agent simulation as investment evidence.
 - Claims such as "predict anything".
 
+## MVP Caveats / Known Limitations
+
+These limits are intentional. They keep the MVP self-consistent and honest. Implementers must not silently exceed them.
+
+- Single-snapshot metric gap: a single `as_of_date` demo has no prior window, so `Momentum`, `Birth Score`, `Novelty`, and `Acceleration` are undefined and must not be produced. Only single-snapshot metrics (`Strength`, `Cohesion`, `Saturation` as coverage) are valid. See section 20.
+- Winning Zone is not computable in a single-snapshot MVP because it depends on Birth Score, Momentum, and Novelty. See section 21.
+- Validation is illustrative only in the single-snapshot MVP. One `as_of_date` over 20-60 companies yields a single cross-sectional draw, which cannot support any statistical claim that themes are associated with future outcomes. MVP validation demonstrates pipeline connectivity, basket reproducibility, and return traceability, not statistical significance. Statistical association requires the multi-period walk-forward in section 22.
+- A meaningful research claim requires at least a minimal walk-forward (3+ time points). Until then, no excess-return claim may be stated as a finding.
+- Required behavior in single-snapshot mode:
+  - API/UI must explicitly label all temporal metrics as unavailable.
+  - Discovery outputs must never fabricate `0`, `"N/A"`, or fake confidence intervals for temporal fields.
+  - Validation outputs must clearly indicate pipeline-only interpretation (no causal or alpha claim).
+
 ---
 
 # 3. MiroFish Reference Boundary
@@ -149,6 +162,7 @@ POST /api/data/clean
 POST /api/data/chunk
 GET  /api/runs/:run_id/status
 POST /api/extraction/run
+POST /api/extraction/resolve
 POST /api/graph/build
 POST /api/themes/discover
 GET  /api/themes/:run_id
@@ -301,6 +315,8 @@ investment_ontology/
 `docs/io_contracts.md` defines the canonical input and output formats for stages, artifacts, APIs, agents, and skills. Implementation work must preserve those contracts unless this source-of-truth document is updated first.
 
 `docs/data_schema.md` defines the required data order: raw unstructured inputs, cleaned unstructured artifacts, structured discovery artifacts, and structured validation artifacts.
+
+All tests live in one place: the top-level `tests/` directory. Test files must not be scattered next to implementation code under `app/backend/` or `app/frontend/`. Mirror the source layout inside `tests/` (for example `tests/backend/`, `tests/frontend/`, `tests/pipeline/`) so a single command can discover and run the full suite. This keeps the test surface and the leakage/quality gates reviewable in one location.
 
 ---
 
@@ -462,6 +478,12 @@ Examples:
 - `hurts`
 - `located_in`
 
+Structural interpretation:
+
+- Structural edges for community discovery: `causes`, `benefits`, `hurts`, `exposed_to`, `sensitive_to`.
+- Evidence edges: `mentioned_in`.
+- Optional context edges: `co_occurs_with` and `located_in` are non-structural unless explicitly projected into node features.
+
 Minimum edge fields:
 
 ```text
@@ -470,12 +492,23 @@ source_entity_id
 target_entity_id
 edge_type
 confidence
+extraction_method
 evidence_chunk_ids
 first_seen_at
 last_seen_at
 as_of_date
-extraction_method
 ```
+
+Method constraints:
+
+- `extraction_method=document_stated`: explicit textual claim evidence required in `evidence_chunk_ids` (minimum one chunk).
+- `extraction_method=llm_inferred`: relationship inferred by model; must include evidence rationale and confidence.
+- `extraction_method=metadata_inferred`: deterministic metadata-based signal; must carry `source_record_id`.
+
+Default exposure policy:
+
+- Exposure and validation pipelines consume `document_stated` edges by default.
+- Weak signals (`llm_inferred`, `metadata_inferred`) are excluded unless explicitly enabled by config flag `include_weak_signals`.
 
 ---
 
@@ -516,6 +549,21 @@ report.md
 
 `fundamentals.parquet` is required for schema consistency but may be empty when fundamentals validation is disabled in config.
 
+Run vs sweep model:
+
+- `run_manifest.json` is one `(run_id, as_of_date)` snapshot.
+- Multi-period backtests are modeled as `sweep` execution that contains ordered child runs.
+- Sweep metadata is written as `sweep_manifest.json` with:
+  - `sweep_id`
+  - `run_ids`
+  - `as_of_dates`
+  - `window_start`
+  - `window_end`
+  - `status` (`running`, `frozen`, `blocked`, `failed`)
+- Child run manifests may include:
+  - `sweep_parent_id` (optional, nullable)
+  - `sweep_position` (optional integer)
+
 `run_manifest.json` must contain:
 
 ```json
@@ -536,6 +584,13 @@ report.md
 # 9. Agent Framework
 
 Agents are work roles, not autonomous black boxes. Their outputs must be artifact-backed.
+
+This section describes logical roles. Some roles share one agent file (see section 25 for the canonical file list):
+
+- Entity Resolution (9.5) is a sub-stage of `extraction_agent.md`; it has no separate file.
+- Exposure (9.7) is owned by `graph_theme_agent.md` for computation and handed to `validation_agent.md`; it has no separate file.
+- `data_architect_agent.md` and `data_engineering_agent.md` are cross-cutting roles (schema and pipeline plumbing) that support all data-impacting stages and are not tied to one numbered stage below.
+- `frontend_report_agent.md` covers the Report role (9.9) plus the dashboard pages in section 24.
 
 ## 9.1 Orchestrator
 
@@ -722,6 +777,13 @@ Discovery algorithms:
 - Louvain for simple MVP.
 - Leiden for better community quality.
 
+Structural projection rule:
+
+- Community discovery input graph MUST be entity-only.
+- Document nodes and `mentioned_in` edges are allowed in `graph.json` for evidence traceability, but they are excluded from Louvain/Leiden inputs.
+- Community discovery input edges must be filtered to structural edge types (`causes`, `benefits`, `hurts`, `exposed_to`, `sensitive_to`) and non-weak source (`document_stated` or explicit config-approved `metadata_inferred`).
+- `communities.json` must record `edge_projection_mode` so lineage and audit can reconstruct excluded nodes/edges.
+
 Output:
 
 ```text
@@ -872,6 +934,12 @@ Leakage test:
 
 - Build discovery artifacts with `as_of_date`.
 - Only after artifacts are frozen, run validation.
+- Freeze gate:
+  - `data/runs/<run_id>/discovery/` and `data/runs/<run_id>/validation/` must be physically separated.
+  - `validation_agent` must verify `run_manifest.json` artifact hashes before reading validation inputs.
+- pytest requirements for CI gates:
+  - Every evidence chunk entering `Graph(t)` has `available_at <= as_of_date`.
+  - Every validation row read (`market_prices`, `fundamentals`) has `as_of_date + holding_period <= row_date`.
 
 ---
 
@@ -968,18 +1036,41 @@ MVP validation:
 
 # 20. Theme Metrics
 
-MVP metrics:
+Metrics are classified by how many snapshots they require. A single `as_of_date` run must only compute single-snapshot metrics. Temporal metrics require lineage across at least two adjacent snapshots and must be skipped otherwise.
+
+Single-snapshot metrics (valid with one `as_of_date`):
 
 - Strength: weighted evidence and edge count.
-- Momentum: change in mentions or edge weight versus prior window.
-- Birth Score: new high-confidence entities and edges.
 - Cohesion: graph density or modularity-related score.
-- Novelty: share of new entities/edges.
-- Saturation: breadth of coverage and crowding proxies if available.
+- Saturation: breadth of coverage (crowding proxies only if available).
+
+Temporal metrics (require >= 2 snapshots; skip in single-snapshot MVP):
+
+- Momentum: change in mentions or edge weight versus prior window.
+- Birth Score: new high-confidence entities and edges versus prior window.
+- Novelty: share of new entities/edges versus prior window.
+- Acceleration: change in momentum across windows.
+
+Config gate:
+
+- A `metrics.require_lineage` flag controls temporal metrics. When `metrics.require_lineage=false` (lineage absent, `lineage_mode="single_snapshot"`), temporal metrics are omitted rather than emitted as degenerate values.
+- If a caller requests temporal metrics while `lineage_mode="single_snapshot"`, return a typed validation error and suggest walk-forward execution.
+
+Temporal metric provenance fields:
+
+- `as_of_date`
+- `lineage_window_start` (null in single-snapshot mode)
+- `lineage_mode` (`single_snapshot` | `temporal`)
+- `lineage_gap_count`
+
+`theme_metrics.parquet` validation:
+
+- `single_snapshot` mode: contains only single-snapshot fields (`strength`, `cohesion`, `coverage`) plus `metric_mode` and `lineage_mode`.
+- `lineage` mode: may additionally contain `momentum`, `birth_score`, `novelty`, `acceleration`.
+- `theme_lineage.json` is required for lineage runs and may be empty (`[]`) for single-snapshot runs.
 
 Later metrics:
 
-- Acceleration.
 - Macro linkage.
 - Commodity linkage.
 - Fundamental confirmation.
@@ -1005,6 +1096,13 @@ High Birth Score
 MVP note:
 
 - This is a research hypothesis, not an investment claim until validated.
+Winning Zone depends on Birth Score, Momentum, and Novelty, which are temporal metrics. It is therefore not computable in a single-snapshot MVP and is only produced once lineage exists across >= 2 snapshots. See section 20.
+
+For `lineage_mode="single_snapshot"`, `winning_zone.json` is still a schema-valid artifact with:
+- `status: "insufficient_lineage"`
+- `as_of_date`
+- `ready_metrics: ["strength","cohesion","coverage"]`
+- `missing_metrics: ["birth_score","momentum","novelty","acceleration","winning_zone_score"]`
 
 ---
 
@@ -1012,7 +1110,29 @@ MVP note:
 
 Target framework:
 
-Monthly walk-forward.
+Monthly walk-forward requires a minimum of 3 monthly points for any inferential claim.
+
+Single-snapshot behavior:
+
+- `backtest_status` in run artifacts must be `disabled_not_enough_snapshots`.
+- Validation outputs should state: "backtesting requires temporal panel and is not meaningful for single-snapshot inputs."
+
+Required minimum coverage:
+- 1M metrics require at least one month of market coverage after `as_of_date` for each snappoint.
+- 3M metrics require at least three months of market coverage after `as_of_date` for each snappoint.
+- Backtest execution should fail-fast with a typed validation error if any snappoint lacks required coverage and list exact missing date ranges.
+
+Config binding:
+
+- `configs/validation.example.yml` provides executable policy:
+  - `forward_coverage_months`: required future coverage by window.
+  - `walk_forward.min_snapshots`: minimum number of as-of points before claims.
+  - `walk_forward.require_coverage`: fail fast if any window is short.
+  - `rules.reject_insufficient_forward_data`: hard block with actionable error.
+- Validation output status semantics:
+  - `validation_status: disabled_not_enough_snapshots` for single-snapshot MVP.
+  - `validation_status: blocked_insufficient_forward_data` when coverage is insufficient.
+  - `validation_status: failed` for malformed windows.
 
 At time `t`:
 

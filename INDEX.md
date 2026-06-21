@@ -43,6 +43,8 @@ Rule:
 | `docs/team_roles.md` | Team role responsibilities, including Data Architect and Data Engineer ownership. | Reference |
 | `docs/mirofish_reference.md` | Source-of-truth boundary for borrowing MiroFish workflow patterns without copying its simulation logic. | Reference |
 | `docs/implementation_checklist.md` | MVP acceptance checklist and non-goals. | Checklist |
+| `docs/open_issues.md` | Tracked design gaps in the spec with proposed resolutions and decision milestones. | Tracking |
+| `docs/pr_1_agent_assignments.md` | PR #1 internal execution board for role-based agent assignment and work status. | Coordination |
 
 ## Shared Agents
 
