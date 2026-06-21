@@ -24,7 +24,7 @@ Dispatch mode: repo-internal role assignment (no external teammate assignment av
 | `agent-doc-issues` | OI-8 / OI-4 / OI-5 | Convert critical design questions into implementable issue tasks; keep wording dispatchable with Owner / Files / Acceptance | `docs/open_issues.md` | completed |
 | `agent-doc-graph` | OI-2 / OI-5 | Clarify discovery/exposure edge discipline and explicit entity-only graph projection for community detection | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | resolved |
 | `agent-doc-architecture` | OI-3 / OI-6 | Define manifest + leakage gate semantics and walk-forward sweep/run model | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | completed |
-| `agent-doc-index` | all | Keep `INDEX.md` synchronized with every added/renamed artifact and status updates | `INDEX.md` | assigned |
+| `agent-doc-index` | all | Keep `INDEX.md` synchronized with every added/renamed artifact and status updates; verified no new files need indexing after this PR round | `INDEX.md` | completed |
 
 Dispatch note:
 - OI-1..OI-8 are dispatched as GitHub issues #2..#9 and also mirrored by this in-repo role board.
@@ -112,7 +112,7 @@ Dispatch note:
 
 ## OI-8 Source-data acquisition and vintage ownership (design only)
 
-- Status: open
+- Status: resolved (design); spec §6, `agents/data_engineering_agent.md`, and `docs/data_schema.md` now state PIT acquisition + as-reported-fundamentals rules, the free source stack, and the deferral/trigger. No collection code written.
 - Affects: sections 6, 9.2, 16; Milestone 2
 - Owner: Data Engineer (`agents/data_engineering_agent.md`) with Data Architect review
 - Context: There is currently no source data at all, and no agent owns *acquiring* it. `data_ingestion_agent` only registers files that already exist; nobody owns fetching filings/news/prices/macro/fundamentals and stamping `published_at` / `available_at` / data vintage. This is the single largest point-in-time risk: live web/API pulls return today's revised values and survivorship-biased membership.
