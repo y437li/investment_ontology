@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  consistency:
+    name: Spec & leakage guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run consistency and leakage checks
+        run: python scripts/ci/check_consistency.py
+
+  tests:
+    name: Python tests (if any)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install + run pytest when tests exist
+        run: |
+          if ls tests/**/*.py tests/*.py >/dev/null 2>&1; then
+            python -m pip install --upgrade pip
+            if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+            if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+            pip install pytest
+            pytest -q
+          else
+            echo "No tests yet under tests/ — skipping."
+          fi
