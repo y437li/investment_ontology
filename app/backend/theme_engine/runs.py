@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,18 @@ from .config import REPO_ROOT, settings
 from .models import RunCreateRequest, RunManifest, RunStatus
 
 MANIFEST_NAME = "run_manifest.json"
+DISCOVERY_DIR = "discovery"
+VALIDATION_DIR = "validation"
+REQUIRED_DISCOVERY_ARTIFACTS = {
+    "raw_documents.parquet",
+    "documents.parquet",
+    "document_cleaning_log.parquet",
+    "chunks.parquet",
+    "entities.parquet",
+    "entity_aliases.parquet",
+    "edges.parquet",
+    "graph.json",
+}
 
 
 def _utc_now_iso() -> str:
@@ -28,7 +41,10 @@ def _code_version() -> str:
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=REPO_ROOT, capture_output=True, text=True, timeout=5,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return out.stdout.strip() or "unknown"
     except Exception:
@@ -65,6 +81,70 @@ def get_run_dir(run_id: str) -> Path:
     return settings.run_output_dir / run_id
 
 
+def _discovery_dir(run_id: str) -> Path:
+    return get_run_dir(run_id) / DISCOVERY_DIR
+
+
+def _validation_dir(run_id: str) -> Path:
+    return get_run_dir(run_id) / VALIDATION_DIR
+
+
+def _discovery_path(run_id: str, name: str) -> Path:
+    return _discovery_dir(run_id) / name
+
+
+def _ensure_run_layout(run_id: str) -> None:
+    _discovery_dir(run_id).mkdir(parents=True, exist_ok=True)
+    _validation_dir(run_id).mkdir(parents=True, exist_ok=True)
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes())
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _migrate_root_discovery_artifacts(run_id: str) -> None:
+    run_dir = get_run_dir(run_id)
+    discovery_dir = _discovery_dir(run_id)
+
+    # Compatibility with earlier milestones that dropped artifacts under
+    # the run root.
+    for name in REQUIRED_DISCOVERY_ARTIFACTS:
+        legacy = run_dir / name
+        if not legacy.exists():
+            continue
+        target = discovery_dir / name
+        if target.exists():
+            continue
+        shutil.copy2(legacy, target)
+
+
+def _required_discovery_hashes(run_id: str) -> dict[str, str]:
+    run_discovery_dir = _discovery_dir(run_id)
+    hashes: dict[str, str] = {}
+
+    for name in sorted(run_discovery_dir.iterdir()):
+        if not name.is_file():
+            continue
+        if name.name not in REQUIRED_DISCOVERY_ARTIFACTS:
+            continue
+        hashes[f"{DISCOVERY_DIR}/{name.name}"] = _hash_file(name)
+
+    return hashes
+
+
+def _ensure_discovery_hashes_match(manifest: RunManifest, run_id: str) -> None:
+    expected = manifest.discovery_artifact_hashes or {}
+    actual = _required_discovery_hashes(run_id)
+
+    for rel, digest in expected.items():
+        if rel not in actual:
+            raise FileNotFoundError(f"frozen discovery artifact missing: {rel}")
+        if actual[rel] != digest:
+            raise ValueError(f"frozen discovery artifact hash mismatch: {rel}")
+
+
 def create_run(req: RunCreateRequest) -> RunManifest:
     universe = req.universe_config or settings.universe_config
     pipeline = req.pipeline_config or settings.pipeline_config
@@ -83,9 +163,48 @@ def create_run(req: RunCreateRequest) -> RunManifest:
         discovery_frozen=False,
         sweep_parent_id=req.sweep_parent_id,
     )
+    _ensure_run_layout(run_id)
     (run_dir / MANIFEST_NAME).write_text(
         json.dumps(manifest.model_dump(), indent=2), encoding="utf-8"
     )
+    return manifest
+
+
+def freeze_discovery(run_id: str) -> RunManifest:
+    manifest = load_manifest(run_id)
+    if manifest is None:
+        raise RuntimeError(f"run not found: {run_id}")
+
+    _ensure_run_layout(run_id)
+    _migrate_root_discovery_artifacts(run_id)
+    discovered_hashes = _required_discovery_hashes(run_id)
+
+    manifest = manifest.model_copy(
+        update={
+            "discovery_frozen": True,
+            "discovery_artifact_hashes": discovered_hashes,
+        }
+    )
+
+    run_dir = get_run_dir(run_id)
+    (run_dir / MANIFEST_NAME).write_text(
+        json.dumps(manifest.model_dump(), indent=2), encoding="utf-8"
+    )
+    return manifest
+
+
+def validate_ready_for_validation(run_id: str) -> RunManifest:
+    manifest = load_manifest(run_id)
+    if manifest is None:
+        raise RuntimeError(f"run not found: {run_id}")
+
+    if not manifest.discovery_frozen:
+        raise PermissionError("discovery not frozen")
+
+    if not manifest.discovery_artifact_hashes:
+        raise PermissionError("missing discovery artifact hashes in manifest")
+
+    _ensure_discovery_hashes_match(manifest, run_id)
     return manifest
 
 
@@ -102,7 +221,8 @@ def get_status(run_id: str) -> RunStatus | None:
         return None
     run_dir = settings.run_output_dir / run_id
     artifacts = sorted(
-        p.name for p in run_dir.iterdir()
+        p.name
+        for p in run_dir.iterdir()
         if p.is_file() and p.name != MANIFEST_NAME
     )
     return RunStatus(

@@ -9,6 +9,7 @@ import csv
 import tempfile
 from pathlib import Path
 
+import pyarrow.parquet as pq
 from fastapi.testclient import TestClient
 
 from theme_engine.config import settings
@@ -84,12 +85,15 @@ def test_data_import_honors_point_in_time_manifest_rules():
         assert resp.status_code == 200
         assert resp.json()["success"] is True
         assert resp.json()["raw_documents"] == 1
-        assert resp.json()["extraction_failed"] == 0
+        assert resp.json()["quarantined"] == 0
+        assert resp.json()["quarantine_reasons"] == []
 
         artifact = Path(settings.run_output_dir) / run_id / "raw_documents.parquet"
         assert artifact.exists()
-        first_line = artifact.read_text(encoding="utf-8").splitlines()[0]
-        assert first_line.startswith("source,source_id")
+        table = pq.read_table(artifact)
+        column_names = table.column_names
+        for col in ["document_id", "content_hash", "ingested_at", "vintage"]:
+            assert col in column_names
 
 
 def test_data_import_rejects_invalid_manifest_rows():
@@ -134,4 +138,5 @@ def test_data_import_rejects_invalid_manifest_rows():
         )
         assert resp.status_code == 200
         assert resp.json()["raw_documents"] == 0
-        assert resp.json()["extraction_failed"] == 1
+        assert resp.json()["quarantined"] == 1
+        assert len(resp.json()["quarantine_reasons"]) == 1

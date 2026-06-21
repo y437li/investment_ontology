@@ -41,6 +41,7 @@ class RunManifest(BaseModel):
     input_hash: str
     # Forward-compatible: set by later milestones, present from creation.
     discovery_frozen: bool = False
+    discovery_artifact_hashes: Optional[dict[str, str]] = None
     sweep_parent_id: Optional[str] = None
 
 
@@ -66,4 +67,28 @@ class DataImportResponse(BaseModel):
     run_id: str
     artifacts: list[str]
     raw_documents: int
-    extraction_failed: int
+    quarantined: int
+    quarantine_reasons: list[str]
+
+
+class FreezeRequest(BaseModel):
+    run_id: str
+
+
+class FreezeResponse(BaseModel):
+    success: bool
+    discovery_frozen: bool
+    discovery_artifact_hashes: dict[str, str]
+    manifest_path: str
+
+
+class ValidationRunRequest(BaseModel):
+    run_id: str
+
+
+class ValidationRunResponse(BaseModel):
+    success: bool
+    validation_status: str
+    artifacts: list[str]
+    validated_themes: int = 0
+    message: Optional[str] = None

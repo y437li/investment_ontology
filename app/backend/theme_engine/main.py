@@ -13,6 +13,10 @@ from .models import (
     DataImportRequest,
     DataImportResponse,
     RunCreateRequest,
+    FreezeRequest,
+    FreezeResponse,
+    ValidationRunRequest,
+    ValidationRunResponse,
     RunManifest,
     RunStatus,
 )
@@ -40,7 +44,7 @@ def run_status(run_id: str) -> RunStatus:
 
 @app.post("/api/data/import", response_model=DataImportResponse)
 def import_data(req: DataImportRequest) -> DataImportResponse:
-    raw_documents, extraction_failed = data_import.import_manifest(
+    raw_documents, quarantined, quarantine_reasons = data_import.import_manifest(
         run_id=req.run_id,
         documents_dir=req.documents_dir,
         source_manifest_path=req.source_manifest_path,
@@ -50,5 +54,40 @@ def import_data(req: DataImportRequest) -> DataImportResponse:
         run_id=req.run_id,
         artifacts=["raw_documents.parquet"],
         raw_documents=raw_documents,
-        extraction_failed=extraction_failed,
+        quarantined=quarantined,
+        quarantine_reasons=quarantine_reasons,
+    )
+
+
+@app.post("/api/discovery/freeze", response_model=FreezeResponse)
+def discovery_freeze(req: FreezeRequest) -> FreezeResponse:
+    try:
+        manifest = runs.freeze_discovery(req.run_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    manifest_path = f"data/runs/{req.run_id}/{runs.MANIFEST_NAME}"
+    return FreezeResponse(
+        success=True,
+        discovery_frozen=manifest.discovery_frozen,
+        discovery_artifact_hashes=manifest.discovery_artifact_hashes or {},
+        manifest_path=manifest_path,
+    )
+
+
+@app.post("/api/validation/run", response_model=ValidationRunResponse)
+def validation_run(req: ValidationRunRequest) -> ValidationRunResponse:
+    try:
+        runs.validate_ready_for_validation(req.run_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    return ValidationRunResponse(
+        success=True,
+        validation_status="blocked_not_implemented",
+        artifacts=[],
+        validated_themes=0,
+        message="validation pipeline is not yet implemented; freeze gate passed",
     )
