@@ -22,8 +22,10 @@ Dispatch submission:
 | `agent-doc-validation` | Validation coverage and forward-window rule wording | `theme_discovery_engine_v1.md`, `configs/validation.example.yml` | immediate | completed |
 | `agent-doc-issues` | Open-issues tracker quality gate and dispatchability | `docs/open_issues.md` | immediate | completed |
 | `agent-doc-graph` | Graph projection and edge semantics consistency checks | `theme_discovery_engine_v1.md` | immediate | completed |
+| `agent-doc-extraction` | Point-in-time alias resolution and global diagnostics split | `theme_discovery_engine_v1.md`, `agents/extraction_agent.md`, `docs/io_contracts.md` | immediate | completed |
 | `agent-doc-architecture` | Manifest + sweep model and leakage gate updates | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | immediate | completed |
-| `agent-doc-index` | Navigation consistency for changed docs | `INDEX.md` | immediate | in-progress |
+| `agent-doc-index` | Navigation consistency for changed docs | `INDEX.md` | immediate | completed |
+| `agent-doc-data-engineering` | Source acquisition, vintage hard rules, as-reported fundamentals policy | `theme_discovery_engine_v1.md`, `agents/data_engineering_agent.md`, `docs/data_schema.md` | immediate | completed |
 
 ## 2) Update rhythm
 

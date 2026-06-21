@@ -15,6 +15,21 @@ Current source of truth: `theme_discovery_engine_v1.md` + `docs/open_issues.md`
 
 This board assigns work by agent role (not GitHub user) for immediate parallel execution.
 
+## Codex 队友固定责任映射
+
+当前 OI 由以下内部队友负责：
+
+- `agent-doc-logic`：OI-1、OI-7（度量口径、Walk-forward 条件与研究声明边界）
+- `agent-doc-validation`：OI-1、OI-7、OI-6（验证范围、拒绝条件、运行状态语义）
+- `agent-doc-issues`：OI-8、OI-4、OI-5（Issue 任务可执行化与同步）
+- `agent-doc-graph`：OI-2、OI-5（边/图结构治理、社区检测前投影）
+- `agent-doc-architecture`：OI-3、OI-6（清单/扫掠模型、冻结与 artifact 约束）
+- `agent-doc-extraction`：OI-4（点时别名解析与全局别名隔离）
+- `agent-doc-data-engineering`：OI-8（采集源、历史版本、as-reported 历史值）
+- `agent-doc-index`：INDEX 与文档索引同步（持续维护）
+
+你看到的 GitHub issue 目前会与角色同步，而不是直接绑定外部人员。
+
 Dispatch mode: repo-internal role assignment (no external teammate assignment available on this repository currently).
 
 | Agent role | OI id | Task | Primary artifact | Current state |
@@ -22,9 +37,11 @@ Dispatch mode: repo-internal role assignment (no external teammate assignment av
 | `agent-doc-logic` | OI-1 / OI-7 | Finalize single-snapshot vs walk-forward metric logic, forward-coverage precondition wording, and keep claims honest | `theme_discovery_engine_v1.md` §§20/21/22 | completed |
 | `agent-doc-validation` | OI-1 / OI-7 / OI-6 | Align validation scope language and rejection conditions for missing forward data windows | `theme_discovery_engine_v1.md`, `configs/validation.example.yml` | completed |
 | `agent-doc-issues` | OI-8 / OI-4 / OI-5 | Convert critical design questions into implementable issue tasks; keep wording dispatchable with Owner / Files / Acceptance | `docs/open_issues.md` | completed |
-| `agent-doc-graph` | OI-2 / OI-5 | Clarify discovery/exposure edge discipline and explicit entity-only graph projection for community detection | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | resolved |
+| `agent-doc-graph` | OI-2 / OI-5 | Clarify discovery/exposure edge discipline and explicit entity-only graph projection for community detection | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | completed |
 | `agent-doc-architecture` | OI-3 / OI-6 | Define manifest + leakage gate semantics and walk-forward sweep/run model | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | completed |
+| `agent-doc-extraction` | OI-4 | Point-in-time alias resolution and non-temporal diagnostics alias artifact split | `theme_discovery_engine_v1.md`, `agents/extraction_agent.md`, `docs/io_contracts.md` | completed |
 | `agent-doc-index` | all | Keep `INDEX.md` synchronized with every added/renamed artifact and status updates; verified no new files need indexing after this PR round | `INDEX.md` | completed |
+| `agent-doc-data-engineering` | OI-8 | Data acquisition ownership, source vintage, and as-reported fundamental discipline | `theme_discovery_engine_v1.md`, `agents/data_engineering_agent.md`, `docs/data_schema.md` | completed |
 
 Dispatch note:
 - OI-1..OI-8 are dispatched as GitHub issues #2..#9 and also mirrored by this in-repo role board.
@@ -32,7 +49,7 @@ Dispatch note:
 
 ## OI-1 Minimal walk-forward for a real research claim
 
-- Status: open
+- Status: completed
 - Affects: sections 1, 22, 28; Milestone 6
 - Owner: Research / Quant Engineer (`agents/validation_agent.md`)
 - Conflict: The product goal (section 1) is to validate whether discovered communities relate to future outcomes, but the MVP uses a single `as_of_date`, which is a single cross-sectional draw and cannot support statistical association. Walk-forward (section 22) is currently "Later".
@@ -43,7 +60,7 @@ Dispatch note:
 
 ## OI-2 Discipline for interpretive edges (`benefits` / `hurts` / `exposed_to` / `causes`)
 
-- Status: open
+- Status: completed
 - Affects: sections 7, 9.4, 9.7, 17
 - Owner: LLM / Extraction Engineer (`agents/extraction_agent.md`)
 - Conflict: Section 17 forbids LLM reasoning in the discovery layer, but these edge types are causal/benefit judgments extracted by the LLM, and they feed exposure -> baskets -> validation. This is reasoning entering discovery through the back door.
@@ -54,7 +71,7 @@ Dispatch note:
 
 ## OI-3 Freeze enforcement and automated leakage tests
 
-- Status: open
+- Status: completed
 - Affects: sections 8, 9.8, 16, 18; Milestones 5-6
 - Owner: Data Architect (`agents/data_architect_agent.md`) + Research / Quant Engineer
 - Conflict: "Validation cannot read future data before freeze" is a process convention with no mechanism. Required artifacts (section 8) mix discovery artifacts and future data (`market_prices`, `fundamentals`) in one run directory.
@@ -68,7 +85,7 @@ Dispatch note:
 
 ## OI-4 Point-in-time entity / alias resolution
 
-- Status: open
+- Status: completed
 - Affects: sections 10, 15, 16
 - Owner: LLM / Extraction Engineer (`agents/extraction_agent.md`)
 - Conflict: Section 15 filters documents/entities/edges by `available_at <= t`, but alias merging (section 10) uses embeddings over the full corpus, so future documents can shape the canonical entity set at time `t`. Section 16 lists this as weak leakage but only "monitor".
@@ -79,7 +96,7 @@ Dispatch note:
 
 ## OI-5 Graph projection before community detection
 
-- Status: open
+- Status: completed
 - Affects: sections 7, 11
 - Owner: Research / Quant Engineer (`agents/graph_theme_agent.md`)
 - Conflict: `Document` is a node type and `mentioned_in` is an edge. Running Louvain/Leiden on a graph containing Document nodes makes documents high-degree hubs and clusters by co-membership rather than economic relationship.
@@ -90,7 +107,7 @@ Dispatch note:
 
 ## OI-6 Run model vs multi-period walk-forward
 
-- Status: open
+- Status: completed
 - Affects: sections 8, 22
 - Owner: Data Architect (`agents/data_architect_agent.md`)
 - Conflict: `run_manifest.json` carries a single `as_of_date`, but walk-forward builds graphs at many `t`. The single-manifest model cannot express a run with multiple time points.
@@ -101,7 +118,7 @@ Dispatch note:
 
 ## OI-7 Forward-window vs data coverage constraint
 
-- Status: open
+- Status: completed
 - Affects: sections 19, 22
 - Owner: Research / Quant Engineer (`agents/validation_agent.md`)
 - Conflict: 1M/3M forward returns require `as_of_date` to sit at least 3 months before the end of available data. With 12-24 months of data and a late `as_of_date`, forward returns may not exist.
@@ -112,7 +129,7 @@ Dispatch note:
 
 ## OI-8 Source-data acquisition and vintage ownership (design only)
 
-- Status: resolved (design); spec §6, `agents/data_engineering_agent.md`, and `docs/data_schema.md` now state PIT acquisition + as-reported-fundamentals rules, the free source stack, and the deferral/trigger. No collection code written.
+- Status: completed (design); spec §6, `agents/data_engineering_agent.md`, and `docs/data_schema.md` now state PIT acquisition + as-reported-fundamentals rules, the free source stack, and the deferral/trigger. No collection code written.
 - Affects: sections 6, 9.2, 16; Milestone 2
 - Owner: Data Engineer (`agents/data_engineering_agent.md`) with Data Architect review
 - Context: There is currently no source data at all, and no agent owns *acquiring* it. `data_ingestion_agent` only registers files that already exist; nobody owns fetching filings/news/prices/macro/fundamentals and stamping `published_at` / `available_at` / data vintage. This is the single largest point-in-time risk: live web/API pulls return today's revised values and survivorship-biased membership.
@@ -125,3 +142,7 @@ Dispatch note:
 - Files: `theme_discovery_engine_v1.md` (section 6), `agents/data_engineering_agent.md`, `docs/data_schema.md` (source/vintage fields).
 - Acceptance: spec and the data engineering agent state the point-in-time acquisition + as-reported-fundamentals rule; source-stack and deferral are documented; no collection code is written.
 - Decision needed by: Milestone 2.
+- Completion note:
+  - `theme_discovery_engine_v1.md` section 6 now includes an explicit promotion trigger for `data_collection_agent.md`.
+  - `agents/data_engineering_agent.md` now records immutable source-vintage policy and hard-source escalation.
+  - `docs/data_schema.md` now documents source-time provenance fields for ingest rows.

@@ -33,6 +33,15 @@ Raw documents live under:
 data/inputs/documents/
 ```
 
+Source-time metadata is required for every ingest row in L0/L1/L3 adapters:
+
+- `published_at`: original publication timestamp from source.
+- `available_at`: first date the information was available to the market.
+- `source_id`: stable source native identifier.
+- `vintage`: ingest batch id or upstream revision/release timestamp.
+- `ingested_at`: local pipeline ingestion timestamp.
+- `as_of_date` (for run snapshots): market date used for point-in-time point selection.
+
 Each batch must include a source manifest:
 
 ```text
@@ -62,7 +71,7 @@ Rules:
 
 - `raw_path` must be relative to the input root.
 - `available_at` is mandatory and must reflect when the document was knowable to the market, not only the document's period end.
-- `vintage` records the as-of moment of the retrieved version of the source, so later restatements are stored as new vintages rather than overwrites.
+- `vintage` records the as-of moment of the retrieved version of the source (ingestion timestamp and/or source release batch version), so later restatements are stored as new vintages rather than overwrites, enabling reproducible replay.
 - `source_id` and `raw_path` must be stable enough for deduplication.
 - Raw files are local inputs and must not be committed to Git.
 

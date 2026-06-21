@@ -10,8 +10,14 @@ forward_coverage_months:
 
 # Sweep/backtesting gating.
 walk_forward:
+  # Explicit walk-forward schedule for a single sweep (single-snapshot mode may leave empty).
+  as_of_dates:
+    - "2024-03-31"
+    - "2024-06-30"
+    - "2024-09-30"
   min_snapshots: 3
   require_coverage: true
+  min_snapshot_gap_days: 28
 
 benchmarks:
   - equal_weight_universe

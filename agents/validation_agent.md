@@ -26,3 +26,6 @@ Acceptance checks:
 - Benchmarks are explicit.
 - Results include sample size and caveats.
 - Basket constituents and weights are reproducible from `portfolio_baskets.parquet`.
+- Forward-coverage preflight must run before basket scoring.
+- If `rules.reject_insufficient_forward_data=true`, validation must fail before scoring when any run snapshot lacks required market forward rows.
+- Coverage errors must include: `run_id`, `as_of_date`, `holding_window`, `last_available_date`, `required_end_date`.

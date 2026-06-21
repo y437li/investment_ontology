@@ -366,6 +366,31 @@ All tests live in one place: the top-level `tests/` directory. Test files must n
 - Debt.
 - Valuation metrics.
 
+Recommended point-in-time-friendly source stack:
+
+- Filings: SEC EDGAR / SEDAR+ (as-reported filings).
+- Prices: trusted exchange/history feeds with historical vintages.
+- Macro: FRED, Bank of Canada.
+- Fundamentals: EDGAR XBRL.
+
+Deferred/partial for MVP:
+
+- Point-in-time news reconstruction (live web news is not naturally point-in-time).
+- Transcripts if they do not expose historical revisions.
+
+Data acquisition rule (MVP):
+
+- `available_at` and `published_at` must both be stored for every ingested record.
+- Data adapters must emit as-reported historical values; do not replace with forward-revised values.
+- Source vintage is required for downstream replay and survivorship checks:
+  - document snapshots,
+  - price snapshots,
+  - fundamentals snapshots.
+- Universe membership must be recorded at each `as_of_date` to avoid survivorship bias.
+- Point-in-time acquisition is required by default for filing/news/transcripts in this design; point-in-time news backfill remains deferred until a dedicated data-collection agent exists.
+- Escalation rule for a dedicated `data_collection_agent.md`:
+  - If point-in-time backfill for any deferred hard source (news or transcripts) becomes required for core MVP validation, promote acquisition scope to a dedicated data-collection role.
+
 ## Prices
 
 - Daily OHLCV.
@@ -536,6 +561,7 @@ Default exposure policy:
 
 - Exposure and validation pipelines consume `document_stated` edges by default.
 - Weak signals (`llm_inferred`, `metadata_inferred`) are excluded unless explicitly enabled by config flag `include_weak_signals`.
+- Weak signals are not available to community detection unless explicitly promoted by config into structural projection.
 
 ---
 
@@ -547,29 +573,40 @@ Every run must write artifacts to:
 data/runs/<run_id>/
 ```
 
-Required artifacts:
+Required artifacts (must be under `data/runs/<run_id>/discovery/` unless marked validation-only):
 
 ```text
 run_manifest.json
-raw_documents.parquet
-documents.parquet
-document_cleaning_log.parquet
-chunks.parquet
-entities.parquet
-entity_aliases.parquet
-edges.parquet
-edge_explanations.parquet
-graph.json
-communities.json
-theme_snapshots.json
-theme_lineage.json
-theme_metrics.parquet
-company_theme_exposure.parquet
-market_prices.parquet
-fundamentals.parquet
-portfolio_baskets.parquet
-validation.csv
-report.md
+discovery/raw_documents.parquet
+discovery/documents.parquet
+discovery/document_cleaning_log.parquet
+discovery/chunks.parquet
+discovery/entities.parquet
+discovery/entity_aliases_global.parquet
+discovery/entity_aliases.parquet
+discovery/edges.parquet
+discovery/edge_explanations.parquet
+discovery/graph.json
+discovery/communities.json
+discovery/theme_snapshots.json
+discovery/theme_lineage.json
+discovery/theme_metrics.parquet
+discovery/company_theme_exposure.parquet
+validation/market_prices.parquet
+validation/fundamentals.parquet
+validation/portfolio_baskets.parquet
+validation/validation.csv
+validation/report.md
+
+Run manifest requirement:
+
+- `run_manifest.json` must include discovery artifact hashes for all discovery outputs when frozen.
+- `validation_agent` must fail validation startup when hash verification differs from `run_manifest.json` snapshot.
+
+Alias policy:
+
+- `discovery/entity_aliases.parquet` is the point-in-time alias table used by Graph(t), scoped to the run `as_of_date`.
+- `discovery/entity_aliases_global.parquet` is optional and non-temporal; it is for diagnostics/manual curation only and must not drive discovery joins by default.
 ```
 
 `theme_lineage.json` is required as a schema-valid artifact. A single-as-of demo may write an empty lineage list with `lineage_mode="single_snapshot"`.
@@ -587,9 +624,27 @@ Run vs sweep model:
   - `window_start`
   - `window_end`
   - `status` (`running`, `frozen`, `blocked`, `failed`)
+  - `child_runs` entries with:
+    - `run_id`
+    - `as_of_date`
+    - `run_manifest_path`
 - Child run manifests may include:
   - `sweep_parent_id` (optional, nullable)
   - `sweep_position` (optional integer)
+  - `sweep_id` for explicit parent linkage
+
+Walk-forward execution rule:
+
+- Walk-forward runs must provide `walk_forward.as_of_dates` in validation config.
+- A sweep is valid only when:
+  - `len(as_of_dates) >= walk_forward.min_snapshots`
+  - adjacent dates are separated by at least `walk_forward.min_snapshot_gap_days`
+- If violated, `validation_status` must be `blocked_insufficient_snapshots`.
+
+`run_manifest.json` should also carry:
+
+- `sweep_id` for child run identity.
+- `discovery_artifact_hashes` for freeze verification.
 
 `run_manifest.json` must contain:
 
@@ -600,9 +655,17 @@ Run vs sweep model:
   "universe_config": "configs/universe.example.yml",
   "pipeline_config": "configs/pipeline.example.yml",
   "validation_config": "configs/validation.example.yml",
+  "sweep_id": null,
+  "validation_mode": "single_snapshot",
   "created_at": "...",
   "code_version": "...",
-  "input_hash": "..."
+  "input_hash": "...",
+  "discovery_artifact_hashes": {
+    "discovery/raw_documents.parquet": "sha256:...",
+    "discovery/documents.parquet": "sha256:...",
+    "discovery/edges.parquet": "sha256:...",
+    "discovery/graph.json": "sha256:..."
+  }
 }
 ```
 
@@ -776,11 +839,18 @@ Hyperscale compute
 
 Resolution process:
 
-1. Normalize case, punctuation, suffixes, and common abbreviations.
-2. Match known aliases from `entity_aliases`.
-3. Use embedding similarity for candidates.
-4. Use LLM verification only for ambiguous pairs.
-5. Mark low-confidence cases for human review.
+1. Filter input evidence to `available_at <= as_of_date`.
+2. Normalize case, punctuation, suffixes, and common abbreviations.
+3. Match known aliases from point-in-time `entity_aliases.parquet`.
+4. Use embedding similarity for candidates.
+5. Use LLM verification only for ambiguous pairs.
+6. Mark low-confidence cases for human review.
+
+Scope:
+
+- Snapshot scope is `as_of_date`.
+- Point-in-time aliases drive discovery joins.
+- Global aliases are maintained in a separate non-production table for historical curation.
 
 Required output fields:
 
@@ -788,10 +858,18 @@ Required output fields:
 alias
 canonical_entity_id
 canonical_name
+as_of_date
 confidence
 method
 review_status
+alias_scope
+source_record_ids
 ```
+
+`alias_scope` values:
+
+- `point_in_time` for run artifact joins.
+- `global` for optional cross-run diagnostics.
 
 ---
 
@@ -810,6 +888,15 @@ Structural projection rule:
 - Document nodes and `mentioned_in` edges are allowed in `graph.json` for evidence traceability, but they are excluded from Louvain/Leiden inputs.
 - Community discovery input edges must be filtered to structural edge types (`causes`, `benefits`, `hurts`, `exposed_to`, `sensitive_to`) and non-weak source (`document_stated` or explicit config-approved `metadata_inferred`).
 - `communities.json` must record `edge_projection_mode` so lineage and audit can reconstruct excluded nodes/edges.
+
+Build-time projection contract:
+
+- `graph.build` emits a precomputed community projection:
+  - `projection.type="entity_only"`
+  - `projection.node_types_in_structural_graph` excludes `Document`.
+  - `projection.excluded_node_types` includes evidence-only node classes.
+  - `community_input_edges` contains only structural edges that satisfy both type and source policy.
+- The projection list used by community detection is immutable once the run is frozen, and the exact edge/node counts are logged for audit.
 
 Output:
 
@@ -929,6 +1016,7 @@ MVP rule:
 - Documents with `available_at <= t`.
 - Events with `available_at <= t`.
 - Entities first observed by `t`.
+- Aliases constrained to `entity_aliases` rows with `as_of_date == t`.
 - Edges supported by evidence available by `t`.
 
 Historical graphs are immutable.
@@ -952,10 +1040,13 @@ MVP implementation:
 
 ## Weak Leakage: Document and Monitor
 
-- Ontology design.
-- Entity normalization.
 - Theme naming.
 - Manual data curation.
+
+Leakage control for this cycle:
+
+- Entity resolution used by Graph(t) is point-in-time only (`available_at <= t`, aliases for `as_of_date`).
+- Global alias table is explicitly non-production (`entity_aliases_global.parquet`) and cannot replace point-in-time joins.
 
 Leakage test:
 
@@ -1148,12 +1239,16 @@ Required minimum coverage:
 - 1M metrics require at least one month of market coverage after `as_of_date` for each snappoint.
 - 3M metrics require at least three months of market coverage after `as_of_date` for each snappoint.
 - Backtest execution should fail-fast with a typed validation error if any snappoint lacks required coverage and list exact missing date ranges.
+- Coverage check for a run is `max(available_date in market_prices for this run) >= as_of_date + holding_window` for every requested holding window.
+- If coverage fails, set `validation_status=blocked_insufficient_forward_data` and include `missing_ranges`, `as_of_date`, `holding_window`, and required end date in the returned error payload.
 
 Config binding:
 
 - `configs/validation.example.yml` provides executable policy:
   - `forward_coverage_months`: required future coverage by window.
   - `walk_forward.min_snapshots`: minimum number of as-of points before claims.
+  - `walk_forward.as_of_dates`: explicit ordered as-of schedule for a sweep.
+  - `walk_forward.min_snapshot_gap_days`: minimum spacing between adjacent as-of points.
   - `walk_forward.require_coverage`: fail fast if any window is short.
   - `rules.reject_insufficient_forward_data`: hard block with actionable error.
 - Validation output status semantics:
@@ -1415,6 +1510,7 @@ A demo is acceptable only if:
 9. Validation uses future data only after discovery artifacts are frozen.
 10. Report claims link to artifacts.
 11. The run can be reproduced.
+12. Backtesting status is explicit (`disabled_not_enough_snapshots` or `blocked_insufficient_forward_data`) whenever walk-forward preconditions are not met.
 
 ---
 
