@@ -88,7 +88,7 @@ def test_data_import_honors_point_in_time_manifest_rules():
         assert resp.json()["quarantined"] == 0
         assert resp.json()["quarantine_reasons"] == []
 
-        artifact = Path(settings.run_output_dir) / run_id / "raw_documents.parquet"
+        artifact = Path(settings.run_output_dir) / run_id / "discovery" / "raw_documents.parquet"
         assert artifact.exists()
         table = pq.read_table(artifact)
         column_names = table.column_names

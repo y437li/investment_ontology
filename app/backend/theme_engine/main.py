@@ -52,7 +52,7 @@ def import_data(req: DataImportRequest) -> DataImportResponse:
     return DataImportResponse(
         success=True,
         run_id=req.run_id,
-        artifacts=["raw_documents.parquet"],
+        artifacts=["discovery/raw_documents.parquet"],
         raw_documents=raw_documents,
         quarantined=quarantined,
         quarantine_reasons=quarantine_reasons,
@@ -65,6 +65,8 @@ def discovery_freeze(req: FreezeRequest) -> FreezeResponse:
         manifest = runs.freeze_discovery(req.run_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except (FileNotFoundError, ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
     manifest_path = f"data/runs/{req.run_id}/{runs.MANIFEST_NAME}"
     return FreezeResponse(
@@ -81,7 +83,7 @@ def validation_run(req: ValidationRunRequest) -> ValidationRunResponse:
         runs.validate_ready_for_validation(req.run_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except PermissionError as exc:
+    except (PermissionError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
     return ValidationRunResponse(

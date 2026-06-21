@@ -120,29 +120,43 @@ def _migrate_root_discovery_artifacts(run_id: str) -> None:
         shutil.copy2(legacy, target)
 
 
-def _required_discovery_hashes(run_id: str) -> dict[str, str]:
+def _compute_required_discovery_hashes(run_id: str) -> dict[str, str]:
     run_discovery_dir = _discovery_dir(run_id)
     hashes: dict[str, str] = {}
 
-    for name in sorted(run_discovery_dir.iterdir()):
-        if not name.is_file():
-            continue
-        if name.name not in REQUIRED_DISCOVERY_ARTIFACTS:
-            continue
-        hashes[f"{DISCOVERY_DIR}/{name.name}"] = _hash_file(name)
+    for name in sorted(REQUIRED_DISCOVERY_ARTIFACTS):
+        file_path = run_discovery_dir / name
+        if not file_path.exists():
+            raise FileNotFoundError(f"discovery artifact missing before freeze: {name}")
+        if not file_path.is_file():
+            raise FileNotFoundError(f"discovery artifact missing before freeze: {name}")
+        hashes[f"{DISCOVERY_DIR}/{name}"] = _hash_file(file_path)
 
     return hashes
 
 
 def _ensure_discovery_hashes_match(manifest: RunManifest, run_id: str) -> None:
     expected = manifest.discovery_artifact_hashes or {}
-    actual = _required_discovery_hashes(run_id)
+    actual = _compute_required_discovery_hashes(run_id)
 
-    for rel, digest in expected.items():
-        if rel not in actual:
-            raise FileNotFoundError(f"frozen discovery artifact missing: {rel}")
-        if actual[rel] != digest:
-            raise ValueError(f"frozen discovery artifact hash mismatch: {rel}")
+    for rel in sorted(REQUIRED_DISCOVERY_ARTIFACTS):
+        prefixed = f"{DISCOVERY_DIR}/{rel}"
+        if prefixed not in actual:
+            raise FileNotFoundError(f"missing frozen discovery artifact: {prefixed}")
+        if prefixed not in expected:
+            raise PermissionError(f"frozen discovery manifest missing hash: {prefixed}")
+
+        digest = expected[prefixed]
+        if actual[prefixed] != digest:
+            raise ValueError(
+                f"frozen discovery artifact hash mismatch: {prefixed}"
+            )
+
+    extra = sorted(set(expected) - set(actual))
+    if extra:
+        raise ValueError(
+            f"frozen discovery manifest has unexpected hash entries: {extra}"
+        )
 
 
 def create_run(req: RunCreateRequest) -> RunManifest:
@@ -177,7 +191,7 @@ def freeze_discovery(run_id: str) -> RunManifest:
 
     _ensure_run_layout(run_id)
     _migrate_root_discovery_artifacts(run_id)
-    discovered_hashes = _required_discovery_hashes(run_id)
+    discovered_hashes = _compute_required_discovery_hashes(run_id)
 
     manifest = manifest.model_copy(
         update={
