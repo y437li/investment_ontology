@@ -7,6 +7,7 @@ This document defines the canonical input and output formats for the MVP pipelin
 - Every stage declares input artifacts and output artifacts.
 - Every table uses lowercase snake case columns.
 - Every artifact belongs under `data/runs/<run_id>/`.
+- Source inputs are external to run outputs and must be under `data/inputs/...` (non-structured corpus). Runs read source files via `source_manifest.csv` pointers only.
 - Discovery artifacts are written under `data/runs/<run_id>/discovery/`.
 - Validation artifacts are written under `data/runs/<run_id>/validation/`.
 - Every run has exactly one `run_manifest.json`; each walk-forward sweep has one `sweep_manifest.json`.
@@ -36,6 +37,12 @@ Format:
   "universe_config": "configs/universe.example.yml",
   "pipeline_config": "configs/pipeline.example.yml",
   "validation_config": "configs/validation.example.yml",
+  "model_config": {
+    "extraction_model": "gpt-4.1-mini",
+    "theme_naming_model": "gpt-4.1-mini",
+    "embedding_model": "text-embedding-3-small",
+    "provider": "openai"
+  },
   "input_hash": "sha256:...",
   "model_config_hash": "sha256:...",
   "sweep_id": null,
@@ -63,6 +70,8 @@ Required fields:
 - `universe_config`
 - `pipeline_config`
 - `input_hash`
+- `model_config` (optional, stored in manifest as provided)
+- `model_config_hash` (optional, present when `model_config` is provided)
 - `discovery_artifact_hashes` (required when `discovery_frozen=true`)
 - `validation_mode`
 - `discovery_frozen`
@@ -126,6 +135,7 @@ Each child run remains a single-as_of run and may reuse run-level frozen artifac
 
 | Stage | Inputs | Outputs |
 |---|---|---|
+| Collect Sources | source collection spec (CSV with `source` metadata and `source_file` / `source_url`) | `data/inputs/documents` raw corpus + `source_manifest.csv` |
 | Create Run | configs | `run_manifest.json` |
 | Import Raw Documents | raw files, `source_manifest.csv` | `discovery/raw_documents.parquet` |
 | Clean Documents | `discovery/raw_documents.parquet` | `discovery/documents.parquet`, `discovery/document_cleaning_log.parquet` |
@@ -134,12 +144,44 @@ Each child run remains a single-as_of run and may reuse run-level frozen artifac
 | Extract Edges | `discovery/chunks.parquet`, `discovery/entities.parquet` | `discovery/edges.parquet`, `discovery/edge_explanations.parquet` |
 | Build Graph | `discovery/entities.parquet`, `discovery/edges.parquet` | `discovery/graph.json` |
 | Discover Themes | `discovery/graph.json` | `discovery/communities.json`, `discovery/theme_snapshots.json`, `discovery/theme_lineage.json`, `discovery/theme_metrics.parquet` |
+| Compute Document-Theme Affinity | `discovery/communities.json`, `discovery/graph.json`, `discovery/entities.parquet`, `discovery/edges.parquet`, `discovery/chunks.parquet`, `discovery/documents.parquet` | `discovery/document_theme_affinity.parquet` |
+| Build News Package | `discovery/documents.parquet`, `discovery/chunks.parquet`, `discovery/document_theme_affinity.parquet` (optional) | `discovery/news_report_package.json` |
 | Compute Exposure | `discovery/communities.json`, `discovery/graph.json`, `discovery/entities.parquet`, `discovery/edges.parquet` | `discovery/company_theme_exposure.parquet` |
 | Freeze Discovery | all discovery artifacts | updated `run_manifest.json` |
 | Load Market Data | market files or adapter output | `validation/market_prices.parquet` |
 | Load Fundamentals | fundamentals files or adapter output | `validation/fundamentals.parquet` |
 | Validate | frozen discovery artifacts, `discovery/company_theme_exposure.parquet`, `validation/market_prices.parquet`, optional `validation/fundamentals.parquet` | `validation/portfolio_baskets.parquet`, `validation/validation.csv` |
 | Report | all artifacts | `report.md` |
+
+### `POST /api/data/collect`
+
+Collect raw sources into `data/inputs/documents` and regenerate `source_manifest.csv`.
+
+Request:
+
+```json
+{
+  "source_spec_path": "data/inputs/document_collection_spec.csv",
+  "documents_dir": "data/inputs/documents",
+  "source_manifest_path": "data/inputs/documents/source_manifest.csv",
+  "append_manifest": false
+}
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "sources_seen": 12,
+  "sources_collected": 10,
+  "sources_quarantined": 2,
+  "source_manifest_path": "data/inputs/documents/source_manifest.csv",
+  "report_path": "data/inputs/documents/data_collection_report.json",
+  "quarantined": 2,
+  "quarantine_reasons": ["row 4: missing required column value: source_id"]
+}
+```
 
 ## 4. Input `source_manifest.csv`
 
@@ -658,7 +700,42 @@ Rules:
 - Do not output top companies without `exposure_score`.
 - Exposure must be computed and frozen before validation reads future market or fundamental outcomes.
 
-## 19. `market_prices.parquet`
+## 19. `document_theme_affinity.parquet`
+
+One row per document-community affinity pair.
+
+Required columns:
+
+```text
+schema_version: string
+run_id: string
+as_of_date: date
+document_id: string
+raw_document_id: string
+document_title: string
+company_id: string
+community_id: string
+theme_snapshot_id: string
+theme_name: string
+document_community_rank: int
+evidence_chunk_count: int
+evidence_chunk_ids: list[string]
+entity_signal_count: int
+edge_signal_count: int
+raw_score: float
+normalized_affinity: float
+method: string
+created_at: timestamp
+```
+
+Rules:
+
+- One document can map to multiple rows (multi-theme support).
+- `document_community_rank` is 1-based within a document.
+- `normalized_affinity` should be normalized across one document’s emitted pairs.
+- `evidence_chunk_ids` must reference `discovery/chunks.parquet`.
+
+## 20. `market_prices.parquet`
 
 One row per company and price date needed for validation.
 
@@ -816,9 +893,21 @@ Input:
   "as_of_date": "2024-06-30",
   "universe_config": "configs/universe.example.yml",
   "pipeline_config": "configs/pipeline.example.yml",
-  "validation_config": "configs/validation.example.yml"
+  "validation_config": "configs/validation.example.yml",
+  "model_config": {
+    "extraction_model": "gpt-4.1-mini",
+    "theme_naming_model": "gpt-4.1-mini",
+    "embedding_model": "text-embedding-3-small",
+    "provider": "openai"
+  }
 }
 ```
+
+Notes:
+
+- `model_config` is optional. When omitted, the run uses pipeline defaults.
+- The manifest stores both `model_config` and its canonical `model_config_hash` so any
+  model choice is replayable.
 
 Output:
 
@@ -849,7 +938,13 @@ Output:
   "success": true,
   "artifacts": ["raw_documents.parquet"],
   "raw_documents": 45,
-  "extraction_failed": 2
+  "raw_documents_seen": 47,
+  "raw_documents_in_discovery": 45,
+  "future_excluded": 2,
+  "quarantined": 2,
+  "quarantine_reasons": [
+    "row 1: raw_path missing"
+  ]
 }
 ```
 
@@ -982,6 +1077,92 @@ Output:
 }
 ```
 
+### `POST /api/themes/document-affinity`
+
+Input:
+
+```json
+{
+  "run_id": "run_20240630_120000",
+  "max_themes_per_document": 20
+}
+```
+
+Output:
+
+```json
+{
+  "success": true,
+  "artifacts": ["document_theme_affinity.parquet"],
+  "mapped_documents": 28,
+  "mapped_pairs": 64
+}
+```
+
+### `POST /api/reporting/news-package`
+
+Input:
+
+```json
+{
+  "run_id": "run_20240630_120000",
+  "max_documents": 100,
+  "max_chunks_per_document": 4,
+  "max_chunk_chars": 1200,
+  "include_document_types": ["news", "press_release"],
+  "include_companies": ["SHOP.TO", "ENB.TO"],
+  "include_macro": false,
+  "include_affinity": true
+}
+```
+
+Output:
+
+```json
+{
+  "success": true,
+  "artifact": "news_report_package.json",
+  "artifact_path": "discovery/news_report_package.json",
+  "package_version": "1.0",
+  "total_documents": 36,
+  "total_chunks": 144
+}
+```
+
+### `POST /api/reporting/research-package`
+
+Input:
+
+```json
+{
+  "run_id": "run_20240630_120000",
+  "max_documents": 80,
+  "max_chunks_per_document": 6,
+  "max_chunk_chars": 1500,
+  "include_companies": ["SHOP.TO", "ENB.TO"],
+  "include_macro": false,
+  "include_affinity": true
+}
+```
+
+Notes:
+
+- `include_document_types` defaults to `["research"]` when omitted.
+- If you pass `include_document_types`, it is used as a normal filter.
+
+Output:
+
+```json
+{
+  "success": true,
+  "artifact": "news_report_package.json",
+  "artifact_path": "discovery/news_report_package.json",
+  "package_version": "1.0",
+  "total_documents": 24,
+  "total_chunks": 144
+}
+```
+
 ### `POST /api/discovery/freeze`
 
 Input:
@@ -1001,6 +1182,28 @@ Output:
   "manifest_path": "data/runs/run_20240630_120000/run_manifest.json"
 }
 ```
+
+### `GET /api/artifacts/{run_id}/{artifact_name}`
+
+Path format:
+
+```text
+data/runs/<run_id>/<artifact_name>
+```
+
+`artifact_name` may include subdirectories such as `discovery/raw_documents.parquet`
+or `validation/validation.csv`.
+
+Behavior:
+
+- Returns 200 with raw file body for existing artifact file.
+- Returns 404 if the artifact path is invalid, missing, or traverses outside run root.
+
+Security rules:
+
+- `artifact_name` must be a relative path.
+- Parent traversal (`..`) is rejected.
+- Directory paths are invalid (only files are returned).
 
 ### `POST /api/validation/run`
 

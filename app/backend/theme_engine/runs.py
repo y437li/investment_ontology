@@ -7,11 +7,13 @@ status. Later milestones write further artifacts into the same directory.
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from pathlib import Path
 
 from .config import REPO_ROOT, settings
@@ -51,17 +53,34 @@ def _code_version() -> str:
         return "unknown"
 
 
-def _input_hash(config_paths: list[str]) -> str:
-    """Deterministic hash of the referenced config files' contents.
+def _stable_json(value: object) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
-    Missing files hash as the empty string so a run is still reproducible and
-    the hash changes if a config later appears.
-    """
+
+def _model_config_hash(model_config: dict[str, object] | None) -> str | None:
+    if not model_config:
+        return None
+    return f"sha256:{hashlib.sha256(_stable_json(model_config).encode('utf-8')).hexdigest()}"
+
+
+def _input_hash(
+    config_paths: list[str],
+    model_config: dict[str, object] | None,
+) -> str:
     h = hashlib.sha256()
     for rel in config_paths:
         h.update(rel.encode("utf-8"))
         p = REPO_ROOT / rel
         h.update(p.read_bytes() if p.exists() else b"")
+
+    if model_config is not None:
+        h.update(b"::model_config::")
+        h.update(_stable_json(model_config).encode("utf-8"))
     return h.hexdigest()[:16]
 
 
@@ -163,6 +182,7 @@ def create_run(req: RunCreateRequest) -> RunManifest:
     universe = req.universe_config or settings.universe_config
     pipeline = req.pipeline_config or settings.pipeline_config
     validation = req.validation_config or settings.validation_config
+    model_config = req.model_config
 
     run_id, run_dir = _allocate_run_dir()
     manifest = RunManifest(
@@ -171,9 +191,11 @@ def create_run(req: RunCreateRequest) -> RunManifest:
         universe_config=universe,
         pipeline_config=pipeline,
         validation_config=validation,
+        model_config=model_config,
+        model_config_hash=_model_config_hash(model_config),
         created_at=_utc_now_iso(),
         code_version=_code_version(),
-        input_hash=_input_hash([universe, pipeline, validation]),
+        input_hash=_input_hash([universe, pipeline, validation], model_config),
         discovery_frozen=False,
         sweep_parent_id=req.sweep_parent_id,
     )
@@ -234,15 +256,84 @@ def get_status(run_id: str) -> RunStatus | None:
     if manifest is None:
         return None
     run_dir = settings.run_output_dir / run_id
+    validation_dir = _validation_dir(run_id)
     artifacts = sorted(
         p.relative_to(run_dir).as_posix()
         for p in run_dir.rglob("*")
         if p.is_file() and p.relative_to(run_dir).as_posix() != MANIFEST_NAME
     )
+    validation_artifacts = (
+        sorted(
+            p.relative_to(run_dir).as_posix()
+            for p in validation_dir.rglob("*")
+            if p.is_file()
+        )
+        if validation_dir.exists()
+        else []
+    )
+    validation_status = _read_validation_status(validation_dir / "validation.csv")
     return RunStatus(
         run_id=manifest.run_id,
         as_of_date=manifest.as_of_date,
         created_at=manifest.created_at,
         discovery_frozen=manifest.discovery_frozen,
         artifacts_present=artifacts,
+        validation_status=validation_status,
+        validation_artifacts=validation_artifacts,
     )
+
+
+def _read_validation_status(report_csv: Path) -> str | None:
+    if not report_csv.exists() or not report_csv.is_file():
+        return None
+    try:
+        with report_csv.open("r", encoding="utf-8", newline="") as fp:
+            reader = csv.DictReader(fp)
+            row = next(reader, None)
+    except Exception:
+        return None
+
+    if not row:
+        return None
+    status = (row.get("validation_status") or "").strip()
+    return status or None
+
+
+def resolve_artifact_path(run_id: str, artifact_name: str) -> Path | None:
+    """Resolve a run artifact path and reject traversal attacks.
+
+    `artifact_name` may contain slashes, e.g. `discovery/raw_documents.parquet`
+    or `validation/validation.csv`.
+    """
+    run_dir = get_run_dir(run_id)
+    manifest = load_manifest(run_id)
+    if manifest is None:
+        return None
+
+    if not artifact_name:
+        return None
+    if artifact_name.startswith(("/", "\\")):
+        return None
+
+    try:
+        artifact_posix = PurePosixPath(artifact_name)
+    except Exception:
+        return None
+
+    if ".." in artifact_posix.parts:
+        return None
+
+    target = run_dir.joinpath(*artifact_posix.parts)
+    try:
+        resolved = target.resolve(strict=False)
+        run_root = run_dir.resolve()
+    except Exception:
+        return None
+
+    if not resolved.as_posix().startswith(run_root.as_posix() + "/"):
+        return None
+
+    if not target.exists() or not target.is_file():
+        return None
+
+    return target
