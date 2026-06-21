@@ -1,0 +1,20 @@
+universe_name: ai_infra_sample
+description: Small MVP universe for theme discovery development.
+currency: CAD
+companies:
+  - company_id: CCO_TO
+    ticker: CCO.TO
+    name: Cameco
+    sector: Energy
+    country: Canada
+  - company_id: H_TO
+    ticker: H.TO
+    name: Hydro One
+    sector: Utilities
+    country: Canada
+  - company_id: AEM_TO
+    ticker: AEM.TO
+    name: Agnico Eagle Mines
+    sector: Materials
+    country: Canada
+

@@ -1,0 +1,21 @@
+forward_windows:
+  - 1M
+  - 3M
+
+benchmarks:
+  - equal_weight_universe
+  - sector_equal_weight
+
+metrics:
+  - forward_return
+  - excess_return
+
+optional_fundamentals:
+  - revenue_growth
+  - eps_revision
+
+rules:
+  freeze_discovery_before_validation: true
+  require_as_of_date: true
+  reject_missing_available_at: true
+

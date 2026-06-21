@@ -1,0 +1,56 @@
+# Folder Structure
+
+Recommended workspace layout:
+
+```text
+Investment Ontology/
+  INDEX.md
+  theme_discovery_engine_v1.md
+  README.md
+  configs/
+    universe.example.yml
+    pipeline.example.yml
+    validation.example.yml
+  docs/
+    folder_structure.md
+    mirofish_reference.md
+    implementation_checklist.md
+  agents/
+    README.md
+    orchestrator.md
+    data_ingestion_agent.md
+    extraction_agent.md
+    graph_theme_agent.md
+    validation_agent.md
+    frontend_report_agent.md
+  skills/
+    README.md
+    point_in_time_data.md
+    entity_relation_extraction.md
+    temporal_graph_discovery.md
+    validation_backtest.md
+    evidence_report_generation.md
+  data/
+    inputs/
+      documents/
+      market/
+      fundamentals/
+    db/
+    runs/
+    cache/
+  app/
+    backend/
+    frontend/
+  scripts/
+  tests/
+```
+
+Rules:
+
+- `INDEX.md` is the maintained navigation map.
+- `theme_discovery_engine_v1.md` is the source of truth.
+- `agents/` and `skills/` are tool-agnostic; Codex and Claude can both use them.
+- `data/` should contain generated or local input data and should not be treated as source code.
+- Every run should write to `data/runs/<run_id>/`.
+- Every run should include `run_manifest.json`.
+- When adding, renaming, or materially changing source docs, configs, agents, skills, or guides, update `INDEX.md`.
