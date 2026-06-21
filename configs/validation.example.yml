@@ -2,6 +2,17 @@ forward_windows:
   - 1M
   - 3M
 
+# Minimal forward coverage required before a run can be scored.
+# Keys are holding windows and values are months of required market history.
+forward_coverage_months:
+  1M: 1
+  3M: 3
+
+# Sweep/backtesting gating.
+walk_forward:
+  min_snapshots: 3
+  require_coverage: true
+
 benchmarks:
   - equal_weight_universe
   - sector_equal_weight
@@ -18,4 +29,4 @@ rules:
   freeze_discovery_before_validation: true
   require_as_of_date: true
   reject_missing_available_at: true
-
+  reject_insufficient_forward_data: true

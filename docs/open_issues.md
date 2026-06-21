@@ -19,9 +19,9 @@ Dispatch mode: repo-internal role assignment (no external teammate assignment av
 
 | Agent role | OI id | Task | Primary artifact | Current state |
 |---|---|---|---|---|
-| `agent-doc-logic` | OI-1 / OI-7 | Finalize single-snapshot vs walk-forward metric logic, forward-coverage precondition wording, and keep claims honest | `theme_discovery_engine_v1.md` §§20/21/22 | assigned |
-| `agent-doc-validation` | OI-1 / OI-7 / OI-6 | Align validation scope language and rejection conditions for missing forward data windows | `theme_discovery_engine_v1.md`, `configs/validation.example.yml` | assigned |
-| `agent-doc-issues` | OI-8 / OI-4 / OI-5 | Convert critical design questions into implementable issue tasks; keep wording dispatchable with Owner / Files / Acceptance | `docs/open_issues.md` | assigned |
+| `agent-doc-logic` | OI-1 / OI-7 | Finalize single-snapshot vs walk-forward metric logic, forward-coverage precondition wording, and keep claims honest | `theme_discovery_engine_v1.md` §§20/21/22 | completed |
+| `agent-doc-validation` | OI-1 / OI-7 / OI-6 | Align validation scope language and rejection conditions for missing forward data windows | `theme_discovery_engine_v1.md`, `configs/validation.example.yml` | completed |
+| `agent-doc-issues` | OI-8 / OI-4 / OI-5 | Convert critical design questions into implementable issue tasks; keep wording dispatchable with Owner / Files / Acceptance | `docs/open_issues.md` | completed |
 | `agent-doc-graph` | OI-2 / OI-5 | Clarify discovery/exposure edge discipline and explicit entity-only graph projection for community detection | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | resolved |
 | `agent-doc-architecture` | OI-3 / OI-6 | Define manifest + leakage gate semantics and walk-forward sweep/run model | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | completed |
 | `agent-doc-index` | all | Keep `INDEX.md` synchronized with every added/renamed artifact and status updates | `INDEX.md` | assigned |

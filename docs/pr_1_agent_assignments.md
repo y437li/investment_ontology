@@ -18,9 +18,9 @@ Dispatch submission:
 
 | Agent role | Deliverable | Source | Due | Status |
 |---|---|---|---|---|
-| `agent-doc-logic` | Single-snapshot metric logic language and caveats | `theme_discovery_engine_v1.md` | immediate | in-progress |
-| `agent-doc-validation` | Validation coverage and forward-window rule wording | `theme_discovery_engine_v1.md` | immediate | in-progress |
-| `agent-doc-issues` | Open-issues tracker quality gate and dispatchability | `docs/open_issues.md` | immediate | in-progress |
+| `agent-doc-logic` | Single-snapshot metric logic language and caveats | `theme_discovery_engine_v1.md` | immediate | completed |
+| `agent-doc-validation` | Validation coverage and forward-window rule wording | `theme_discovery_engine_v1.md`, `configs/validation.example.yml` | immediate | completed |
+| `agent-doc-issues` | Open-issues tracker quality gate and dispatchability | `docs/open_issues.md` | immediate | completed |
 | `agent-doc-graph` | Graph projection and edge semantics consistency checks | `theme_discovery_engine_v1.md` | immediate | completed |
 | `agent-doc-architecture` | Manifest + sweep model and leakage gate updates | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | immediate | completed |
 | `agent-doc-index` | Navigation consistency for changed docs | `INDEX.md` | immediate | in-progress |
@@ -37,4 +37,4 @@ Dispatch submission:
 - A task is considered complete only when:
   - the target artifact is updated,
   - cross-references remain valid,
-  - and the status is updated to `resolved` in the dispatch board.
+  - and the status is updated to `completed` in the dispatch board.

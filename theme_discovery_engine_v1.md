@@ -1122,6 +1122,18 @@ Required minimum coverage:
 - 3M metrics require at least three months of market coverage after `as_of_date` for each snappoint.
 - Backtest execution should fail-fast with a typed validation error if any snappoint lacks required coverage and list exact missing date ranges.
 
+Config binding:
+
+- `configs/validation.example.yml` provides executable policy:
+  - `forward_coverage_months`: required future coverage by window.
+  - `walk_forward.min_snapshots`: minimum number of as-of points before claims.
+  - `walk_forward.require_coverage`: fail fast if any window is short.
+  - `rules.reject_insufficient_forward_data`: hard block with actionable error.
+- Validation output status semantics:
+  - `validation_status: disabled_not_enough_snapshots` for single-snapshot MVP.
+  - `validation_status: blocked_insufficient_forward_data` when coverage is insufficient.
+  - `validation_status: failed` for malformed windows.
+
 At time `t`:
 
 1. Build `Graph(t)`.
