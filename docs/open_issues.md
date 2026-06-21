@@ -49,7 +49,7 @@ Dispatch note:
 
 ## OI-1 Minimal walk-forward for a real research claim
 
-- Status: completed
+- Status: in_progress
 - Affects: sections 1, 22, 28; Milestone 6
 - Owner: Research / Quant Engineer (`agents/validation_agent.md`)
 - Conflict: The product goal (section 1) is to validate whether discovered communities relate to future outcomes, but the MVP uses a single `as_of_date`, which is a single cross-sectional draw and cannot support statistical association. Walk-forward (section 22) is currently "Later".
@@ -80,7 +80,7 @@ Dispatch note:
   - On freeze, hash all discovery artifacts into `run_manifest.json`; validation startup verifies hashes and aborts if missing or changed.
   - pytest gates (under top-level `tests/`): (a) every evidence chunk entering `Graph(t)` has `available_at <= as_of_date`; (b) every price/fundamental row read by validation is dated after `as_of_date` and is read only after freeze.
 - Files: `theme_discovery_engine_v1.md` (sections 8, 16), `docs/io_contracts.md` (run layout, manifest), `agents/validation_agent.md`, `tests/` (new leakage tests).
-- Acceptance: run layout splits discovery/validation; freeze writes artifact hashes; two leakage pytest gates exist and pass on the demo run.
+- Acceptance: run layout splits discovery/validation; freeze writes artifact hashes. Freeze hash preflight is implemented in commit `54f535d`; two leakage pytest gates are added, but full validation pipeline is still not yet wired in PR #19.
 - Decision needed by: Milestone 5.
 
 ## OI-4 Point-in-time entity / alias resolution
