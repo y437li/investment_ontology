@@ -59,7 +59,7 @@ Responsibilities:
 
 - Implement document, market, and fundamental data ingestion.
 - Build source adapters for manual files first, then SEDAR/EDGAR/news/market APIs later.
-- Produce `documents.parquet`, `chunks.parquet`, market inputs, and fundamentals inputs.
+- Build pipelines that produce `raw_documents.parquet`, `documents.parquet`, `chunks.parquet`, market inputs, and fundamentals inputs.
 - Maintain raw-to-cleaned document transformations and cleaning quality gates.
 - Validate required columns and types.
 - Deduplicate source records using content hashes or source ids.

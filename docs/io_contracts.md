@@ -7,7 +7,9 @@ This document defines the canonical input and output formats for the MVP pipelin
 - Every stage declares input artifacts and output artifacts.
 - Every table uses lowercase snake case columns.
 - Every artifact belongs under `data/runs/<run_id>/`.
-- Every run has exactly one `run_manifest.json`.
+- Discovery artifacts are written under `data/runs/<run_id>/discovery/`.
+- Validation artifacts are written under `data/runs/<run_id>/validation/`.
+- Every run has exactly one `run_manifest.json`; each walk-forward sweep has one `sweep_manifest.json`.
 - Discovery artifacts must be frozen before validation reads future returns or fundamentals.
 - Missing required fields should fail early with a clear stage error.
 - MiroFish implementation patterns may be reused, but MiroFish simulation route names and data models do not override these contracts.
@@ -36,6 +38,18 @@ Format:
   "validation_config": "configs/validation.example.yml",
   "input_hash": "sha256:...",
   "model_config_hash": "sha256:...",
+  "sweep_id": null,
+  "sweep_parent_id": null,
+  "validation_mode": "single_snapshot",
+  "sweep_position": null,
+  "discovery_artifact_hashes": {
+    "raw_documents.parquet": "sha256:...",
+    "documents.parquet": "sha256:...",
+    "chunks.parquet": "sha256:...",
+    "entity_aliases.parquet": "sha256:...",
+    "edges.parquet": "sha256:...",
+    "graph.json": "sha256:..."
+  },
   "discovery_frozen": false
 }
 ```
@@ -49,25 +63,82 @@ Required fields:
 - `universe_config`
 - `pipeline_config`
 - `input_hash`
+- `discovery_artifact_hashes` (required when `discovery_frozen=true`)
+- `validation_mode`
 - `discovery_frozen`
+- `sweep_id` (nullable for single-snapshot runs)
+- `sweep_parent_id` (nullable)
+- `sweep_position` (nullable)
+
+## 2a. Sweep Manifest (walk-forward)
+
+Path:
+
+```text
+data/runs/<sweep_id>/sweep_manifest.json
+```
+
+Run a sweep when multiple `as_of_date` snapshots share one validation objective.
+
+Format:
+
+```json
+{
+  "schema_version": "1.0",
+  "sweep_id": "sweep_202406",
+  "sweep_name": "demo_ai_infra_3m_walkforward",
+  "created_at": "2026-06-21T12:30:00Z",
+  "validation_config": "configs/validation.example.yml",
+  "as_of_dates": ["2024-03-31", "2024-06-30", "2024-09-30"],
+  "child_runs": [
+    {
+      "run_id": "run_20240331_120000",
+      "as_of_date": "2024-03-31",
+      "run_manifest_path": "data/runs/run_20240331_120000/run_manifest.json"
+    },
+    {
+      "run_id": "run_20240630_120000",
+      "as_of_date": "2024-06-30",
+      "run_manifest_path": "data/runs/run_20240630_120000/run_manifest.json"
+    },
+    {
+      "run_id": "run_20240930_120000",
+      "as_of_date": "2024-09-30",
+      "run_manifest_path": "data/runs/run_20240930_120000/run_manifest.json"
+    }
+  ]
+}
+```
+
+Required fields:
+
+- `schema_version`
+- `sweep_id`
+- `created_at`
+- `validation_config`
+- `as_of_dates`
+- `child_runs`
+- `validation_mode` (defaults to `"walk_forward"`)
+
+Each child run remains a single-as_of run and may reuse run-level frozen artifacts.
 
 ## 3. Stage Contract Summary
 
 | Stage | Inputs | Outputs |
 |---|---|---|
 | Create Run | configs | `run_manifest.json` |
-| Import Raw Documents | raw files, `source_manifest.csv` | `raw_documents.parquet` |
-| Clean Documents | `raw_documents.parquet` | `documents.parquet`, `document_cleaning_log.parquet` |
-| Chunk Documents | `documents.parquet` | `chunks.parquet` |
-| Extract Entities | `chunks.parquet` | `entities.parquet`, `entity_aliases.parquet` |
-| Extract Edges | `chunks.parquet`, `entities.parquet` | `edges.parquet`, `edge_explanations.parquet` |
-| Build Graph | `entities.parquet`, `edges.parquet` | `graph.json` |
-| Discover Themes | `graph.json` | `communities.json`, `theme_snapshots.json`, `theme_lineage.json`, `theme_metrics.parquet` |
-| Compute Exposure | `communities.json`, `graph.json`, `entities.parquet`, `edges.parquet` | `company_theme_exposure.parquet` |
+| Import Raw Documents | raw files, `source_manifest.csv` | `discovery/raw_documents.parquet` |
+| Clean Documents | `discovery/raw_documents.parquet` | `discovery/documents.parquet`, `discovery/document_cleaning_log.parquet` |
+| Chunk Documents | `discovery/documents.parquet` | `discovery/chunks.parquet` |
+| Extract Entities | `discovery/chunks.parquet` | `discovery/entities.parquet`, `discovery/entity_aliases.parquet`, `discovery/entity_aliases_global.parquet` (optional) |
+| Extract Edges | `discovery/chunks.parquet`, `discovery/entities.parquet` | `discovery/edges.parquet`, `discovery/edge_explanations.parquet` |
+| Build Graph | `discovery/entities.parquet`, `discovery/edges.parquet` | `discovery/graph.json` |
+| Discover Themes | `discovery/graph.json` | `discovery/communities.json`, `discovery/theme_snapshots.json`, `discovery/theme_lineage.json`, `discovery/theme_metrics.parquet` |
+| Compute Exposure | `discovery/communities.json`, `discovery/graph.json`, `discovery/entities.parquet`, `discovery/edges.parquet` | `discovery/company_theme_exposure.parquet` |
 | Freeze Discovery | all discovery artifacts | updated `run_manifest.json` |
-| Load Market Data | market files or adapter output | `market_prices.parquet` |
-| Load Fundamentals | fundamentals files or adapter output | `fundamentals.parquet` |
-| Validate | frozen discovery artifacts, `company_theme_exposure.parquet`, `market_prices.parquet`, optional `fundamentals.parquet` | `portfolio_baskets.parquet`, `validation.csv` |
+| Load Market Data | market files or adapter output | `validation/market_prices.parquet` |
+| Load Fundamentals | fundamentals files or adapter output | `validation/fundamentals.parquet` |
+| Validate | frozen discovery artifacts, `discovery/company_theme_exposure.parquet`, `validation/market_prices.parquet`, optional `validation/fundamentals.parquet` | `validation/portfolio_baskets.parquet`, `validation/validation.csv` |
 | Report | all artifacts | `report.md` |
 
 ## 4. Input `source_manifest.csv`
@@ -95,6 +166,7 @@ language: string | null
 source_url: string | null
 license: string | null
 confidentiality: string | null
+source_vintage: string | null
 notes: string | null
 ```
 
@@ -102,6 +174,7 @@ Rules:
 
 - `raw_path` must be relative to the document input root.
 - `available_at` is mandatory; missing values must be rejected or quarantined.
+- `source_vintage` must be preserved if available for replay and audit.
 - This manifest is local input data and should not be committed unless it is a tiny synthetic fixture.
 
 ## 5. `raw_documents.parquet`
@@ -290,9 +363,40 @@ schema_version: string
 alias: string
 canonical_entity_id: string
 canonical_name: string
+as_of_date: date
 confidence: float
 method: string
 review_status: string
+alias_scope: string
+source_record_ids: list[string]
+created_at: timestamp
+```
+
+`alias_scope` values:
+
+- `point_in_time` (run-scope alias table)
+- `global` (cross-run diagnostic table)
+
+Rules:
+
+- `alias_scope=point_in_time` rows are for `discovery/entity_aliases.parquet` and require `as_of_date`.
+- `alias_scope=global` rows are for `discovery/entity_aliases_global.parquet` and must not drive discovery joins.
+
+## 10a. `entity_aliases_global.parquet`
+
+Optional diagnostics artifact for non-temporal alias inspection.
+
+Required columns:
+
+```text
+schema_version: string
+alias: string
+canonical_entity_id: string
+canonical_name: string
+confidence: float
+method: string
+review_status: string
+source_record_ids: list[string]
 created_at: timestamp
 ```
 
@@ -332,6 +436,12 @@ Rules:
 
 - Non-trivial edges must have at least one `evidence_chunk_ids` value.
 - `first_seen_at <= as_of_date`.
+- `extraction_method` must be one of: `document_stated`, `llm_inferred`, `metadata_inferred`.
+- Exposure and community computation include only non-weak edges by default:
+  - Include `document_stated` by default.
+  - Exclude `llm_inferred` unless `include_weak_signals=true`.
+  - Exclude `metadata_inferred` unless explicitly enabled.
+- `metadata_inferred` edges must carry `source_record_id` in `explanation` context so audit remains reconstructable.
 
 ## 12. `edge_explanations.parquet`
 
@@ -363,6 +473,20 @@ Format:
   "schema_version": "1.0",
   "run_id": "run_20240630_120000",
   "as_of_date": "2024-06-30",
+  "projection": {
+    "type": "entity_only",
+    "node_types_in_structural_graph": [
+      "Company",
+      "MacroIndicator",
+      "EconomicConcept",
+      "Commodity",
+      "Event",
+      "Geography"
+    ],
+    "excluded_node_types": ["Document"]
+  },
+  "structural_edge_types": ["exposed_to", "sensitive_to", "causes", "benefits", "hurts", "located_in"],
+  "evidence_edge_types": ["mentioned_in", "co_occurs_with"],
   "nodes": [
     {
       "entity_id": "ent_001",
@@ -378,11 +502,20 @@ Format:
       "target_entity_id": "ent_002",
       "edge_type": "exposed_to",
       "weight": 0.72,
-      "evidence_chunk_ids": ["chunk_001"]
+      "evidence_chunk_ids": ["chunk_001"],
+      "extraction_method": "document_stated"
     }
-  ]
+  ],
+  "community_input_edges": ["edge_001"]
 }
 ```
+
+Rules:
+
+- Structural community detection uses only `community_input_edges`.
+- `community_input_edges` must only reference edges with non-Document endpoints and `edge_type in structural_edge_types`.
+- `evidence_edge_types` are allowed for traceability and reporting, but are excluded from structure-based clustering by default.
+- `run_id`, `as_of_date`, and `graph.json` content are immutable after freeze.
 
 ## 14. `communities.json`
 
