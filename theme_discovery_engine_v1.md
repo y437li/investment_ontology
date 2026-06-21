@@ -389,6 +389,33 @@ ingested_at
 
 `available_at` is mandatory. Without it, the document cannot enter discovery.
 
+## Acquisition and Vintage Rules
+
+Acquisition (actually fetching source data) is owned by the Data Engineer role (`agents/data_engineering_agent.md`). It is distinct from ingestion, which only registers files that already exist. Point-in-time correctness is enforced at acquisition, not after.
+
+Hard rules:
+
+- Every fetched record carries `published_at`, `available_at`, and a source `vintage` (the as-of moment of the retrieved version).
+- Fundamentals must use as-reported historical values only. Never store live or restated figures as if they were known at `available_at`. Restatements are recorded as new vintages, not overwrites.
+- Universe membership is recorded per `as_of_date`. Do not apply today's index membership to historical graphs (survivorship bias).
+- Prices use only bars dated `<= t`; corporate-action adjustments must not use future split/dividend factors when reconstructing a historical view.
+- Acquisition is deterministic and re-runnable: the same source and window reproduce the same records and `content_hash`.
+
+## Source Stack (MVP, free, point-in-time-friendly)
+
+Recommended free sources whose native timestamps map to `available_at`:
+
+- Filings / MD&A / press releases: SEC EDGAR (US and cross-listed) and SEDAR+ (Canada). Filing date is `available_at`.
+- Prices (daily OHLCV): any provider that exposes historical bars; only bars `<= t` are used.
+- Macro: FRED (Federal Reserve, CPI, GDP) and the Bank of Canada Valet API. Both expose release dates.
+- Fundamentals (as-reported): SEC EDGAR XBRL company facts, which carry filing dates and are point-in-time correct.
+
+Deferred (no clean free point-in-time source for MVP): historical news with reliable `published_at`/`available_at`, and earnings-call transcripts. These are out of the MVP corpus until a vetted source exists; press releases (from filings) act as the interim narrative source.
+
+## Acquisition Agent Trigger
+
+For MVP, acquisition stays a responsibility inside `agents/data_engineering_agent.md` and no autonomous collection agent is built. Promote acquisition into a dedicated `agents/data_collection_agent.md` only when section 29 sources (alt-data, APIs, global markets) land, where scheduling, rate limits, and multi-source reconciliation justify a separate role.
+
 ---
 
 # 7. Ontology

@@ -50,6 +50,7 @@ document_type
 company_id
 published_at
 available_at
+vintage
 language
 source_url
 license
@@ -61,8 +62,16 @@ Rules:
 
 - `raw_path` must be relative to the input root.
 - `available_at` is mandatory and must reflect when the document was knowable to the market, not only the document's period end.
+- `vintage` records the as-of moment of the retrieved version of the source, so later restatements are stored as new vintages rather than overwrites.
 - `source_id` and `raw_path` must be stable enough for deduplication.
 - Raw files are local inputs and must not be committed to Git.
+
+Acquisition standard (the fetch step that produces L0, owned by the Data Engineer; see spec section 6):
+
+- Every fetched record carries `published_at`, `available_at`, and `vintage`.
+- Structured inputs (prices, fundamentals, macro) carry the same point-in-time stamps; fundamentals use as-reported values only, never live or restated figures.
+- Universe membership is recorded per `as_of_date` to avoid survivorship bias.
+- Acquisition is deterministic: the same source and window reproduce the same records and `content_hash`.
 
 ## 3. L1 Cleaning Standard
 
