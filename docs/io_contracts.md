@@ -1,6 +1,6 @@
 # Input / Output Contracts
 
-This document defines the canonical input and output formats for the MVP pipeline. Every agent, skill, API, and code module should preserve these contracts unless `theme_discovery_engine_v1.md` is updated first.
+This document defines the canonical input and output formats for the MVP pipeline. `docs/data_schema.md` defines the layered data model; this file defines the exact artifact and API contracts. Every agent, skill, API, and code module should preserve these contracts unless `theme_discovery_engine_v1.md` is updated first.
 
 ## 1. Contract Principles
 
@@ -10,6 +10,8 @@ This document defines the canonical input and output formats for the MVP pipelin
 - Every run has exactly one `run_manifest.json`.
 - Discovery artifacts must be frozen before validation reads future returns or fundamentals.
 - Missing required fields should fail early with a clear stage error.
+- MiroFish implementation patterns may be reused, but MiroFish simulation route names and data models do not override these contracts.
+- Raw unstructured inputs must pass through cleaned unstructured artifacts before structured extraction starts.
 
 ## 2. Run Manifest
 
@@ -54,26 +56,104 @@ Required fields:
 | Stage | Inputs | Outputs |
 |---|---|---|
 | Create Run | configs | `run_manifest.json` |
-| Import Documents | raw files, manifest | `documents.parquet` |
+| Import Raw Documents | raw files, `source_manifest.csv` | `raw_documents.parquet` |
+| Clean Documents | `raw_documents.parquet` | `documents.parquet`, `document_cleaning_log.parquet` |
 | Chunk Documents | `documents.parquet` | `chunks.parquet` |
 | Extract Entities | `chunks.parquet` | `entities.parquet`, `entity_aliases.parquet` |
 | Extract Edges | `chunks.parquet`, `entities.parquet` | `edges.parquet`, `edge_explanations.parquet` |
 | Build Graph | `entities.parquet`, `edges.parquet` | `graph.json` |
-| Discover Themes | `graph.json` | `communities.json`, `theme_snapshots.json`, `theme_metrics.parquet` |
+| Discover Themes | `graph.json` | `communities.json`, `theme_snapshots.json`, `theme_lineage.json`, `theme_metrics.parquet` |
 | Compute Exposure | `communities.json`, `graph.json`, `entities.parquet`, `edges.parquet` | `company_theme_exposure.parquet` |
 | Freeze Discovery | all discovery artifacts | updated `run_manifest.json` |
-| Validate | frozen discovery artifacts, market/fundamental data | `validation.csv` |
+| Load Market Data | market files or adapter output | `market_prices.parquet` |
+| Load Fundamentals | fundamentals files or adapter output | `fundamentals.parquet` |
+| Validate | frozen discovery artifacts, `company_theme_exposure.parquet`, `market_prices.parquet`, optional `fundamentals.parquet` | `portfolio_baskets.parquet`, `validation.csv` |
 | Report | all artifacts | `report.md` |
 
-## 4. `documents.parquet`
+## 4. Input `source_manifest.csv`
 
-One row per source document.
+Path:
+
+```text
+data/inputs/documents/source_manifest.csv
+```
+
+One row per raw source file.
+
+Required columns:
+
+```text
+source: string
+source_id: string
+raw_path: string
+title: string
+document_type: string
+company_id: string | null
+published_at: date | timestamp
+available_at: date | timestamp
+language: string | null
+source_url: string | null
+license: string | null
+confidentiality: string | null
+notes: string | null
+```
+
+Rules:
+
+- `raw_path` must be relative to the document input root.
+- `available_at` is mandatory; missing values must be rejected or quarantined.
+- This manifest is local input data and should not be committed unless it is a tiny synthetic fixture.
+
+## 5. `raw_documents.parquet`
+
+One row per raw source document after ingestion and text extraction.
 
 Required columns:
 
 ```text
 schema_version: string
+run_id: string
+raw_document_id: string
+source: string
+source_id: string
+raw_path: string
+raw_file_type: string
+title: string
+document_type: string
+company_id: string | null
+published_at: date | timestamp
+available_at: date | timestamp
+language: string | null
+source_url: string | null
+raw_content_hash: string
+raw_byte_size: int | null
+extracted_text_path: string | null
+extraction_method: string
+extraction_status: string
+extraction_error: string | null
+ingested_at: timestamp
+included_in_discovery: bool
+exclusion_reason: string | null
+```
+
+Rules:
+
+- Raw files must not be overwritten.
+- `raw_document_id` must be stable for the same `source`, `source_id`, and `raw_content_hash`.
+- `included_in_discovery` must be false when `available_at > as_of_date`.
+- Extraction failures must be explicit in `extraction_status` and `extraction_error`.
+
+## 6. `documents.parquet`
+
+One row per cleaned document ready for chunking.
+
+Required columns:
+
+```text
+schema_version: string
+run_id: string
 document_id: string
+raw_document_id: string
 source: string
 source_id: string
 title: string
@@ -81,9 +161,17 @@ document_type: string
 company_id: string | null
 published_at: date | timestamp
 available_at: date | timestamp
+language: string | null
 raw_path: string
+clean_text_path: string
 content_hash: string
+raw_content_hash: string
+clean_content_hash: string
+cleaning_status: string
+cleaning_version: string
+cleaning_agent: string
 ingested_at: timestamp
+cleaned_at: timestamp
 included_in_discovery: bool
 exclusion_reason: string | null
 ```
@@ -92,9 +180,42 @@ Rules:
 
 - `available_at` is mandatory.
 - `included_in_discovery` must be false when `available_at > as_of_date`.
-- `content_hash` is used for duplicate detection.
+- `raw_document_id` links back to `raw_documents.parquet`.
+- `content_hash` should equal `clean_content_hash` for the canonical cleaned text.
+- Cleaning must not summarize, translate, or rewrite source meaning.
 
-## 5. `chunks.parquet`
+## 7. `document_cleaning_log.parquet`
+
+One row per material cleaning action or quarantine decision.
+
+Required columns:
+
+```text
+schema_version: string
+run_id: string
+raw_document_id: string
+document_id: string | null
+cleaning_step: string
+action_type: string
+rule_id: string
+before_hash: string | null
+after_hash: string | null
+char_count_before: int | null
+char_count_after: int | null
+status: string
+warning_code: string | null
+warning_message: string | null
+cleaned_by: string
+created_at: timestamp
+```
+
+Rules:
+
+- Quarantined records must have `status` and `warning_message`.
+- Deterministic cleaning rules should have stable `rule_id` values.
+- This artifact is required even when no material changes were made.
+
+## 8. `chunks.parquet`
 
 One row per text chunk.
 
@@ -102,23 +223,30 @@ Required columns:
 
 ```text
 schema_version: string
+run_id: string
 chunk_id: string
 document_id: string
+raw_document_id: string
 chunk_index: int
 text: string
 token_count: int | null
 start_char: int | null
 end_char: int | null
+page_start: int | null
+page_end: int | null
+section_title: string | null
 available_at: date | timestamp
 content_hash: string
+cleaning_version: string
 ```
 
 Rules:
 
 - `chunk_id` must be stable for the same document hash and chunking config.
 - Chunks inherit `available_at` from documents.
+- `text` must come from cleaned document text, not raw unnormalized files.
 
-## 6. `entities.parquet`
+## 9. `entities.parquet`
 
 One row per canonical or candidate entity.
 
@@ -151,7 +279,7 @@ Allowed `entity_type` values:
 - `Geography`
 - `Document`
 
-## 7. `entity_aliases.parquet`
+## 10. `entity_aliases.parquet`
 
 One row per alias mapping.
 
@@ -168,7 +296,7 @@ review_status: string
 created_at: timestamp
 ```
 
-## 8. `edges.parquet`
+## 11. `edges.parquet`
 
 One row per relationship.
 
@@ -205,7 +333,7 @@ Rules:
 - Non-trivial edges must have at least one `evidence_chunk_ids` value.
 - `first_seen_at <= as_of_date`.
 
-## 9. `edge_explanations.parquet`
+## 12. `edge_explanations.parquet`
 
 One row per edge explanation.
 
@@ -226,7 +354,7 @@ Rules:
 - Explanation must be grounded in evidence chunks.
 - Do not include unsupported LLM speculation.
 
-## 10. `graph.json`
+## 13. `graph.json`
 
 Format:
 
@@ -256,7 +384,7 @@ Format:
 }
 ```
 
-## 11. `communities.json`
+## 14. `communities.json`
 
 Format:
 
@@ -287,7 +415,7 @@ Rule:
 
 - `theme_name` is metadata only. The community is the research object.
 
-## 12. `theme_snapshots.json`
+## 15. `theme_snapshots.json`
 
 Format:
 
@@ -320,7 +448,36 @@ Allowed `state` values:
 - `Dormant`
 - `Revived`
 
-## 13. `theme_metrics.parquet`
+## 16. `theme_lineage.json`
+
+Format:
+
+```json
+{
+  "schema_version": "1.0",
+  "run_id": "run_20240630_120000",
+  "as_of_date": "2024-06-30",
+  "lineage_mode": "single_snapshot",
+  "lineages": [
+    {
+      "theme_family_id": "theme_family_004",
+      "current_theme_snapshot_id": "theme_20240630_017",
+      "prior_theme_snapshot_ids": ["theme_20240531_011"],
+      "lifecycle_event": "expanding",
+      "confidence": 0.81,
+      "method": "community_overlap_v1"
+    }
+  ]
+}
+```
+
+Rules:
+
+- A single-as-of demo must still write this artifact with an empty `lineages` list and `lineage_mode="single_snapshot"`.
+- Multi-snapshot runs must make split, merge, revive, and decline events explicit.
+- Lineage is derived from graph/community continuity, not from future returns.
+
+## 17. `theme_metrics.parquet`
 
 One row per theme/community.
 
@@ -341,7 +498,7 @@ macro_linkage: float | null
 commodity_linkage: float | null
 ```
 
-## 14. `company_theme_exposure.parquet`
+## 18. `company_theme_exposure.parquet`
 
 One row per company-theme pair.
 
@@ -366,8 +523,97 @@ Rules:
 
 - Exposure must be explainable from graph and evidence.
 - Do not output top companies without `exposure_score`.
+- Exposure must be computed and frozen before validation reads future market or fundamental outcomes.
 
-## 15. `validation.csv`
+## 19. `market_prices.parquet`
+
+One row per company and price date needed for validation.
+
+Required columns:
+
+```text
+schema_version: string
+run_id: string
+as_of_date: date
+company_id: string
+ticker: string | null
+price_date: date
+close: float
+adjusted_close: float | null
+currency: string
+source: string
+source_id: string | null
+available_at: date | timestamp | null
+created_at: timestamp
+```
+
+Rules:
+
+- Discovery stages must not read this artifact.
+- Validation may include prices after `as_of_date` only after `discovery_frozen=true`.
+- Return calculations must state whether `close` or `adjusted_close` is used.
+
+## 20. `fundamentals.parquet`
+
+One row per company, period, and fundamental metric.
+
+Required columns:
+
+```text
+schema_version: string
+run_id: string
+as_of_date: date
+company_id: string
+ticker: string | null
+period_end: date
+metric_name: string
+metric_value: float | string | null
+unit: string | null
+currency: string | null
+filing_date: date | null
+available_at: date | timestamp | null
+source: string
+source_id: string | null
+created_at: timestamp
+```
+
+Rules:
+
+- Discovery stages must not read validation-only fundamentals.
+- If fundamentals validation is disabled, write a schema-valid empty artifact.
+- Fundamental metric names must come from config, not hardcoded strings inside validation code.
+
+## 21. `portfolio_baskets.parquet`
+
+One row per selected company inside a theme validation basket.
+
+Required columns:
+
+```text
+schema_version: string
+run_id: string
+as_of_date: date
+basket_id: string
+theme_snapshot_id: string
+community_id: string
+portfolio_method: string
+selection_rank: int
+company_id: string
+ticker: string | null
+exposure_score: float
+weight: float
+inclusion_reason: string
+calculation_method: string
+created_at: timestamp
+```
+
+Rules:
+
+- This artifact must be sufficient to reproduce `validation.csv`.
+- Weights must be explicit and should sum to approximately 1.0 per `basket_id`.
+- Selection rules must come from `configs/validation.example.yml`.
+
+## 22. `validation.csv`
 
 One row per theme and validation window.
 
@@ -377,17 +623,21 @@ Required columns:
 schema_version
 run_id
 as_of_date
+basket_id
 theme_snapshot_id
 community_id
 theme_name
 forward_window
 portfolio_method
 company_count
+start_date
+end_date
 theme_basket_return
 benchmark_name
 benchmark_return
 excess_return
 sample_size
+market_data_source
 caveats
 ```
 
@@ -396,8 +646,9 @@ Rules:
 - Validation can run only after `discovery_frozen=true`.
 - Benchmark must be explicit.
 - Do not suppress negative results.
+- Each row must link to a reproducible `basket_id` in `portfolio_baskets.parquet`.
 
-## 16. `report.md`
+## 23. `report.md`
 
 Required sections:
 
@@ -420,7 +671,7 @@ Rules:
 - Reports must distinguish source facts, LLM summaries, and analyst inference.
 - Reports must not present automatic investment advice.
 
-## 17. API I/O Contracts
+## 24. API I/O Contracts
 
 ### `POST /api/runs/create`
 
@@ -453,7 +704,8 @@ Input:
 ```json
 {
   "run_id": "run_20240630_120000",
-  "documents_dir": "data/inputs/documents"
+  "documents_dir": "data/inputs/documents",
+  "source_manifest_path": "data/inputs/documents/source_manifest.csv"
 }
 ```
 
@@ -462,9 +714,76 @@ Output:
 ```json
 {
   "success": true,
-  "artifacts": ["documents.parquet", "chunks.parquet"],
+  "artifacts": ["raw_documents.parquet"],
+  "raw_documents": 45,
+  "extraction_failed": 2
+}
+```
+
+### `POST /api/data/clean`
+
+Input:
+
+```json
+{
+  "run_id": "run_20240630_120000"
+}
+```
+
+Output:
+
+```json
+{
+  "success": true,
+  "artifacts": ["documents.parquet", "document_cleaning_log.parquet"],
   "included_documents": 42,
-  "excluded_documents": 3
+  "quarantined_documents": 3
+}
+```
+
+### `POST /api/data/chunk`
+
+Input:
+
+```json
+{
+  "run_id": "run_20240630_120000"
+}
+```
+
+Output:
+
+```json
+{
+  "success": true,
+  "artifacts": ["chunks.parquet"],
+  "chunk_count": 840
+}
+```
+
+### `POST /api/extraction/run`
+
+Input:
+
+```json
+{
+  "run_id": "run_20240630_120000"
+}
+```
+
+Output:
+
+```json
+{
+  "success": true,
+  "artifacts": [
+    "entities.parquet",
+    "entity_aliases.parquet",
+    "edges.parquet",
+    "edge_explanations.parquet"
+  ],
+  "entity_count": 128,
+  "edge_count": 342
 }
 ```
 
@@ -483,7 +802,7 @@ Output:
 ```json
 {
   "success": true,
-  "artifacts": ["entities.parquet", "edges.parquet", "graph.json"],
+  "artifacts": ["graph.json"],
   "node_count": 128,
   "edge_count": 342
 }
@@ -504,8 +823,49 @@ Output:
 ```json
 {
   "success": true,
-  "artifacts": ["communities.json", "theme_snapshots.json", "theme_metrics.parquet"],
+  "artifacts": ["communities.json", "theme_snapshots.json", "theme_lineage.json", "theme_metrics.parquet"],
   "community_count": 12
+}
+```
+
+### `POST /api/exposure/compute`
+
+Input:
+
+```json
+{
+  "run_id": "run_20240630_120000"
+}
+```
+
+Output:
+
+```json
+{
+  "success": true,
+  "artifacts": ["company_theme_exposure.parquet"],
+  "theme_count": 12,
+  "company_theme_pair_count": 96
+}
+```
+
+### `POST /api/discovery/freeze`
+
+Input:
+
+```json
+{
+  "run_id": "run_20240630_120000"
+}
+```
+
+Output:
+
+```json
+{
+  "success": true,
+  "discovery_frozen": true,
+  "manifest_path": "data/runs/run_20240630_120000/run_manifest.json"
 }
 ```
 
@@ -516,7 +876,9 @@ Input:
 ```json
 {
   "run_id": "run_20240630_120000",
-  "freeze_discovery": true
+  "market_data_dir": "data/inputs/market",
+  "fundamentals_data_dir": "data/inputs/fundamentals",
+  "include_fundamentals": false
 }
 ```
 
@@ -525,7 +887,7 @@ Output:
 ```json
 {
   "success": true,
-  "artifacts": ["company_theme_exposure.parquet", "validation.csv"],
+  "artifacts": ["market_prices.parquet", "fundamentals.parquet", "portfolio_baskets.parquet", "validation.csv"],
   "validated_themes": 12
 }
 ```
@@ -550,7 +912,7 @@ Output:
 }
 ```
 
-## 18. Agent I/O Rule
+## 25. Agent I/O Rule
 
 Every agent handoff should state:
 
@@ -563,7 +925,7 @@ Acceptance checks failed:
 Next recommended step:
 ```
 
-## 19. Skill I/O Rule
+## 26. Skill I/O Rule
 
 Every skill execution should state:
 
@@ -574,4 +936,3 @@ Config values used:
 Tests or checks run:
 Known caveats:
 ```
-

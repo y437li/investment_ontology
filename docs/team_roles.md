@@ -11,6 +11,7 @@ Minimum viable team:
 | Product / Research Lead | Yes | No | Research question, universe, validation interpretation |
 | Data Architect | Yes | Yes, with Data Engineer for MVP | Data model, schema versioning, lineage, point-in-time rules |
 | Data Engineer | Yes | Yes, with Data Architect for MVP | Ingestion, adapters, ETL, data quality, artifact production |
+| Data Cleaning / Quality Owner | Yes | Yes, with Data Engineer for MVP | Unstructured document cleaning standards, quarantine rules, cleaning logs |
 | Research / Quant Engineer | Yes | Sometimes | Graph metrics, exposure, validation, benchmarks |
 | Full-stack Engineer | Yes | Sometimes | Workflow UI, backend APIs, artifact inspection |
 | LLM / Extraction Engineer | Yes | Sometimes | Structured extraction, entity resolution, model/cost controls |
@@ -59,6 +60,7 @@ Responsibilities:
 - Implement document, market, and fundamental data ingestion.
 - Build source adapters for manual files first, then SEDAR/EDGAR/news/market APIs later.
 - Produce `documents.parquet`, `chunks.parquet`, market inputs, and fundamentals inputs.
+- Maintain raw-to-cleaned document transformations and cleaning quality gates.
 - Validate required columns and types.
 - Deduplicate source records using content hashes or source ids.
 - Maintain raw-to-artifact transformation scripts.
@@ -72,6 +74,25 @@ Key deliverables:
 - Data quality checks.
 - Fixture datasets.
 - Data run logs.
+
+## Data Cleaning / Quality Owner
+
+Mission:
+
+Own the quality boundary between raw unstructured inputs and structured extraction.
+
+Responsibilities:
+
+- Maintain `docs/data_schema.md` cleaning standards.
+- Review deterministic cleaning rules for OCR noise, boilerplate, whitespace, and chunking.
+- Ensure `raw_documents.parquet`, `documents.parquet`, `document_cleaning_log.parquet`, and `chunks.parquet` stay aligned.
+- Define quarantine reasons for missing metadata, unreadable files, duplicates, and future documents.
+- Verify that cleaning does not summarize, translate, or rewrite source meaning.
+
+Can be combined with:
+
+- Data Engineer for MVP.
+- LLM / Extraction Engineer only if cleaning remains deterministic and auditable.
 
 Non-negotiable standards:
 
@@ -88,6 +109,7 @@ Non-negotiable standards:
 | `available_at` semantics | Defines rule | Enforces rule |
 | Source adapter | Defines expected output | Builds adapter |
 | Data quality | Defines gates | Implements checks |
+| Data cleaning | Defines allowed transformations | Implements and logs transformations |
 | Storage | Chooses architecture | Operates storage/pipeline |
 | Migration | Designs migration path | Executes migration |
 | Validation leakage | Defines boundary | Enforces in pipeline |
@@ -123,4 +145,3 @@ Data Engineer review is required for:
 - data quality checks
 - fixture data changes
 - run artifact write behavior
-

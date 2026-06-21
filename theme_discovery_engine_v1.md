@@ -2,12 +2,24 @@
 
 ## Time-Aware Economic Narrative Discovery Platform
 
+Project slug:
+
+```text
+investment_ontology
+```
+
 This document is the core project specification. It uses the original design as the source of truth and only borrows selected implementation ideas from MiroFish:
 
 - Keep the workflow shell: import data -> build graph -> inspect result -> generate report -> interact.
 - Reuse the idea of project/run state and asynchronous tasks.
 - Reuse file upload, text extraction, chunking, LLM structured extraction, and report UX patterns.
 - Do not reuse MiroFish's Twitter/Reddit/OASIS simulation path as the core investment logic.
+
+Source-of-truth order:
+
+1. `theme_discovery_engine_v1.md` defines the product logic, research boundary, milestones, and team shape.
+2. `docs/io_contracts.md` defines the canonical input/output contracts for artifacts and APIs.
+3. `docs/mirofish_reference.md` is only an implementation reference for workflow shell, page flow, background tasks, and file-backed run state.
 
 The platform is not a stock prediction engine. It is a time-aware economic narrative discovery engine.
 
@@ -29,7 +41,7 @@ Core principle:
 Themes emerge from:
 
 ```text
-Documents -> Entities -> Graph(t) -> Communities -> Theme Snapshots -> Validation
+Raw Unstructured Sources -> Cleaned Documents/Chunks -> Structured Entities/Edges -> Graph(t) -> Communities -> Theme Snapshots -> Exposure -> Freeze -> Validation
 ```
 
 The system should answer:
@@ -76,6 +88,12 @@ The v1 MVP must be a small but extensible vertical slice. It should be able to r
 # 3. MiroFish Reference Boundary
 
 MiroFish is useful as an implementation reference, not as the research methodology.
+
+Hard boundary:
+
+- Use this project's nouns in implementation: run, artifact, document, chunk, entity, edge, graph, community, theme, exposure, validation, report.
+- Treat MiroFish names such as simulation, OASIS, Twitter, Reddit, and social agents as migration hints only.
+- If MiroFish workflow and this spec conflict, this spec and `docs/io_contracts.md` win.
 
 ## Borrow
 
@@ -127,10 +145,15 @@ Backend API target:
 ```text
 POST /api/runs/create
 POST /api/data/import
+POST /api/data/clean
+POST /api/data/chunk
 GET  /api/runs/:run_id/status
+POST /api/extraction/run
 POST /api/graph/build
 POST /api/themes/discover
 GET  /api/themes/:run_id
+POST /api/exposure/compute
+POST /api/discovery/freeze
 POST /api/validation/run
 POST /api/report/generate
 GET  /api/artifacts/:run_id/:artifact_name
@@ -214,7 +237,7 @@ REDIS_URL=
 The workspace should use this structure:
 
 ```text
-Investment Ontology/
+investment_ontology/
   INDEX.md
   theme_discovery_engine_v1.md
   README.md
@@ -227,6 +250,7 @@ Investment Ontology/
     folder_structure.md
     formatting_standards.md
     code_style_standards.md
+    data_schema.md
     io_contracts.md
     team_roles.md
     mirofish_reference.md
@@ -237,6 +261,7 @@ Investment Ontology/
     data_architect_agent.md
     data_engineering_agent.md
     data_ingestion_agent.md
+    data_cleaning_agent.md
     extraction_agent.md
     graph_theme_agent.md
     validation_agent.md
@@ -244,10 +269,16 @@ Investment Ontology/
   skills/
     README.md
     point_in_time_data.md
+    unstructured_data_cleaning.md
     entity_relation_extraction.md
     temporal_graph_discovery.md
     validation_backtest.md
     evidence_report_generation.md
+    backend_api_implementation.md
+    pipeline_artifact_implementation.md
+    frontend_workflow_implementation.md
+    test_quality_gate.md
+    maintainable_code_implementation.md
   data/
     inputs/
       documents/
@@ -268,6 +299,8 @@ Investment Ontology/
 `INDEX.md` is the maintained navigation index. Update it whenever source documents, configs, agent specs, skill specs, or implementation guides are added, renamed, or materially changed.
 
 `docs/io_contracts.md` defines the canonical input and output formats for stages, artifacts, APIs, agents, and skills. Implementation work must preserve those contracts unless this source-of-truth document is updated first.
+
+`docs/data_schema.md` defines the required data order: raw unstructured inputs, cleaned unstructured artifacts, structured discovery artifacts, and structured validation artifacts.
 
 ---
 
@@ -458,7 +491,9 @@ Required artifacts:
 
 ```text
 run_manifest.json
+raw_documents.parquet
 documents.parquet
+document_cleaning_log.parquet
 chunks.parquet
 entities.parquet
 entity_aliases.parquet
@@ -468,11 +503,18 @@ graph.json
 communities.json
 theme_snapshots.json
 theme_lineage.json
-company_theme_exposure.parquet
 theme_metrics.parquet
+company_theme_exposure.parquet
+market_prices.parquet
+fundamentals.parquet
+portfolio_baskets.parquet
 validation.csv
 report.md
 ```
+
+`theme_lineage.json` is required as a schema-valid artifact. A single-as-of demo may write an empty lineage list with `lineage_mode="single_snapshot"`.
+
+`fundamentals.parquet` is required for schema consistency but may be empty when fundamentals validation is disabled in config.
 
 `run_manifest.json` must contain:
 
@@ -511,22 +553,42 @@ Outputs:
 - Acceptance checklist.
 - Handoff notes.
 
-## 9.2 Document Ingestion Agent
+## 9.2 Data Ingestion Agent
 
-Loads and normalizes documents.
+Loads raw source files and source manifests into point-in-time raw document records.
+
+Outputs:
+
+- `raw_documents.parquet`
+- ingestion warnings
+
+Hard rule:
+
+- Reject or quarantine raw documents without `available_at`.
+- Do not clean text or chunk documents in this agent.
+
+## 9.3 Data Cleaning Agent
+
+Cleans raw unstructured documents into extraction-ready documents and chunks.
 
 Outputs:
 
 - `documents.parquet`
+- `document_cleaning_log.parquet`
 - `chunks.parquet`
 
 Hard rule:
 
-- Reject or quarantine documents without `available_at`.
+- Cleaning must be deterministic and auditable.
+- Do not summarize, translate, or rewrite source meaning.
 
-## 9.3 Extraction Agent
+## 9.4 Extraction Agent
 
 Extracts candidate entities and relationships.
+
+Input:
+
+- cleaned `chunks.parquet`
 
 Outputs:
 
@@ -537,8 +599,9 @@ Outputs:
 Hard rule:
 
 - Every non-trivial edge needs evidence chunk ids.
+- Extraction must not read raw uncleaned files.
 
-## 9.4 Entity Resolution Agent
+## 9.5 Entity Resolution Agent
 
 Canonicalizes aliases.
 
@@ -554,7 +617,7 @@ Outputs:
 - `entity_aliases.parquet`
 - updated `entities.parquet`
 
-## 9.5 Graph Theme Agent
+## 9.6 Graph Theme Agent
 
 Builds `Graph(t)` and discovers communities.
 
@@ -563,13 +626,14 @@ Outputs:
 - `graph.json`
 - `communities.json`
 - `theme_snapshots.json`
+- `theme_lineage.json`
 - `theme_metrics.parquet`
 
 Hard rule:
 
 - Theme ids are produced by graph/community logic. LLM names are metadata only.
 
-## 9.6 Exposure Agent
+## 9.7 Exposure Agent
 
 Computes company-theme exposure.
 
@@ -585,7 +649,7 @@ Exposure inputs:
 - Recency.
 - Company node centrality.
 
-## 9.7 Validation Agent
+## 9.8 Validation Agent
 
 Measures future outcomes.
 
@@ -597,7 +661,7 @@ Hard rule:
 
 - Validation data cannot be read before discovery artifacts are frozen.
 
-## 9.8 Report Agent
+## 9.9 Report Agent
 
 Writes research notes from existing artifacts only.
 
@@ -1043,10 +1107,11 @@ Required agents:
 2. `data_architect_agent.md`
 3. `data_engineering_agent.md`
 4. `data_ingestion_agent.md`
-5. `extraction_agent.md`
-6. `graph_theme_agent.md`
-7. `validation_agent.md`
-8. `frontend_report_agent.md`
+5. `data_cleaning_agent.md`
+6. `extraction_agent.md`
+7. `graph_theme_agent.md`
+8. `validation_agent.md`
+9. `frontend_report_agent.md`
 
 Rule:
 
@@ -1064,15 +1129,16 @@ The skills under `skills/` define repeatable workflows.
 Required skills:
 
 1. `point_in_time_data.md`
-2. `entity_relation_extraction.md`
-3. `temporal_graph_discovery.md`
-4. `validation_backtest.md`
-5. `evidence_report_generation.md`
-6. `backend_api_implementation.md`
-7. `pipeline_artifact_implementation.md`
-8. `frontend_workflow_implementation.md`
-9. `test_quality_gate.md`
-10. `maintainable_code_implementation.md`
+2. `unstructured_data_cleaning.md`
+3. `entity_relation_extraction.md`
+4. `temporal_graph_discovery.md`
+5. `validation_backtest.md`
+6. `evidence_report_generation.md`
+7. `backend_api_implementation.md`
+8. `pipeline_artifact_implementation.md`
+9. `frontend_workflow_implementation.md`
+10. `test_quality_gate.md`
+11. `maintainable_code_implementation.md`
 
 Rule:
 
@@ -1085,13 +1151,13 @@ Rule:
 
 # 27. Implementation Milestones
 
-## Milestone 1: Workspace and MiroFish Shell
+## Milestone 1: Workspace and MiroFish-Inspired Workflow Shell
 
 Deliver:
 
 - Folder structure.
 - Config examples.
-- MiroFish route mapping.
+- MiroFish route mapping documented with this project's endpoint names.
 - Empty workflow pages.
 - Run creation.
 
@@ -1105,17 +1171,23 @@ Deliver:
 
 - PDF/MD/TXT import.
 - `available_at` validation.
+- `raw_documents.parquet`.
+- `/api/data/clean`.
 - `documents.parquet`.
+- `document_cleaning_log.parquet`.
+- `/api/data/chunk`.
 - `chunks.parquet`.
 
 Acceptance:
 
 - Documents after `as_of_date` are excluded from discovery.
+- Extraction reads cleaned chunks, not raw files.
 
 ## Milestone 3: Extraction and Evidence
 
 Deliver:
 
+- `/api/extraction/run`.
 - Entities.
 - Edges.
 - Edge explanations.
@@ -1132,25 +1204,42 @@ Deliver:
 - `graph.json`.
 - `communities.json`.
 - `theme_snapshots.json`.
+- `theme_lineage.json`.
 - Theme names and summaries.
 
 Acceptance:
 
 - Themes are produced by community detection, not manual labels.
 
-## Milestone 5: Exposure and Validation
+## Milestone 5: Exposure and Freeze
 
 Deliver:
 
+- `/api/exposure/compute`.
 - `company_theme_exposure.parquet`.
+- `/api/discovery/freeze`.
+- `run_manifest.json` with `discovery_frozen=true`.
+
+Acceptance:
+
+- Exposure is computed before validation reads future returns or fundamentals.
+
+## Milestone 6: Validation
+
+Deliver:
+
+- `market_prices.parquet`.
+- `fundamentals.parquet`.
+- `portfolio_baskets.parquet`.
 - `validation.csv`.
 - 1M/3M validation.
 
 Acceptance:
 
 - Validation runs only after discovery artifacts are frozen.
+- Validation can reproduce basket constituents, weights, data version, and benchmark.
 
-## Milestone 6: Report and Demo
+## Milestone 7: Report and Demo
 
 Deliver:
 

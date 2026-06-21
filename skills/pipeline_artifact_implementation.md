@@ -6,7 +6,7 @@ Implement reusable pipeline stages that transform inputs into versioned artifact
 
 Use when:
 
-- Building ingestion, chunking, extraction, graph, community, exposure, or validation code.
+- Building ingestion, document cleaning, chunking, extraction, graph, community, exposure, market/fundamental loading, or validation code.
 - Adding artifact schemas or run manifest handling.
 - Making pipeline stages reproducible.
 
@@ -49,3 +49,5 @@ Failure modes:
 - Artifacts without schema/version metadata.
 - Silent overwrite of prior run outputs.
 - Non-deterministic graph or validation output without a seed.
+- Computing exposure inside validation after future returns have been loaded.
+- Skipping `document_cleaning_log.parquet` for unstructured data.

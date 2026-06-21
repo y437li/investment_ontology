@@ -2,7 +2,7 @@
 
 Purpose:
 
-Implement backend endpoints that expose run creation, data import, graph build, theme discovery, validation, report generation, and artifact reads.
+Implement backend endpoints that expose run creation, raw data import, data cleaning, chunking, extraction, graph build, theme discovery, exposure, discovery freeze, validation, report generation, and artifact reads.
 
 Use when:
 
@@ -27,6 +27,7 @@ Steps:
 5. Return task status and artifact paths, not large raw payloads by default.
 6. Surface errors with actionable messages and stage names.
 7. Add or update smoke tests for each endpoint.
+8. If adapting MiroFish, keep the thin route and task-status patterns but rename routes and services to this project's stage names.
 
 Outputs:
 
@@ -50,3 +51,4 @@ Failure modes:
 - Returning unsupported report conclusions from the API.
 - Reading validation data before discovery artifacts are frozen.
 - Writing artifacts outside the run directory.
+- Copying MiroFish simulation route names into the core API.

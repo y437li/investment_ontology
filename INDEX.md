@@ -1,6 +1,6 @@
 # Project Index
 
-This is the maintained navigation index for the Theme Discovery Engine workspace.
+This is the maintained navigation index for the `investment_ontology` workspace.
 
 Rule:
 
@@ -38,9 +38,10 @@ Rule:
 | `docs/folder_structure.md` | Workspace folder layout and maintenance rules. | Reference |
 | `docs/formatting_standards.md` | Formatting rules for docs, configs, artifacts, agents, skills, reports, and future code. | Reference |
 | `docs/code_style_standards.md` | CS136-inspired code style rules for encapsulation, variables, comments, contracts, service boundaries, and tests. | Reference |
-| `docs/io_contracts.md` | Canonical input and output formats for artifacts, stages, APIs, agents, and skills. | Reference |
+| `docs/data_schema.md` | Layered data model from raw unstructured inputs to cleaned artifacts, structured discovery data, and validation data. | Reference |
+| `docs/io_contracts.md` | Canonical input and output formats for artifacts, stages, APIs, agents, skills, and validation data boundaries. | Reference |
 | `docs/team_roles.md` | Team role responsibilities, including Data Architect and Data Engineer ownership. | Reference |
-| `docs/mirofish_reference.md` | What to borrow from MiroFish and what to replace. | Reference |
+| `docs/mirofish_reference.md` | Source-of-truth boundary for borrowing MiroFish workflow patterns without copying its simulation logic. | Reference |
 | `docs/implementation_checklist.md` | MVP acceptance checklist and non-goals. | Checklist |
 
 ## Shared Agents
@@ -53,7 +54,8 @@ These specs are tool-agnostic and can be used by Codex or Claude.
 | `agents/orchestrator.md` | Coordinates scope, run plan, artifacts, and acceptance checks. | Active |
 | `agents/data_architect_agent.md` | Owns data model, schema contracts, lineage, point-in-time semantics, and storage architecture decisions. | Active |
 | `agents/data_engineering_agent.md` | Owns ingestion, source adapters, ETL, data quality, and artifact production pipelines. | Active |
-| `agents/data_ingestion_agent.md` | Owns point-in-time document ingestion and chunking. | Active |
+| `agents/data_ingestion_agent.md` | Owns point-in-time raw document ingestion and text extraction. | Active |
+| `agents/data_cleaning_agent.md` | Owns cleaned unstructured artifacts, document cleaning logs, chunking, and quarantine rules. | Active |
 | `agents/extraction_agent.md` | Owns entity, relationship, alias, and evidence extraction. | Active |
 | `agents/graph_theme_agent.md` | Owns Graph(t), community detection, theme snapshots, and metrics. | Active |
 | `agents/validation_agent.md` | Owns forward validation and benchmark comparison. | Active |
@@ -67,6 +69,7 @@ These workflow specs are tool-agnostic and can be used by Codex or Claude.
 |---|---|---|
 | `skills/README.md` | Skill usage instructions. | Reference |
 | `skills/point_in_time_data.md` | Workflow for historically correct document and chunk artifacts. | Active |
+| `skills/unstructured_data_cleaning.md` | Workflow for audited cleaning and chunking of unstructured source documents. | Active |
 | `skills/entity_relation_extraction.md` | Workflow for entities, relationships, aliases, and evidence. | Active |
 | `skills/temporal_graph_discovery.md` | Workflow for Graph(t), community discovery, and theme snapshots. | Active |
 | `skills/validation_backtest.md` | Workflow for validation after discovery artifacts are frozen. | Active |

@@ -15,6 +15,7 @@ All skills must preserve the input and output contracts in `docs/io_contracts.md
 Skills:
 
 - `point_in_time_data.md`
+- `unstructured_data_cleaning.md`
 - `entity_relation_extraction.md`
 - `temporal_graph_discovery.md`
 - `validation_backtest.md`

@@ -10,6 +10,7 @@ Responsibilities:
 - Choose the next agent or skill.
 - Ensure configs are present.
 - Ensure each stage writes expected artifacts.
+- Enforce the handoff order from raw documents to cleaned chunks before extraction.
 - Stop scope creep into full production platform work.
 
 Inputs:
@@ -27,6 +28,6 @@ Outputs:
 Hard rules:
 
 - Do not skip `available_at`.
+- Do not allow extraction to read raw uncleaned files.
 - Do not allow validation before discovery artifacts are frozen.
 - Do not let report text become unsupported prediction.
-

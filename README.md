@@ -1,6 +1,8 @@
-# Theme Discovery Engine
+# investment_ontology
 
-This workspace defines the MVP architecture for a time-aware economic narrative discovery engine.
+This workspace defines `investment_ontology`, the MVP architecture for a time-aware economic narrative discovery engine.
+
+MiroFish is only an implementation reference for workflow shell, file upload, background task status, and report/interaction UX. The source of truth is this project's specification and I/O contracts.
 
 Start with:
 
@@ -10,6 +12,7 @@ Start with:
 - `docs/folder_structure.md`: workspace layout.
 - `docs/formatting_standards.md`: formatting rules for docs, configs, artifacts, agents, skills, and future code.
 - `docs/code_style_standards.md`: CS136-inspired encapsulation, no-hardcoding, variables, comments, service boundaries, contracts, and test rules.
+- `docs/data_schema.md`: layered data schema from raw unstructured inputs to cleaned documents, structured discovery artifacts, and validation artifacts.
 - `docs/io_contracts.md`: canonical input and output formats for stages, artifacts, APIs, agents, and skills.
 - `docs/team_roles.md`: team responsibilities, including Data Architect and Data Engineer ownership.
 - `docs/mirofish_reference.md`: what to borrow from MiroFish and what to replace.
@@ -20,7 +23,7 @@ Start with:
 MVP goal:
 
 ```text
-Documents -> Entities -> Graph(t) -> Communities -> Theme Snapshots -> Validation -> Report
+Raw Unstructured Sources -> Cleaned Documents/Chunks -> Structured Entities/Edges -> Graph(t) -> Communities -> Theme Snapshots -> Exposure -> Freeze -> Validation -> Report
 ```
 
 The first demo should be local, reproducible, and evidence-backed.

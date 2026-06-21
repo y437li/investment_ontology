@@ -13,6 +13,9 @@ Inputs:
 
 Outputs:
 
+- `market_prices.parquet`
+- `fundamentals.parquet`
+- `portfolio_baskets.parquet`
 - `validation.csv`
 - validation notes
 
@@ -22,4 +25,4 @@ Acceptance checks:
 - Forward windows are explicit.
 - Benchmarks are explicit.
 - Results include sample size and caveats.
-
+- Basket constituents and weights are reproducible from `portfolio_baskets.parquet`.
