@@ -11,6 +11,7 @@ Start with:
 - `docs/formatting_standards.md`: formatting rules for docs, configs, artifacts, agents, skills, and future code.
 - `docs/code_style_standards.md`: CS136-inspired encapsulation, no-hardcoding, variables, comments, service boundaries, contracts, and test rules.
 - `docs/io_contracts.md`: canonical input and output formats for stages, artifacts, APIs, agents, and skills.
+- `docs/team_roles.md`: team responsibilities, including Data Architect and Data Engineer ownership.
 - `docs/mirofish_reference.md`: what to borrow from MiroFish and what to replace.
 - `configs/*.yml`: example runtime configuration.
 - `agents/*.md`: shared Codex/Claude role specs.

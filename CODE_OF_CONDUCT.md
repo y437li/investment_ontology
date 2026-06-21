@@ -43,6 +43,7 @@ This project is a research engineering workspace for a time-aware economic narra
 - Follow `docs/formatting_standards.md` for documents, configs, artifacts, agents, skills, reports, and code.
 - Follow `docs/code_style_standards.md` for CS136-inspired function contracts, encapsulation, variables, comments, service boundaries, and tests.
 - Follow `docs/io_contracts.md` for required input and output formats.
+- Follow `docs/team_roles.md` for Data Architect and Data Engineer ownership on data-impacting changes.
 - Update `INDEX.md` when adding, renaming, or materially changing source docs, configs, agents, skills, or guides.
 
 ### No False Certainty

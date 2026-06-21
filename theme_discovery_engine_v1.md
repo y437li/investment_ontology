@@ -228,11 +228,14 @@ Investment Ontology/
     formatting_standards.md
     code_style_standards.md
     io_contracts.md
+    team_roles.md
     mirofish_reference.md
     implementation_checklist.md
   agents/
     README.md
     orchestrator.md
+    data_architect_agent.md
+    data_engineering_agent.md
     data_ingestion_agent.md
     extraction_agent.md
     graph_theme_agent.md
@@ -1037,15 +1040,18 @@ The agents under `agents/` are shared role specs. They can be used by Codex suba
 Required agents:
 
 1. `orchestrator.md`
-2. `data_ingestion_agent.md`
-3. `extraction_agent.md`
-4. `graph_theme_agent.md`
-5. `validation_agent.md`
-6. `frontend_report_agent.md`
+2. `data_architect_agent.md`
+3. `data_engineering_agent.md`
+4. `data_ingestion_agent.md`
+5. `extraction_agent.md`
+6. `graph_theme_agent.md`
+7. `validation_agent.md`
+8. `frontend_report_agent.md`
 
 Rule:
 
 - Agents should read this document first.
+- Data-impacting work should involve `data_architect_agent.md` and `data_engineering_agent.md`.
 - Agents should write outputs to artifacts, not only chat summaries.
 - Agents should avoid changing scope without updating configs and run manifest.
 

@@ -39,6 +39,7 @@ Rule:
 | `docs/formatting_standards.md` | Formatting rules for docs, configs, artifacts, agents, skills, reports, and future code. | Reference |
 | `docs/code_style_standards.md` | CS136-inspired code style rules for encapsulation, variables, comments, contracts, service boundaries, and tests. | Reference |
 | `docs/io_contracts.md` | Canonical input and output formats for artifacts, stages, APIs, agents, and skills. | Reference |
+| `docs/team_roles.md` | Team role responsibilities, including Data Architect and Data Engineer ownership. | Reference |
 | `docs/mirofish_reference.md` | What to borrow from MiroFish and what to replace. | Reference |
 | `docs/implementation_checklist.md` | MVP acceptance checklist and non-goals. | Checklist |
 
@@ -50,6 +51,8 @@ These specs are tool-agnostic and can be used by Codex or Claude.
 |---|---|---|
 | `agents/README.md` | Agent usage instructions. | Reference |
 | `agents/orchestrator.md` | Coordinates scope, run plan, artifacts, and acceptance checks. | Active |
+| `agents/data_architect_agent.md` | Owns data model, schema contracts, lineage, point-in-time semantics, and storage architecture decisions. | Active |
+| `agents/data_engineering_agent.md` | Owns ingestion, source adapters, ETL, data quality, and artifact production pipelines. | Active |
 | `agents/data_ingestion_agent.md` | Owns point-in-time document ingestion and chunking. | Active |
 | `agents/extraction_agent.md` | Owns entity, relationship, alias, and evidence extraction. | Active |
 | `agents/graph_theme_agent.md` | Owns Graph(t), community detection, theme snapshots, and metrics. | Active |

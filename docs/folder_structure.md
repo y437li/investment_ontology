@@ -13,11 +13,17 @@ Investment Ontology/
     validation.example.yml
   docs/
     folder_structure.md
+    formatting_standards.md
+    code_style_standards.md
+    io_contracts.md
+    team_roles.md
     mirofish_reference.md
     implementation_checklist.md
   agents/
     README.md
     orchestrator.md
+    data_architect_agent.md
+    data_engineering_agent.md
     data_ingestion_agent.md
     extraction_agent.md
     graph_theme_agent.md
