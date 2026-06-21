@@ -478,6 +478,12 @@ Examples:
 - `hurts`
 - `located_in`
 
+Structural interpretation:
+
+- Structural edges for community discovery: `causes`, `benefits`, `hurts`, `exposed_to`, `sensitive_to`.
+- Evidence edges: `mentioned_in`.
+- Optional context edges: `co_occurs_with` and `located_in` are non-structural unless explicitly projected into node features.
+
 Minimum edge fields:
 
 ```text
@@ -486,12 +492,23 @@ source_entity_id
 target_entity_id
 edge_type
 confidence
+extraction_method
 evidence_chunk_ids
 first_seen_at
 last_seen_at
 as_of_date
-extraction_method
 ```
+
+Method constraints:
+
+- `extraction_method=document_stated`: explicit textual claim evidence required in `evidence_chunk_ids` (minimum one chunk).
+- `extraction_method=llm_inferred`: relationship inferred by model; must include evidence rationale and confidence.
+- `extraction_method=metadata_inferred`: deterministic metadata-based signal; must carry `source_record_id`.
+
+Default exposure policy:
+
+- Exposure and validation pipelines consume `document_stated` edges by default.
+- Weak signals (`llm_inferred`, `metadata_inferred`) are excluded unless explicitly enabled by config flag `include_weak_signals`.
 
 ---
 
@@ -531,6 +548,21 @@ report.md
 `theme_lineage.json` is required as a schema-valid artifact. A single-as-of demo may write an empty lineage list with `lineage_mode="single_snapshot"`.
 
 `fundamentals.parquet` is required for schema consistency but may be empty when fundamentals validation is disabled in config.
+
+Run vs sweep model:
+
+- `run_manifest.json` is one `(run_id, as_of_date)` snapshot.
+- Multi-period backtests are modeled as `sweep` execution that contains ordered child runs.
+- Sweep metadata is written as `sweep_manifest.json` with:
+  - `sweep_id`
+  - `run_ids`
+  - `as_of_dates`
+  - `window_start`
+  - `window_end`
+  - `status` (`running`, `frozen`, `blocked`, `failed`)
+- Child run manifests may include:
+  - `sweep_parent_id` (optional, nullable)
+  - `sweep_position` (optional integer)
 
 `run_manifest.json` must contain:
 
@@ -745,6 +777,13 @@ Discovery algorithms:
 - Louvain for simple MVP.
 - Leiden for better community quality.
 
+Structural projection rule:
+
+- Community discovery input graph MUST be entity-only.
+- Document nodes and `mentioned_in` edges are allowed in `graph.json` for evidence traceability, but they are excluded from Louvain/Leiden inputs.
+- Community discovery input edges must be filtered to structural edge types (`causes`, `benefits`, `hurts`, `exposed_to`, `sensitive_to`) and non-weak source (`document_stated` or explicit config-approved `metadata_inferred`).
+- `communities.json` must record `edge_projection_mode` so lineage and audit can reconstruct excluded nodes/edges.
+
 Output:
 
 ```text
@@ -895,6 +934,12 @@ Leakage test:
 
 - Build discovery artifacts with `as_of_date`.
 - Only after artifacts are frozen, run validation.
+- Freeze gate:
+  - `data/runs/<run_id>/discovery/` and `data/runs/<run_id>/validation/` must be physically separated.
+  - `validation_agent` must verify `run_manifest.json` artifact hashes before reading validation inputs.
+- pytest requirements for CI gates:
+  - Every evidence chunk entering `Graph(t)` has `available_at <= as_of_date`.
+  - Every validation row read (`market_prices`, `fundamentals`) has `as_of_date + holding_period <= row_date`.
 
 ---
 
@@ -1000,21 +1045,6 @@ Single-snapshot metrics (valid with one `as_of_date`):
 - Saturation: breadth of coverage (crowding proxies only if available).
 
 Temporal metrics (require >= 2 snapshots; skip in single-snapshot MVP):
-- Implementation note:
-  - `metrics.require_lineage=false` indicates all temporal metrics should be omitted.
-  - `theme_metrics.parquet` may include only single-snapshot fields plus `metric_mode` and `lineage_mode`.
-  - If a caller requests temporal metrics while `lineage_mode="single_snapshot"`, return a typed validation error and suggest walk-forward execution.
-
-Temporal metric provenance fields:
-- `as_of_date`
-- `lineage_window_start` (null in single-snapshot mode)
-- `lineage_mode` (`single_snapshot` | `temporal`)
-- `lineage_gap_count`
-
-- `theme_metrics.parquet` validation:
-  - `single_snapshot` mode: contains only single-snapshot fields (`strength`, `cohesion`, `coverage`) and `metric_mode`.
-  - `lineage` mode: may contain `momentum`, `birth_score`, `novelty`, `acceleration`.
-- `theme_lineage.json` is required for lineage runs and may be empty (`[]`) for single-snapshot runs.
 
 - Momentum: change in mentions or edge weight versus prior window.
 - Birth Score: new high-confidence entities and edges versus prior window.
@@ -1023,7 +1053,21 @@ Temporal metric provenance fields:
 
 Config gate:
 
-- A `metrics.require_lineage` flag controls temporal metrics. When lineage is absent (`lineage_mode="single_snapshot"`), temporal metrics are not written rather than emitted as degenerate values.
+- A `metrics.require_lineage` flag controls temporal metrics. When `metrics.require_lineage=false` (lineage absent, `lineage_mode="single_snapshot"`), temporal metrics are omitted rather than emitted as degenerate values.
+- If a caller requests temporal metrics while `lineage_mode="single_snapshot"`, return a typed validation error and suggest walk-forward execution.
+
+Temporal metric provenance fields:
+
+- `as_of_date`
+- `lineage_window_start` (null in single-snapshot mode)
+- `lineage_mode` (`single_snapshot` | `temporal`)
+- `lineage_gap_count`
+
+`theme_metrics.parquet` validation:
+
+- `single_snapshot` mode: contains only single-snapshot fields (`strength`, `cohesion`, `coverage`) plus `metric_mode` and `lineage_mode`.
+- `lineage` mode: may additionally contain `momentum`, `birth_score`, `novelty`, `acceleration`.
+- `theme_lineage.json` is required for lineage runs and may be empty (`[]`) for single-snapshot runs.
 
 Later metrics:
 

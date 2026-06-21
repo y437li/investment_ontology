@@ -2,7 +2,7 @@
 
 Tracked design gaps in `theme_discovery_engine_v1.md` that need an implementation or design decision before or during the relevant milestone. Each item is written as a dispatchable task: any executor (Claude Code or Codex CLI) should be able to pick it up from the **Owner**, **Files**, and **Acceptance** fields without further scoping.
 
-Status legend: `open` | `in-progress` | `resolved`
+Status legend: `open` | `assigned` | `in-progress` | `completed`
 
 Tasks are dispatched as GitHub issues; keep the OI id in the issue title so the two stay linked.
 
@@ -15,17 +15,20 @@ Current source of truth: `theme_discovery_engine_v1.md` + `docs/open_issues.md`
 
 This board assigns work by agent role (not GitHub user) for immediate parallel execution.
 
+Dispatch mode: repo-internal role assignment (no external teammate assignment available on this repository currently).
+
 | Agent role | OI id | Task | Primary artifact | Current state |
 |---|---|---|---|---|
-| `agent-doc-logic` | OI-1 / OI-7 | Finalize single-snapshot vs walk-forward metric logic, forward-coverage precondition wording, and keep claims honest | `theme_discovery_engine_v1.md` §§20/21/22 | in-progress |
-| `agent-doc-validation` | OI-1 / OI-7 / OI-6 | Align validation scope language and rejection conditions for missing forward data windows | `theme_discovery_engine_v1.md`, `configs/validation.example.yml` | in-progress |
-| `agent-doc-issues` | OI-8 / OI-4 / OI-5 | Convert critical design questions into implementable issue tasks; keep wording dispatchable with Owner / Files / Acceptance | `docs/open_issues.md` | in-progress |
-| `agent-doc-graph` | OI-2 / OI-5 | Clarify discovery/exposure edge discipline and explicit entity-only graph projection for community detection | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | in-progress |
-| `agent-doc-architecture` | OI-3 / OI-6 | Define manifest + leakage gate semantics and walk-forward sweep/run model | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | in-progress |
-| `agent-doc-index` | all | Keep `INDEX.md` synchronized with every added/renamed artifact and status updates | `INDEX.md` | in-progress |
+| `agent-doc-logic` | OI-1 / OI-7 | Finalize single-snapshot vs walk-forward metric logic, forward-coverage precondition wording, and keep claims honest | `theme_discovery_engine_v1.md` §§20/21/22 | assigned |
+| `agent-doc-validation` | OI-1 / OI-7 / OI-6 | Align validation scope language and rejection conditions for missing forward data windows | `theme_discovery_engine_v1.md`, `configs/validation.example.yml` | assigned |
+| `agent-doc-issues` | OI-8 / OI-4 / OI-5 | Convert critical design questions into implementable issue tasks; keep wording dispatchable with Owner / Files / Acceptance | `docs/open_issues.md` | assigned |
+| `agent-doc-graph` | OI-2 / OI-5 | Clarify discovery/exposure edge discipline and explicit entity-only graph projection for community detection | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | resolved |
+| `agent-doc-architecture` | OI-3 / OI-6 | Define manifest + leakage gate semantics and walk-forward sweep/run model | `theme_discovery_engine_v1.md`, `docs/io_contracts.md` | completed |
+| `agent-doc-index` | all | Keep `INDEX.md` synchronized with every added/renamed artifact and status updates | `INDEX.md` | assigned |
 
-Execution note:
-- OI-1..OI-8 are now dispatched as GitHub issues #2..#9 (assigned to y437li, labeled, attached to milestones M2-M6). This in-repo board mirrors them by agent role; the GitHub issues are the canonical task list.
+Dispatch note:
+- OI-1..OI-8 are dispatched as GitHub issues #2..#9 and also mirrored by this in-repo role board.
+- No external teammates are currently requested on PR #1; assignment is role-internal by design.
 
 ## OI-1 Minimal walk-forward for a real research claim
 
