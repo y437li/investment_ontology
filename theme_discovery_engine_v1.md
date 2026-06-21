@@ -83,6 +83,15 @@ The v1 MVP must be a small but extensible vertical slice. It should be able to r
 - Social-media agent simulation as investment evidence.
 - Claims such as "predict anything".
 
+## MVP Caveats / Known Limitations
+
+These limits are intentional. They keep the MVP self-consistent and honest. Implementers must not silently exceed them.
+
+- Single-snapshot metric gap: a single `as_of_date` demo has no prior window, so `Momentum`, `Birth Score`, `Novelty`, and `Acceleration` are undefined and must not be produced. Only single-snapshot metrics (`Strength`, `Cohesion`, `Saturation` as coverage) are valid. See section 20.
+- Winning Zone is not computable in a single-snapshot MVP because it depends on Birth Score, Momentum, and Novelty. See section 21.
+- Validation is illustrative only in the single-snapshot MVP. One `as_of_date` over 20-60 companies yields a single cross-sectional draw, which cannot support any statistical claim that themes are associated with future outcomes. MVP validation demonstrates pipeline connectivity, basket reproducibility, and return traceability, not statistical significance. Statistical association requires the multi-period walk-forward in section 22.
+- A meaningful research claim requires at least a minimal walk-forward (3+ time points). Until then, no excess-return claim may be stated as a finding.
+
 ---
 
 # 3. MiroFish Reference Boundary
@@ -149,6 +158,7 @@ POST /api/data/clean
 POST /api/data/chunk
 GET  /api/runs/:run_id/status
 POST /api/extraction/run
+POST /api/extraction/resolve
 POST /api/graph/build
 POST /api/themes/discover
 GET  /api/themes/:run_id
@@ -301,6 +311,8 @@ investment_ontology/
 `docs/io_contracts.md` defines the canonical input and output formats for stages, artifacts, APIs, agents, and skills. Implementation work must preserve those contracts unless this source-of-truth document is updated first.
 
 `docs/data_schema.md` defines the required data order: raw unstructured inputs, cleaned unstructured artifacts, structured discovery artifacts, and structured validation artifacts.
+
+All tests live in one place: the top-level `tests/` directory. Test files must not be scattered next to implementation code under `app/backend/` or `app/frontend/`. Mirror the source layout inside `tests/` (for example `tests/backend/`, `tests/frontend/`, `tests/pipeline/`) so a single command can discover and run the full suite. This keeps the test surface and the leakage/quality gates reviewable in one location.
 
 ---
 
@@ -536,6 +548,13 @@ report.md
 # 9. Agent Framework
 
 Agents are work roles, not autonomous black boxes. Their outputs must be artifact-backed.
+
+This section describes logical roles. Some roles share one agent file (see section 25 for the canonical file list):
+
+- Entity Resolution (9.5) is a sub-stage of `extraction_agent.md`; it has no separate file.
+- Exposure (9.7) is owned by `graph_theme_agent.md` for computation and handed to `validation_agent.md`; it has no separate file.
+- `data_architect_agent.md` and `data_engineering_agent.md` are cross-cutting roles (schema and pipeline plumbing) that support all data-impacting stages and are not tied to one numbered stage below.
+- `frontend_report_agent.md` covers the Report role (9.9) plus the dashboard pages in section 24.
 
 ## 9.1 Orchestrator
 
@@ -968,18 +987,27 @@ MVP validation:
 
 # 20. Theme Metrics
 
-MVP metrics:
+Metrics are classified by how many snapshots they require. A single `as_of_date` run must only compute single-snapshot metrics. Temporal metrics require lineage across at least two adjacent snapshots and must be skipped otherwise.
+
+Single-snapshot metrics (valid with one `as_of_date`):
 
 - Strength: weighted evidence and edge count.
-- Momentum: change in mentions or edge weight versus prior window.
-- Birth Score: new high-confidence entities and edges.
 - Cohesion: graph density or modularity-related score.
-- Novelty: share of new entities/edges.
-- Saturation: breadth of coverage and crowding proxies if available.
+- Saturation: breadth of coverage (crowding proxies only if available).
+
+Temporal metrics (require >= 2 snapshots; skip in single-snapshot MVP):
+
+- Momentum: change in mentions or edge weight versus prior window.
+- Birth Score: new high-confidence entities and edges versus prior window.
+- Novelty: share of new entities/edges versus prior window.
+- Acceleration: change in momentum across windows.
+
+Config gate:
+
+- A `metrics.require_lineage` flag controls temporal metrics. When lineage is absent (`lineage_mode="single_snapshot"`), temporal metrics are not written rather than emitted as degenerate values.
 
 Later metrics:
 
-- Acceleration.
 - Macro linkage.
 - Commodity linkage.
 - Fundamental confirmation.
@@ -1005,6 +1033,7 @@ High Birth Score
 MVP note:
 
 - This is a research hypothesis, not an investment claim until validated.
+- Winning Zone depends on Birth Score, Momentum, and Novelty, which are temporal metrics. It is therefore not computable in a single-snapshot MVP and is only produced once lineage exists across >= 2 snapshots. See section 20.
 
 ---
 
