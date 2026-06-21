@@ -235,9 +235,9 @@ def get_status(run_id: str) -> RunStatus | None:
         return None
     run_dir = settings.run_output_dir / run_id
     artifacts = sorted(
-        p.name
-        for p in run_dir.iterdir()
-        if p.is_file() and p.name != MANIFEST_NAME
+        p.relative_to(run_dir).as_posix()
+        for p in run_dir.rglob("*")
+        if p.is_file() and p.relative_to(run_dir).as_posix() != MANIFEST_NAME
     )
     return RunStatus(
         run_id=manifest.run_id,
