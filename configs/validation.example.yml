@@ -10,7 +10,8 @@ forward_coverage_months:
 
 # Sweep/backtesting gating.
 walk_forward:
-  # Explicit walk-forward schedule for a single sweep (single-snapshot mode may leave empty).
+  # Explicit walk-forward schedule for a single sweep.
+  # OI-1 requires 3+ snapshots before any inferential claim is treated as meaningful.
   as_of_dates:
     - "2024-03-31"
     - "2024-06-30"

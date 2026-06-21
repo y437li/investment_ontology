@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pyarrow as pa
@@ -40,10 +40,9 @@ REQUIRED_RAW_COLUMNS = REQUIRED_MANIFEST_COLUMNS + [
     "document_id",
     "content_hash",
     "ingested_at",
+    "included_in_discovery",
+    "exclusion_reason",
 ]
-
-TIME_COLUMNS: tuple[str, str] = ("published_at", "available_at")
-
 
 def _resolve_input_path(documents_dir: str) -> Path:
     p = Path(documents_dir)
@@ -88,35 +87,57 @@ def _read_rows(manifest_path: Path) -> list[dict[str, str]]:
         return rows
 
 
-def _is_valid_date(v: str) -> bool:
+def _parse_timestamp(value: str) -> datetime | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    if len(text) >= 10 and text[:10][0].isdigit():
+        try:
+            return datetime.strptime(text[:10], "%Y-%m-%d")
+        except Exception:
+            pass
     try:
-        datetime.strptime(v, "%Y-%m-%d")
-        return True
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
     except Exception:
-        return False
+        return None
 
 
 def _validate_row(
     row: dict[str, str],
     documents_root: Path,
     as_of_date: str,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, bool]:
     for col in REQUIRED_MANIFEST_COLUMNS:
         if not row.get(col):
-            return False, f"missing required field: {col}"
+            return False, f"missing required field: {col}", False
 
-    raw_path = documents_root / row["raw_path"]
-    if not raw_path.exists():
-        return False, "raw_path missing"
+    raw_path = Path(row["raw_path"])
+    if raw_path.is_absolute():
+        return False, "raw_path must be relative to documents_dir", False
 
-    for col in TIME_COLUMNS:
-        if not _is_valid_date(row[col]):
-            return False, f"invalid date format in {col}"
+    abs_raw_path = documents_root / raw_path
+    if not abs_raw_path.exists():
+        return False, "raw_path missing", False
 
-    if row["available_at"] > as_of_date:
-        return False, "available_at is after run as_of_date"
+    published_at = _parse_timestamp(row["published_at"])
+    available_at = _parse_timestamp(row["available_at"])
+    if published_at is None:
+        return False, "invalid date format in published_at", False
+    if available_at is None:
+        return False, "invalid date format in available_at", False
 
-    return True, ""
+    if published_at > available_at:
+        return False, "published_at must be <= available_at", False
+
+    try:
+        as_of = datetime.strptime(as_of_date, "%Y-%m-%d")
+    except Exception:
+        as_of = available_at
+    included_in_discovery = available_at.date() <= as_of.date()
+    return True, "", included_in_discovery
 
 
 def _content_sha256(file_path: Path) -> str:
@@ -127,13 +148,17 @@ def _content_sha256(file_path: Path) -> str:
 
 def _row_to_parquet_row(row: dict[str, str], idx: int, documents_root: Path) -> dict[str, str]:
     raw_path = Path(row["raw_path"])
-    abs_raw_path = raw_path if raw_path.is_absolute() else documents_root / raw_path
+    abs_raw_path = documents_root / raw_path
     document_id = f"{row['source_id']}::{row['company_id']}::{idx}"
+    included_in_discovery = row.get("included_in_discovery") == "1"
+    exclusion_reason = row.get("exclusion_reason", "")
     return {
         **{k: row.get(k, "") for k in REQUIRED_MANIFEST_COLUMNS},
         "document_id": document_id,
         "content_hash": _content_sha256(abs_raw_path),
         "ingested_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "included_in_discovery": included_in_discovery,
+        "exclusion_reason": exclusion_reason,
     }
 
 
@@ -153,7 +178,7 @@ def import_manifest(
     run_id: str,
     documents_dir: str,
     source_manifest_path: str,
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, int, int, int, list[str]]:
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
@@ -168,18 +193,28 @@ def import_manifest(
     manifest_rows = _read_rows(_resolve_manifest_path(source_manifest_path))
     accepted_rows: list[dict[str, str]] = []
     quarantine_reasons: list[str] = []
+    future_excluded = 0
+    included_in_discovery_count = 0
 
     for row_num, row in enumerate(manifest_rows, start=1):
-        ok, reason = _validate_row(row, documents_root, manifest.as_of_date)
+        ok, reason, included_in_discovery = _validate_row(
+            row, documents_root, manifest.as_of_date
+        )
         if not ok:
             quarantine_reasons.append(f"row {row_num}: {reason}")
             continue
+        row = dict(row)
+        row["included_in_discovery"] = "1" if included_in_discovery else "0"
+        row["exclusion_reason"] = "" if included_in_discovery else "future_available_at_excludes_discovery"
+        if included_in_discovery:
+            included_in_discovery_count += 1
+        else:
+            future_excluded += 1
         accepted_rows.append(row)
 
     included = len(accepted_rows)
-    rejected = len(quarantine_reasons)
-    quarantined = rejected
+    seen = len(manifest_rows)
 
     run_dir = runs.get_run_dir(run_id)
     _write_raw_documents(run_dir, accepted_rows, documents_root)
-    return included, quarantined, quarantine_reasons
+    return seen, included, included_in_discovery_count, future_excluded, quarantine_reasons

@@ -17,7 +17,7 @@ MiroFish can inform the upload and task-status workflow, but it does not define 
 |---|---|---|---|---|
 | L0 | Raw unstructured inputs | Data Ingestion Agent | PDF, MD, TXT, HTML exports, transcript files | `raw_documents.parquet` |
 | L1 | Cleaned unstructured artifacts | Data Cleaning Agent | normalized text, document metadata, chunks, cleaning log | `documents.parquet`, `document_cleaning_log.parquet`, `chunks.parquet` |
-| L2 | Structured discovery artifacts | Extraction Agent, Graph Theme Agent | entities, aliases, edges, graph, communities, theme snapshots | `entities.parquet`, `edges.parquet`, `graph.json`, `theme_snapshots.json` |
+| L2 | Structured discovery artifacts | Extraction Agent, Graph Theme Agent | entities, aliases, edges, graph, communities, theme snapshots, document-theme affinity | `entities.parquet`, `edges.parquet`, `graph.json`, `theme_snapshots.json`, `document_theme_affinity.parquet` |
 | L3 | Structured validation artifacts | Data Engineering Agent, Validation Agent | prices, fundamentals, baskets, validation metrics | `market_prices.parquet`, `fundamentals.parquet`, `portfolio_baskets.parquet`, `validation.csv` |
 
 Rule:
@@ -25,13 +25,47 @@ Rule:
 - No stage may skip from L0 raw files directly to L2 extraction.
 - L2 discovery artifacts must be frozen before L3 validation reads future outcomes.
 
-## 2. L0 Raw Unstructured Input Standard
+## 2. Physical Storage Layout (structured vs. non-structured)
+
+- Non-structured raw corpus (`L0` inputs): `data/inputs/documents/` and `data/inputs/documents/source_manifest.csv` only.
+- Structured discovery outputs (`L1`-`L2`): `data/runs/<run_id>/discovery/`.
+- Structured validation outputs (`L3`): `data/runs/<run_id>/validation/`.
+- Run control file: `data/runs/<run_id>/run_manifest.json`.
+- Sweep control file: `data/runs/<sweep_id>/sweep_manifest.json`.
+
+Do not place structured artifacts under `data/inputs/`.  
+Do not place non-structured raw document files under `data/runs/` (pointers only in parquet).
+
+Collection stage input convention:
+
+- Source collection spec CSV rows include metadata for each incoming source and one of:
+  - `source_file` (local file path, resolved relative to the spec location), or
+  - `source_url` (HTTP/HTTPS fetch source).
+- Collect writes immutable source files into `data/inputs/documents/...` and writes
+  `source_manifest.csv` as the handoff to `/api/data/import`.
+
+## 3. L0 Raw Unstructured Input Standard
 
 Raw documents live under:
 
 ```text
 data/inputs/documents/
 ```
+
+Recommended physical layout:
+
+```text
+data/inputs/documents/
+  <provider>/
+    <source_id>/
+      <source_vintage>/
+        <YYYY>/<MM>/<DD>/...raw_files...
+```
+
+Examples:
+
+- `data/inputs/documents/sec/0000320193/2024-06/v1/10-k-2024q2.pdf`
+- `data/inputs/documents/rss/tsla-earnings/2025-01-15/tsla_earnings.md`
 
 Source-time metadata is required for every ingest row in L0/L1/L3 adapters:
 
@@ -74,6 +108,13 @@ Rules:
 - `vintage` records the as-of moment of the retrieved version of the source (ingestion timestamp and/or source release batch version), so later restatements are stored as new vintages rather than overwrites, enabling reproducible replay.
 - `source_id` and `raw_path` must be stable enough for deduplication.
 - Raw files are local inputs and must not be committed to Git.
+- Raw files are immutable by policy: new restatements must be stored as new `source_vintage` paths, never by overwriting.
+
+Storage split convention for non-structured data:
+
+- Source documents: `data/inputs/documents/` (or mounted object-store mirror in production).
+- Source manifest: `data/inputs/documents/source_manifest.csv`.
+- Run-level references: keep only metadata/pointers in `discovery/raw_documents.parquet` (`raw_path`, `source_vintage`, `raw_content_hash`), not duplicated binary payloads under `data/runs`.
 
 Acquisition standard (the fetch step that produces L0, owned by the Data Engineer; see spec section 6):
 
@@ -82,7 +123,7 @@ Acquisition standard (the fetch step that produces L0, owned by the Data Enginee
 - Universe membership is recorded per `as_of_date` to avoid survivorship bias.
 - Acquisition is deterministic: the same source and window reproduce the same records and `content_hash`.
 
-## 3. L1 Cleaning Standard
+## 4. L1 Cleaning Standard
 
 The Data Cleaning Agent turns L0 records into cleaned unstructured artifacts. It may normalize formatting, but it must not rewrite meaning.
 
@@ -118,7 +159,7 @@ Cleaning log requirements:
 - Each cleaned document must link back to `raw_document_id`.
 - Each chunk must link back to `document_id` and inherit `available_at`.
 
-## 4. L2 Structured Discovery Standard
+## 5. L2 Structured Discovery Standard
 
 Extraction converts cleaned chunks into structured discovery data:
 
@@ -128,6 +169,7 @@ chunks.parquet
 -> entity_aliases.parquet
 -> edges.parquet
 -> edge_explanations.parquet
+-> document_theme_affinity.parquet
 ```
 
 Rules:
@@ -137,7 +179,7 @@ Rules:
 - `theme_name` is interpretation metadata, not a discovery input.
 - Low-confidence records should be included with confidence fields or routed to review, not silently dropped.
 
-## 5. L3 Structured Validation Standard
+## 6. L3 Structured Validation Standard
 
 Validation data is structured and intentionally separated from discovery data:
 
@@ -154,7 +196,7 @@ Rules:
 - Exposure must be computed before validation loads future market or fundamental outcomes.
 - `portfolio_baskets.parquet` must preserve constituents, weights, and selection rules so validation can be reproduced.
 
-## 6. Agent Handoff Order
+## 7. Agent Handoff Order
 
 ```text
 Data Ingestion Agent
@@ -179,7 +221,7 @@ Known caveats:
 Next agent:
 ```
 
-## 7. Quality Gates
+## 8. Quality Gates
 
 Before extraction starts:
 
@@ -193,6 +235,7 @@ Before extraction starts:
 Before validation starts:
 
 - Discovery artifacts are frozen.
+- Document-theme affinity can be optional in early runs; if produced, include `document_theme_affinity.parquet`.
 - `company_theme_exposure.parquet` exists.
 - Validation data is loaded only after freeze.
 - Basket construction is documented in `portfolio_baskets.parquet`.

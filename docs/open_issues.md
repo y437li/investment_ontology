@@ -49,14 +49,15 @@ Dispatch note:
 
 ## OI-1 Minimal walk-forward for a real research claim
 
-- Status: in_progress
+- Status: completed
 - Affects: sections 1, 22, 28; Milestone 6
 - Owner: Research / Quant Engineer (`agents/validation_agent.md`)
-- Conflict: The product goal (section 1) is to validate whether discovered communities relate to future outcomes, but the MVP uses a single `as_of_date`, which is a single cross-sectional draw and cannot support statistical association. Walk-forward (section 22) is currently "Later".
+- Conflict: The product goal (section 1) is to validate whether discovered communities relate to future outcomes, but the MVP uses a single `as_of_date`, which is a single cross-sectional draw and cannot support statistical association. Walk-forward (section 22) is now explicitly blocked from inferential reads in single-snapshot status output.
 - Proposed resolution: Pull a minimal walk-forward (3-4 monthly time points) into MVP scope so the core hypothesis is testable. Until then, validation output stays labeled illustrative (section 2 MVP Caveats).
 - Files: `theme_discovery_engine_v1.md` (sections 22, 27 Milestone 6), `configs/validation.example.yml`, `agents/validation_agent.md`.
 - Acceptance: spec defines a minimal walk-forward (>= 3 time points) with explicit sweep semantics; validation config carries the time-point list; no excess-return claim is presented from a single snapshot.
 - Decision needed by: Milestone 6 planning.
+- Implemented: backend validation now returns `validation_status=disabled_not_enough_snapshots` for single-snapshot runs, and writes explicit caveat to `validation.csv` when backtesting is not inferentially meaningful.
 
 ## OI-2 Discipline for interpretive edges (`benefits` / `hurts` / `exposed_to` / `causes`)
 

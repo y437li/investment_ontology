@@ -85,6 +85,9 @@ def test_data_import_honors_point_in_time_manifest_rules():
         assert resp.status_code == 200
         assert resp.json()["success"] is True
         assert resp.json()["raw_documents"] == 1
+        assert resp.json()["raw_documents_seen"] == 1
+        assert resp.json()["raw_documents_in_discovery"] == 1
+        assert resp.json()["future_excluded"] == 0
         assert resp.json()["quarantined"] == 0
         assert resp.json()["quarantine_reasons"] == []
 
@@ -140,3 +143,59 @@ def test_data_import_rejects_invalid_manifest_rows():
         assert resp.json()["raw_documents"] == 0
         assert resp.json()["quarantined"] == 1
         assert len(resp.json()["quarantine_reasons"]) == 1
+
+
+def test_data_import_keeps_future_rows_but_excludes_from_discovery():
+    run = client.post("/api/runs/create", json={"as_of_date": "2024-06-30"}).json()
+    run_id = run["run_id"]
+
+    with tempfile.TemporaryDirectory(prefix="theme_inputs_") as docs_root:
+        docs_dir = Path(docs_root)
+        raw_file = docs_dir / "filing.txt"
+        raw_file.write_text("future filing", encoding="utf-8")
+
+        manifest_path = docs_dir / "source_manifest.csv"
+        _write_manifest(
+            manifest_path,
+            [
+                {
+                    "source": "sec",
+                    "source_id": "f-2",
+                    "title": "future filing",
+                    "document_type": "8-k",
+                    "company_id": "ABC",
+                    "raw_path": "filing.txt",
+                    "published_at": "2024-07-01",
+                    "available_at": "2024-07-01",
+                    "source_vintage": "2024-07-01T00:00:00Z",
+                    "language": "en",
+                    "source_url": "https://example.com/f-2",
+                    "license": "public",
+                    "confidentiality": "public",
+                    "notes": "seed",
+                },
+            ],
+        )
+
+        resp = client.post(
+            "/api/data/import",
+            json={
+                "run_id": run_id,
+                "documents_dir": str(docs_dir),
+                "source_manifest_path": str(manifest_path),
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["raw_documents"] == 1
+        assert body["raw_documents_seen"] == 1
+        assert body["raw_documents_in_discovery"] == 0
+        assert body["future_excluded"] == 1
+        assert body["quarantined"] == 0
+
+        artifact = Path(settings.run_output_dir) / run_id / "discovery" / "raw_documents.parquet"
+        table = pq.read_table(artifact)
+        assert table.column("included_in_discovery").to_pylist() == [False]
+        assert table.column("exclusion_reason").to_pylist() == [
+            "future_available_at_excludes_discovery",
+        ]
