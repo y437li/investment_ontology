@@ -9,3 +9,8 @@ export function createRun(asOfDate) {
 export function getRunStatus(runId) {
   return service.get(`/api/runs/${runId}/status`)
 }
+
+/** List all runs on the backend (newest first). */
+export function listRuns() {
+  return service.get('/api/runs')
+}

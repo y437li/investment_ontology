@@ -143,7 +143,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { createRun, getRunStatus } from '../api/runs.js'
+import { createRun, getRunStatus, listRuns } from '../api/runs.js'
 
 const router = useRouter()
 
@@ -219,8 +219,20 @@ const loadHistory = () => {
   }
 }
 
-onMounted(() => {
-  recentRuns.value = loadHistory()
+onMounted(async () => {
+  const local = loadHistory()
+  recentRuns.value = local
+  try {
+    const backend = await listRuns()
+    const byId = new Map()
+    for (const r of [...local, ...(backend || [])]) {
+      byId.set(r.run_id, { ...byId.get(r.run_id), ...r })
+    }
+    recentRuns.value = Array.from(byId.values())
+      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+  } catch {
+    recentRuns.value = local
+  }
 })
 </script>
 

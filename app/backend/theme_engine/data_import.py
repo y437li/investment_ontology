@@ -61,6 +61,11 @@ def _read_rows(manifest_path: Path) -> list[dict[str, str]]:
             status_code=404,
             detail=f"source manifest not found: {manifest_path}",
         )
+    if not manifest_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail=f"source manifest path is not a file: {manifest_path}",
+        )
 
     with manifest_path.open("r", encoding="utf-8", newline="") as fp:
         reader = csv.DictReader(fp)
