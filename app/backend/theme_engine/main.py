@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, report as report_mod, runs, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -183,6 +183,35 @@ def themes_discover_endpoint(req: ThemeDiscoverRequest) -> ThemeDiscoverResponse
         ],
         community_count=community_count,
     )
+
+
+@app.get("/api/themes/{run_id}/hierarchy")
+def get_theme_hierarchy(run_id: str):
+    """Main-theme hierarchy (macro->industry->company->idiosyncratic grouping)."""
+    h = theme_hierarchy_mod.load_hierarchy(run_id)
+    if h is None:
+        raise HTTPException(status_code=404, detail="theme hierarchy not built; POST .../hierarchy/build")
+    return h
+
+
+@app.post("/api/themes/{run_id}/hierarchy/build")
+def build_theme_hierarchy(run_id: str):
+    """Group sub-themes into main themes (LLM). Requires LLM config."""
+    try:
+        return theme_hierarchy_mod.build_hierarchy(run_id)
+    except KeyError:
+        raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
+
+
+@app.get("/api/themes/{run_id}/communities/{community_id}/narrative")
+def get_theme_narrative(run_id: str, community_id: str, refresh: bool = False):
+    """Connect-the-dots narrative + captured reasoning chain for a community (cached)."""
+    try:
+        return reasoning_mod.get_or_synthesize(run_id, community_id, refresh=refresh)
+    except KeyError:
+        raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.post("/api/exposure/compute", response_model=ExposureComputeResponse)
