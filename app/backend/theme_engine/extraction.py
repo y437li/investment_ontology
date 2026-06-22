@@ -425,54 +425,111 @@ class OpenAIExtractor(Extractor):
             self._client = OpenAI(api_key=self._api_key, base_url=self._base_url)
         return self._client
 
+    @property
+    def _tool(self) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": "emit_extraction",
+                "description": "Emit entities and relationships found ONLY in the provided text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entities": {"type": "array", "items": {"type": "object", "properties": {
+                            "name": {"type": "string"},
+                            "entity_type": {"type": "string", "enum": sorted(VALID_ENTITY_TYPES)},
+                            "confidence": {"type": "number"},
+                        }, "required": ["name", "entity_type"]}},
+                        "edges": {"type": "array", "items": {"type": "object", "properties": {
+                            "source_name": {"type": "string"},
+                            "target_name": {"type": "string"},
+                            "edge_type": {"type": "string", "enum": sorted(VALID_EDGE_TYPES)},
+                            "confidence": {"type": "number"},
+                            "explanation": {"type": "string"},
+                            "stated_in_text": {"type": "boolean", "description": "true ONLY if the relationship is explicitly stated in the text; false if inferred"},
+                        }, "required": ["source_name", "target_name", "edge_type", "stated_in_text"]}},
+                    },
+                    "required": ["entities", "edges"],
+                },
+            },
+        }
+
     def extract(self, chunk_id: str, chunk_text: str) -> ExtractionResult:
-        """Extract entities and edges via LLM structured output."""
+        """Extract entities + relationships via LLM tool calling.
+
+        Uses function calling for guaranteed structured output (MiniMax does not
+        support response_format). Edges are tagged document_stated when explicitly
+        stated in the text (these drive community/exposure) else llm_inferred. To
+        limit pretraining leakage, the prompt forbids using outside knowledge.
+        """
         import json as _json  # noqa: PLC0415
 
         client = self._get_client()
-        prompt = (
-            "You are an expert financial analyst. Extract named entities and relationships "
-            "from the following text. Return a JSON object with keys 'entities' (list of "
-            "{name, entity_type, confidence}) and 'edges' (list of "
-            "{source_name, target_name, edge_type, confidence, explanation}).\n\n"
-            f"Entity types: {sorted(VALID_ENTITY_TYPES)}\n"
-            f"Edge types: {sorted(VALID_EDGE_TYPES)}\n\n"
-            f"Text:\n{chunk_text}"
+        system = (
+            "You are a financial NLP extractor. Extract ONLY economically meaningful "
+            "entities and relationships explicitly present in the given text. Do NOT use "
+            "outside or world knowledge and do NOT infer beyond what the text states.\n"
+            "Extract: companies, economic concepts/themes (e.g. electricity demand, "
+            "datacenter buildout), commodities, macro indicators, geographies, material events.\n"
+            "Do NOT extract: dates, person names, document/form metadata, ticker symbols as "
+            "separate entities, or boilerplate/legal/procedural terms (e.g. 'Foreign Private "
+            "Issuer', 'Annual Meeting', 'home country', 'Securities Exchange Act', 'registrant', "
+            "'Form 6-K'). Concepts must be substantive narratives, not administrative terms.\n"
+            "Use each company's full canonical name (e.g. 'Suncor Energy', not 'Suncor' or 'SU').\n"
+            "Always respond by calling the emit_extraction function."
         )
-        response = client.chat.completions.create(
-            model=self._llm_model_name,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-        )
-        raw = _json.loads(response.choices[0].message.content or "{}")
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": chunk_text},
+        ]
+        args: dict = {}
+        for _attempt in range(3):
+            response = client.chat.completions.create(
+                model=self._llm_model_name,
+                messages=messages,
+                tools=[self._tool],
+                temperature=0,
+            )
+            tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
+            if tool_calls:
+                try:
+                    args = _json.loads(tool_calls[0].function.arguments)
+                    break
+                except Exception:
+                    args = {}
+            messages.append({
+                "role": "user",
+                "content": "Call emit_extraction with valid JSON arguments only.",
+            })
+        return self._to_result(args)
+
+    @staticmethod
+    def _to_result(args: dict) -> ExtractionResult:
         entities: list[EntityCandidate] = []
-        for e in raw.get("entities", []):
+        for e in (args.get("entities") or []):
             etype = e.get("entity_type", "")
-            if etype not in VALID_ENTITY_TYPES:
+            name = (e.get("name") or "").strip()
+            if not name or etype not in VALID_ENTITY_TYPES:
                 continue
-            entities.append(
-                EntityCandidate(
-                    name=e.get("name", ""),
-                    entity_type=etype,
-                    confidence=float(e.get("confidence", 0.7)),
-                    extraction_method="llm_inferred",
-                )
-            )
+            entities.append(EntityCandidate(
+                name=name, entity_type=etype,
+                confidence=float(e.get("confidence", 0.7) or 0.7),
+                extraction_method="document_stated",
+            ))
         edges: list[EdgeCandidate] = []
-        for ed in raw.get("edges", []):
+        for ed in (args.get("edges") or []):
             etype = ed.get("edge_type", "")
-            if etype not in VALID_EDGE_TYPES:
+            src = (ed.get("source_name") or "").strip()
+            tgt = (ed.get("target_name") or "").strip()
+            if not src or not tgt or etype not in VALID_EDGE_TYPES:
                 continue
-            edges.append(
-                EdgeCandidate(
-                    source_name=ed.get("source_name", ""),
-                    target_name=ed.get("target_name", ""),
-                    edge_type=etype,
-                    confidence=float(ed.get("confidence", 0.7)),
-                    extraction_method="llm_inferred",
-                    explanation=ed.get("explanation", ""),
-                )
-            )
+            method = "document_stated" if ed.get("stated_in_text") else "llm_inferred"
+            edges.append(EdgeCandidate(
+                source_name=src, target_name=tgt, edge_type=etype,
+                confidence=float(ed.get("confidence", 0.7) or 0.7),
+                extraction_method=method,
+                explanation=ed.get("explanation", ""),
+            ))
         return ExtractionResult(entities=entities, edges=edges)
 
 
@@ -556,6 +613,97 @@ def _read_chunks(run_id: str) -> list[dict]:
     return pq.read_table(artifact).to_pylist()
 
 
+# ---------------------------------------------------------------------------
+# Deterministic denoise + alias canonicalization (applied to every extraction)
+# ---------------------------------------------------------------------------
+
+_DATE_RE = re.compile(
+    r"^\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|q[1-4]\b|\d{4}\b|\d{1,2}/\d{1,2})",
+    re.IGNORECASE,
+)
+_NOISE_SUBSTRINGS = (
+    "foreign private issuer", "annual meeting", "home country", "exchange act",
+    "securities and exchange", "exchange commission", "registrant", "form 6-k",
+    "form 40-f", "form 20-f", "press release", "board of directors", "fiscal year",
+    "annual report", "quarterly report", "commission file", "rule 13a",
+    "interim financial", "sedar", "edgar", "washington, d.c", "signature",
+)
+_PERSON_RE = re.compile(r"^[A-Z][a-z]+(\s+[A-Z]\.?)*\s+[A-Z][a-z]+$")
+_COMPANY_SUFFIX_RE = re.compile(
+    r"[\s,]+(inc|incorporated|ltd|limited|corp|corporation|company|co|plc|llc|lp)\.?\s*$",
+    re.IGNORECASE,
+)
+_COMPANY_ALIASES = {
+    "su": "Suncor Energy", "suncor": "Suncor Energy",
+    "enb": "Enbridge",
+    "cnq": "Canadian Natural Resources", "canadian natural": "Canadian Natural Resources",
+    "ry": "Royal Bank of Canada", "rbc": "Royal Bank of Canada", "royal bank": "Royal Bank of Canada",
+    "bns": "Bank of Nova Scotia", "scotiabank": "Bank of Nova Scotia",
+}
+
+
+def _is_noise_name(name: str) -> bool:
+    n = name.strip()
+    if len(n) < 3:
+        return True
+    low = n.lower()
+    return bool(_DATE_RE.match(n)) or any(s in low for s in _NOISE_SUBSTRINGS)
+
+
+def _canonical_name(name: str, entity_type: str) -> str:
+    n = " ".join(name.split()).strip()
+    if entity_type == "Company":
+        stripped = _COMPANY_SUFFIX_RE.sub("", n).strip()
+        return _COMPANY_ALIASES.get(stripped.lower(), _COMPANY_ALIASES.get(n.lower(), stripped or n))
+    return n
+
+
+def _clean_result(result: ExtractionResult) -> ExtractionResult:
+    """Drop noise/boilerplate/date/person entities, canonicalize + merge aliases,
+    and keep only edges whose endpoints survive as canonical entities."""
+    canon: dict[str, str] = {}
+    ents: list[EntityCandidate] = []
+    for e in result.entities:
+        if _is_noise_name(e.name):
+            continue
+        if e.entity_type == "Company" and _PERSON_RE.match(e.name.strip()) and e.name.strip().lower() not in _COMPANY_ALIASES:
+            continue
+        cn = _canonical_name(e.name, e.entity_type)
+        if not cn or _is_noise_name(cn):
+            continue
+        canon[e.name.strip().lower()] = cn
+        canon[cn.lower()] = cn
+        ents.append(EntityCandidate(name=cn, entity_type=e.entity_type, confidence=e.confidence, extraction_method=e.extraction_method))
+    edges: list[EdgeCandidate] = []
+    for ed in result.edges:
+        s = canon.get(ed.source_name.strip().lower()) or _COMPANY_ALIASES.get(ed.source_name.strip().lower())
+        t = canon.get(ed.target_name.strip().lower()) or _COMPANY_ALIASES.get(ed.target_name.strip().lower())
+        if not s or not t or s == t:
+            continue
+        edges.append(EdgeCandidate(source_name=s, target_name=t, edge_type=ed.edge_type, confidence=ed.confidence, extraction_method=ed.extraction_method, explanation=ed.explanation))
+    return ExtractionResult(entities=ents, edges=edges)
+
+
+def build_default_extractor() -> Extractor:
+    """Select the extractor from environment.
+
+    Uses the OpenAI-compatible LLM extractor (e.g. MiniMax) when LLM_API_KEY +
+    LLM_BASE_URL + LLM_MODEL_NAME are all set and EXTRACTOR != 'rule_based';
+    otherwise the deterministic RuleBasedExtractor. Tests/CI set no LLM env, so
+    they stay hermetic on RuleBasedExtractor.
+    """
+    import os  # noqa: PLC0415
+
+    if os.environ.get("EXTRACTOR", "").lower() == "rule_based":
+        return RuleBasedExtractor()
+    key = os.environ.get("LLM_API_KEY")
+    base = os.environ.get("LLM_BASE_URL")
+    model = os.environ.get("LLM_MODEL_NAME")
+    if key and base and model:
+        return OpenAIExtractor(api_key=key, base_url=base, llm_model_name=model)
+    return RuleBasedExtractor()
+
+
 def run_extraction(
     run_id: str,
     extractor: Optional[Extractor] = None,
@@ -564,13 +712,14 @@ def run_extraction(
 
     Args:
         run_id: The run to process.
-        extractor: Extractor implementation to use. Defaults to RuleBasedExtractor.
+        extractor: Extractor implementation to use. Defaults to the env-selected
+            extractor (build_default_extractor): LLM when configured, else rule-based.
 
     Returns:
         (entity_count, edge_count)
     """
     if extractor is None:
-        extractor = RuleBasedExtractor()
+        extractor = build_default_extractor()
 
     manifest = runs.load_manifest(run_id)
     if manifest is None:
@@ -595,7 +744,7 @@ def run_extraction(
         if not chunk_id or not text:
             continue
 
-        result = extractor.extract(chunk_id=chunk_id, chunk_text=text)
+        result = _clean_result(extractor.extract(chunk_id=chunk_id, chunk_text=text))
 
         # Accumulate entities
         for cand in result.entities:
