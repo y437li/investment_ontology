@@ -61,8 +61,10 @@ def gather_dossier(run_id: str, community_id: str) -> dict:
         evidence = [chunks.get(cid, "")[:300] for cid in ev_ids[:2] if chunks.get(cid)]
         relationships.append({
             "source": ent.get(ed["source_entity_id"], ed["source_entity_id"]),
+            "source_id": ed["source_entity_id"],
             "edge_type": ed["edge_type"],
             "target": ent.get(ed["target_entity_id"], ed["target_entity_id"]),
+            "target_id": ed["target_entity_id"],
             "explanation": expl.get(ed["edge_id"], ""),
             "evidence": evidence,
             "evidence_chunk_ids": ev_ids,
