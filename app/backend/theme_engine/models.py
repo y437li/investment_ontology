@@ -152,3 +152,32 @@ class ExtractionResolveResponse(BaseModel):
     run_id: str
     artifacts: list[str]
     alias_count: int
+
+
+class GraphBuildRequest(BaseModel):
+    """Request body for POST /api/graph/build."""
+
+    run_id: str
+
+
+class GraphBuildResponse(BaseModel):
+    """Response body for POST /api/graph/build (io_contracts §24)."""
+
+    success: bool
+    artifacts: list[str]
+    node_count: int
+    edge_count: int
+
+
+class ThemeDiscoverRequest(BaseModel):
+    """Request body for POST /api/themes/discover."""
+
+    run_id: str
+
+
+class ThemeDiscoverResponse(BaseModel):
+    """Response body for POST /api/themes/discover (io_contracts §24)."""
+
+    success: bool
+    artifacts: list[str]
+    community_count: int

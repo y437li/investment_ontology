@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import chunking, data_cleaning, data_import, extraction, entity_resolution, runs
+from . import chunking, data_cleaning, data_import, extraction, entity_resolution, graph_build, runs, themes
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -27,6 +27,10 @@ from .models import (
     ExtractionRunResponse,
     ExtractionResolveRequest,
     ExtractionResolveResponse,
+    GraphBuildRequest,
+    GraphBuildResponse,
+    ThemeDiscoverRequest,
+    ThemeDiscoverResponse,
 )
 
 app = FastAPI(title="Theme Discovery Engine", version="0.1.0")
@@ -121,6 +125,32 @@ def extraction_resolve(req: ExtractionResolveRequest) -> ExtractionResolveRespon
         run_id=req.run_id,
         artifacts=["discovery/entity_aliases.parquet"],
         alias_count=alias_count,
+    )
+
+
+@app.post("/api/graph/build", response_model=GraphBuildResponse)
+def graph_build_endpoint(req: GraphBuildRequest) -> GraphBuildResponse:
+    node_count, edge_count = graph_build.build_graph(run_id=req.run_id)
+    return GraphBuildResponse(
+        success=True,
+        artifacts=["discovery/graph.json"],
+        node_count=node_count,
+        edge_count=edge_count,
+    )
+
+
+@app.post("/api/themes/discover", response_model=ThemeDiscoverResponse)
+def themes_discover_endpoint(req: ThemeDiscoverRequest) -> ThemeDiscoverResponse:
+    community_count = themes.discover_themes(run_id=req.run_id)
+    return ThemeDiscoverResponse(
+        success=True,
+        artifacts=[
+            "discovery/communities.json",
+            "discovery/theme_snapshots.json",
+            "discovery/theme_lineage.json",
+            "discovery/theme_metrics.parquet",
+        ],
+        community_count=community_count,
     )
 
 
