@@ -1,0 +1,3 @@
+source,source_id,title,document_type,company_id,raw_path,published_at,available_at,source_vintage,language,source_url,license,confidentiality,notes
+sec,doc-1,Acme 10-K,10-k,ACME,acme_10k.txt,2024-01-15,2024-01-20,2024-01-21T00:00:00Z,en,https://example.com/acme,public,public,seed
+sec,doc-2,Beta Transcript,transcript,BETA,beta_call.txt,2024-02-10,2024-02-11,2024-02-12T00:00:00Z,en,https://example.com/beta,public,public,seed

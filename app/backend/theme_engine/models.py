@@ -71,6 +71,35 @@ class DataImportResponse(BaseModel):
     quarantine_reasons: list[str]
 
 
+class DataCleanRequest(BaseModel):
+    run_id: str
+    documents_dir: Optional[str] = Field(
+        default=None,
+        description="Optional document input root used to resolve raw_path; "
+        "defaults to resolving raw_path against the repo root.",
+    )
+
+
+class DataCleanResponse(BaseModel):
+    success: bool
+    run_id: str
+    artifacts: list[str]
+    included_documents: int
+    quarantined_documents: int
+    quarantine_reasons: list[str]
+
+
+class DataChunkRequest(BaseModel):
+    run_id: str
+
+
+class DataChunkResponse(BaseModel):
+    success: bool
+    run_id: str
+    artifacts: list[str]
+    chunk_count: int
+
+
 class FreezeRequest(BaseModel):
     run_id: str
 

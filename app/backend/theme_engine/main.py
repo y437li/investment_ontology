@@ -8,10 +8,14 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import data_import, runs
+from . import chunking, data_cleaning, data_import, runs
 from .models import (
     DataImportRequest,
     DataImportResponse,
+    DataCleanRequest,
+    DataCleanResponse,
+    DataChunkRequest,
+    DataChunkResponse,
     RunCreateRequest,
     FreezeRequest,
     FreezeResponse,
@@ -56,6 +60,36 @@ def import_data(req: DataImportRequest) -> DataImportResponse:
         raw_documents=raw_documents,
         quarantined=quarantined,
         quarantine_reasons=quarantine_reasons,
+    )
+
+
+@app.post("/api/data/clean", response_model=DataCleanResponse)
+def clean_data(req: DataCleanRequest) -> DataCleanResponse:
+    included, quarantined, quarantine_reasons = data_cleaning.clean_documents(
+        run_id=req.run_id,
+        documents_dir=req.documents_dir,
+    )
+    return DataCleanResponse(
+        success=True,
+        run_id=req.run_id,
+        artifacts=[
+            "discovery/documents.parquet",
+            "discovery/document_cleaning_log.parquet",
+        ],
+        included_documents=included,
+        quarantined_documents=quarantined,
+        quarantine_reasons=quarantine_reasons,
+    )
+
+
+@app.post("/api/data/chunk", response_model=DataChunkResponse)
+def chunk_data(req: DataChunkRequest) -> DataChunkResponse:
+    chunk_count = chunking.chunk_documents(run_id=req.run_id)
+    return DataChunkResponse(
+        success=True,
+        run_id=req.run_id,
+        artifacts=["discovery/chunks.parquet"],
+        chunk_count=chunk_count,
     )
 
 
