@@ -42,6 +42,12 @@ agents:
       and (2) an ORDERED reasoning chain (reasoning_steps) — each step is one inference
       hop linking a source entity to a target entity, in derivation order, so the dots
       connect into a sequence. Source/target names MUST come from the relationships.
+      The derivation MUST RESOLVE TO THE BOTTOM LINE: the final steps should trace the
+      impact down to the affected companies' fundamentals — profitability / margins /
+      earnings, cash flow, or revenue growth. If the relationships include such financial
+      outcomes (earnings, EPS, EBITDA, net income, revenue, cash flow, margins), route the
+      chain to terminate there; the last narrative sentence must state the profitability /
+      cash-flow / revenue impact on the companies involved.
       Refer to the evidence. Use ONLY the provided facts; do NOT add outside knowledge;
       do NOT give investment advice. Always call emit_narrative.
 
