@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import chunking, data_cleaning, data_import, runs
+from . import chunking, data_cleaning, data_import, extraction, entity_resolution, runs
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -23,6 +23,10 @@ from .models import (
     ValidationRunResponse,
     RunManifest,
     RunStatus,
+    ExtractionRunRequest,
+    ExtractionRunResponse,
+    ExtractionResolveRequest,
+    ExtractionResolveResponse,
 )
 
 app = FastAPI(title="Theme Discovery Engine", version="0.1.0")
@@ -90,6 +94,33 @@ def chunk_data(req: DataChunkRequest) -> DataChunkResponse:
         run_id=req.run_id,
         artifacts=["discovery/chunks.parquet"],
         chunk_count=chunk_count,
+    )
+
+
+@app.post("/api/extraction/run", response_model=ExtractionRunResponse)
+def extraction_run(req: ExtractionRunRequest) -> ExtractionRunResponse:
+    entity_count, edge_count = extraction.run_extraction(run_id=req.run_id)
+    return ExtractionRunResponse(
+        success=True,
+        run_id=req.run_id,
+        artifacts=[
+            "discovery/entities.parquet",
+            "discovery/edges.parquet",
+            "discovery/edge_explanations.parquet",
+        ],
+        entity_count=entity_count,
+        edge_count=edge_count,
+    )
+
+
+@app.post("/api/extraction/resolve", response_model=ExtractionResolveResponse)
+def extraction_resolve(req: ExtractionResolveRequest) -> ExtractionResolveResponse:
+    alias_count = entity_resolution.resolve_entities(run_id=req.run_id)
+    return ExtractionResolveResponse(
+        success=True,
+        run_id=req.run_id,
+        artifacts=["discovery/entity_aliases.parquet"],
+        alias_count=alias_count,
     )
 
 

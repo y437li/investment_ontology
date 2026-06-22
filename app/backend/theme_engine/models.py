@@ -121,3 +121,34 @@ class ValidationRunResponse(BaseModel):
     artifacts: list[str]
     validated_themes: int = 0
     message: Optional[str] = None
+
+
+class ExtractionRunRequest(BaseModel):
+    """Request body for POST /api/extraction/run."""
+
+    run_id: str
+
+
+class ExtractionRunResponse(BaseModel):
+    """Response body for POST /api/extraction/run."""
+
+    success: bool
+    run_id: str
+    artifacts: list[str]
+    entity_count: int
+    edge_count: int
+
+
+class ExtractionResolveRequest(BaseModel):
+    """Request body for POST /api/extraction/resolve."""
+
+    run_id: str
+
+
+class ExtractionResolveResponse(BaseModel):
+    """Response body for POST /api/extraction/resolve."""
+
+    success: bool
+    run_id: str
+    artifacts: list[str]
+    alias_count: int
