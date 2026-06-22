@@ -205,3 +205,20 @@ class ExposureComputeResponse(BaseModel):
     artifacts: list[str]
     theme_count: int
     company_theme_pair_count: int
+
+
+class ReportGenerateRequest(BaseModel):
+    """Request body for POST /api/report/generate (io_contracts §24)."""
+
+    run_id: str
+
+
+class ReportGenerateResponse(BaseModel):
+    """Response body for POST /api/report/generate (io_contracts §24).
+
+    Note: 'model_config' field name is FORBIDDEN (Pydantic v2 reserved).
+    """
+
+    success: bool
+    artifact: str
+    report_path: str
