@@ -37,134 +37,280 @@
       </p>
     </div>
 
-    <!-- Main Content: Theme Radar -->
+    <!-- Main Content -->
     <div v-else class="main-content">
-      <!-- Header: title + filter bar -->
-      <div class="radar-header">
-        <div class="radar-title-group">
-          <div class="radar-eyebrow">
-            <span class="accent-tag">THEME RADAR</span>
-            <span class="snapshot-meta">as of {{ currentRun.as_of_date }}</span>
-            <span class="community-count">{{ displayedCards.length }} themes</span>
-          </div>
-          <h1 class="radar-title">Emerging Themes</h1>
-        </div>
 
-        <div class="filter-bar">
-          <div class="filter-tabs">
-            <button
-              class="filter-tab"
-              :class="{ active: activeFilter === 'all' }"
-              @click="activeFilter = 'all'"
-            >
-              All
-            </button>
-            <button
-              class="filter-tab"
-              :class="{ active: activeFilter === 'watched' }"
-              @click="activeFilter = 'watched'"
-            >
-              ★ Watched
-              <span class="watch-count" v-if="watchlist.size > 0">{{ watchlist.size }}</span>
-            </button>
-          </div>
-          <div class="search-wrap">
-            <input
-              v-model="searchQuery"
-              class="search-input"
-              type="text"
-              placeholder="Search themes, companies, entities..."
-            />
-            <span class="search-icon">⌕</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- No results under current filter -->
-      <div v-if="displayedCards.length === 0 && !loading" class="no-results">
-        <span v-if="activeFilter === 'watched' && watchlist.size === 0">
-          No watched themes yet — click ★ on a card to add one.
-        </span>
-        <span v-else>No themes match your search.</span>
-      </div>
-
-      <!-- Theme Cards Grid -->
-      <div class="cards-grid">
-        <div
-          v-for="card in displayedCards"
-          :key="card.community_id"
-          class="theme-card"
-          :class="{ watched: watchlist.has(card.community_id) }"
-          @click="openTheme(card)"
-        >
-          <!-- Card top row -->
-          <div class="card-top">
-            <div class="card-id">{{ card.community_id }}</div>
-            <button
-              class="watch-btn"
-              :class="{ active: watchlist.has(card.community_id) }"
-              @click.stop="toggleWatch(card.community_id)"
-              :title="watchlist.has(card.community_id) ? 'Remove from watchlist' : 'Add to watchlist'"
-            >★</button>
-          </div>
-
-          <!-- Theme title -->
-          <h3 class="card-title">{{ card.displayTitle }}</h3>
-
-          <!-- Theme summary if available -->
-          <p v-if="card.theme_summary" class="card-summary">{{ card.theme_summary }}</p>
-
-          <!-- Companies chips -->
-          <div v-if="card.top_companies?.length" class="chips-section">
-            <div class="chips-label">Companies</div>
-            <div class="chips-row">
-              <span
-                v-for="co in card.top_companies.slice(0, 5)"
-                :key="co"
-                class="chip chip-company"
-              >{{ co }}</span>
-              <span v-if="card.top_companies.length > 5" class="chip chip-more">
-                +{{ card.top_companies.length - 5 }}
-              </span>
+      <!-- ─── MAIN THEME VIEW (hierarchy exists) ─────────────────────── -->
+      <template v-if="mainThemes.length > 0">
+        <!-- Header -->
+        <div class="radar-header">
+          <div class="radar-title-group">
+            <div class="radar-eyebrow">
+              <span class="accent-tag">THEME RADAR</span>
+              <span class="snapshot-meta">as of {{ currentRun.as_of_date }}</span>
+              <span class="community-count">{{ displayedMainThemes.length }} themes</span>
             </div>
+            <h1 class="radar-title">Emerging Themes</h1>
           </div>
 
-          <!-- Entities chips -->
-          <div v-if="card.top_entities?.length" class="chips-section">
-            <div class="chips-label">Entities</div>
-            <div class="chips-row">
-              <span
-                v-for="e in card.top_entities.slice(0, 4)"
-                :key="e"
-                class="chip chip-entity"
-              >{{ e }}</span>
-              <span v-if="card.top_entities.length > 4" class="chip chip-more">
-                +{{ card.top_entities.length - 4 }}
-              </span>
-            </div>
-          </div>
-
-          <!-- Metrics badges row -->
-          <div class="card-footer">
-            <div class="size-badge">
-              <span class="size-num">{{ card.size }}</span>
-              <span class="size-label">nodes</span>
-            </div>
-            <div class="metric-badges" v-if="card.metrics">
-              <span
-                v-for="(val, key) in filteredMetrics(card.metrics)"
-                :key="key"
-                class="metric-badge"
-                :class="`metric-${key}`"
-                :title="key"
+          <div class="filter-bar">
+            <div class="filter-tabs">
+              <button
+                class="filter-tab"
+                :class="{ active: activeFilter === 'all' }"
+                @click="activeFilter = 'all'"
               >
-                {{ metricShort(key) }} {{ formatPct(val) }}
-              </span>
+                All
+              </button>
+              <button
+                class="filter-tab"
+                :class="{ active: activeFilter === 'watched' }"
+                @click="activeFilter = 'watched'"
+              >
+                ★ Watched
+                <span class="watch-count" v-if="watchlist.size > 0">{{ watchlist.size }}</span>
+              </button>
             </div>
-            <div class="card-arrow">→</div>
+            <div class="search-wrap">
+              <input
+                v-model="searchQuery"
+                class="search-input"
+                type="text"
+                placeholder="Search main themes..."
+              />
+              <span class="search-icon">⌕</span>
+            </div>
           </div>
         </div>
-      </div>
+
+        <!-- No results -->
+        <div v-if="displayedMainThemes.length === 0" class="no-results">
+          <span v-if="activeFilter === 'watched' && watchlist.size === 0">
+            No watched themes yet — click ★ on a card to add one.
+          </span>
+          <span v-else>No themes match your search.</span>
+        </div>
+
+        <!-- Main Theme Cards Grid -->
+        <div class="cards-grid">
+          <div
+            v-for="mt in displayedMainThemes"
+            :key="mt.name"
+            class="theme-card main-theme-card"
+            :class="{ watched: watchlist.has(mt.name), expanded: expandedTheme === mt.name }"
+            @click="toggleExpand(mt)"
+          >
+            <!-- Card top row -->
+            <div class="card-top">
+              <div class="card-sub-count">{{ mt.sub_theme_ids.length }} sub-themes</div>
+              <button
+                class="watch-btn"
+                :class="{ active: watchlist.has(mt.name) }"
+                @click.stop="toggleWatch(mt.name)"
+                :title="watchlist.has(mt.name) ? 'Remove from watchlist' : 'Add to watchlist'"
+              >★</button>
+            </div>
+
+            <!-- Theme title -->
+            <h3 class="card-title">{{ mt.name }}</h3>
+
+            <!-- Summary -->
+            <p v-if="mt.summary" class="card-summary">{{ mt.summary }}</p>
+
+            <!-- Metrics row -->
+            <div class="card-footer">
+              <div class="size-badge">
+                <span class="size-num">{{ mt.size }}</span>
+                <span class="size-label">nodes</span>
+              </div>
+              <div class="sub-theme-pills">
+                <span
+                  v-for="sid in mt.sub_theme_ids.slice(0, 3)"
+                  :key="sid"
+                  class="sub-pill"
+                >{{ subThemeName(sid) }}</span>
+                <span v-if="mt.sub_theme_ids.length > 3" class="chip chip-more">
+                  +{{ mt.sub_theme_ids.length - 3 }} more
+                </span>
+              </div>
+              <div class="card-arrow">{{ expandedTheme === mt.name ? '↑' : '↓' }}</div>
+            </div>
+
+            <!-- Expanded sub-themes list -->
+            <div v-if="expandedTheme === mt.name" class="sub-themes-panel" @click.stop>
+              <div class="sub-themes-header">Sub-themes</div>
+              <div class="sub-themes-list">
+                <div
+                  v-for="sid in mt.sub_theme_ids"
+                  :key="sid"
+                  class="sub-theme-row"
+                  @click.stop="openSubTheme(sid)"
+                >
+                  <div class="sub-theme-info">
+                    <div class="sub-theme-name">{{ subThemeName(sid) }}</div>
+                    <div class="sub-theme-meta" v-if="subThemeMeta(sid)">
+                      <span class="sub-meta-item">{{ subThemeMeta(sid).size }} nodes</span>
+                      <span v-if="subThemeCompanies(sid).length" class="sub-meta-item">
+                        {{ subThemeCompanies(sid).slice(0, 3).join(', ') }}
+                        <span v-if="subThemeCompanies(sid).length > 3"> +{{ subThemeCompanies(sid).length - 3 }}</span>
+                      </span>
+                    </div>
+                    <p v-if="subThemeSummary(sid)" class="sub-theme-summary">{{ subThemeSummary(sid) }}</p>
+                  </div>
+                  <div class="sub-theme-arrow">→</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ─── FALLBACK: flat community view + build action ───────────── -->
+      <template v-else>
+        <!-- Header with build action -->
+        <div class="radar-header">
+          <div class="radar-title-group">
+            <div class="radar-eyebrow">
+              <span class="accent-tag">THEME RADAR</span>
+              <span class="snapshot-meta">as of {{ currentRun.as_of_date }}</span>
+              <span class="community-count">{{ displayedCards.length }} communities</span>
+            </div>
+            <h1 class="radar-title">Emerging Themes</h1>
+          </div>
+
+          <div class="filter-bar">
+            <div class="filter-tabs">
+              <button
+                class="filter-tab"
+                :class="{ active: activeFilter === 'all' }"
+                @click="activeFilter = 'all'"
+              >
+                All
+              </button>
+              <button
+                class="filter-tab"
+                :class="{ active: activeFilter === 'watched' }"
+                @click="activeFilter = 'watched'"
+              >
+                ★ Watched
+                <span class="watch-count" v-if="flatWatchlist.size > 0">{{ flatWatchlist.size }}</span>
+              </button>
+            </div>
+            <div class="search-wrap">
+              <input
+                v-model="searchQuery"
+                class="search-input"
+                type="text"
+                placeholder="Search themes, companies, entities..."
+              />
+              <span class="search-icon">⌕</span>
+            </div>
+
+            <!-- Build main themes CTA (secondary, admin action) -->
+            <button
+              class="build-hierarchy-btn"
+              @click="triggerBuildHierarchy"
+              :disabled="buildingHierarchy"
+              :title="buildingHierarchy ? 'Building main themes via LLM…' : 'Cluster communities into main themes (LLM, ~20s)'"
+            >
+              <span v-if="buildingHierarchy" class="build-spinner"></span>
+              <span v-else>⊕</span>
+              {{ buildingHierarchy ? 'Building themes…' : 'Build main themes' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Build error -->
+        <div v-if="buildError" class="build-error-msg">
+          {{ buildError }}
+        </div>
+
+        <!-- No results under current filter -->
+        <div v-if="displayedCards.length === 0" class="no-results">
+          <span v-if="activeFilter === 'watched' && flatWatchlist.size === 0">
+            No watched themes yet — click ★ on a card to add one.
+          </span>
+          <span v-else>No themes match your search.</span>
+        </div>
+
+        <!-- Flat Community Cards Grid -->
+        <div class="cards-grid">
+          <div
+            v-for="card in displayedCards"
+            :key="card.community_id"
+            class="theme-card"
+            :class="{ watched: flatWatchlist.has(card.community_id) }"
+            @click="openTheme(card)"
+          >
+            <!-- Card top row -->
+            <div class="card-top">
+              <div class="card-id">{{ card.community_id }}</div>
+              <button
+                class="watch-btn"
+                :class="{ active: flatWatchlist.has(card.community_id) }"
+                @click.stop="toggleFlatWatch(card.community_id)"
+                :title="flatWatchlist.has(card.community_id) ? 'Remove from watchlist' : 'Add to watchlist'"
+              >★</button>
+            </div>
+
+            <!-- Theme title -->
+            <h3 class="card-title">{{ card.displayTitle }}</h3>
+
+            <!-- Theme summary if available -->
+            <p v-if="card.theme_summary" class="card-summary">{{ card.theme_summary }}</p>
+
+            <!-- Companies chips -->
+            <div v-if="card.top_companies?.length" class="chips-section">
+              <div class="chips-label">Companies</div>
+              <div class="chips-row">
+                <span
+                  v-for="co in card.top_companies.slice(0, 5)"
+                  :key="co"
+                  class="chip chip-company"
+                >{{ co }}</span>
+                <span v-if="card.top_companies.length > 5" class="chip chip-more">
+                  +{{ card.top_companies.length - 5 }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Entities chips -->
+            <div v-if="card.top_entities?.length" class="chips-section">
+              <div class="chips-label">Entities</div>
+              <div class="chips-row">
+                <span
+                  v-for="e in card.top_entities.slice(0, 4)"
+                  :key="e"
+                  class="chip chip-entity"
+                >{{ e }}</span>
+                <span v-if="card.top_entities.length > 4" class="chip chip-more">
+                  +{{ card.top_entities.length - 4 }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Metrics badges row -->
+            <div class="card-footer">
+              <div class="size-badge">
+                <span class="size-num">{{ card.size }}</span>
+                <span class="size-label">nodes</span>
+              </div>
+              <div class="metric-badges" v-if="card.metrics">
+                <span
+                  v-for="(val, key) in filteredMetrics(card.metrics)"
+                  :key="key"
+                  class="metric-badge"
+                  :class="`metric-${key}`"
+                  :title="key"
+                >
+                  {{ metricShort(key) }} {{ formatPct(val) }}
+                </span>
+              </div>
+              <div class="card-arrow">→</div>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -174,6 +320,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listRuns } from '../api/runs.js'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
+import { getThemeHierarchy, buildThemeHierarchy } from '../api/themes.js'
 
 const router = useRouter()
 
@@ -182,21 +329,34 @@ const loading = ref(false)
 const loadError = ref('')
 const currentRun = ref(null)
 
+// Flat community data (for fallback view and sub-theme resolution)
 const communities = ref([])
 const snapshots = ref([])
 const metrics = ref([])
 const exposures = ref([])
 
+// Main theme hierarchy
+const mainThemes = ref([])
+const hierarchyNotBuilt = ref(false)
+
+// Expand/drill-in state
+const expandedTheme = ref(null)
+
+// Build action
+const buildingHierarchy = ref(false)
+const buildError = ref('')
+
 const activeFilter = ref('all')
 const searchQuery = ref('')
 
-// ─── Watchlist (localStorage) ─────────────────────────────────────────────────
-const WATCHLIST_KEY = 'theme_engine_watchlist'
+// ─── Watchlists (localStorage) ────────────────────────────────────────────────
+// Main-theme watchlist (keyed by theme name)
+const MAIN_WATCHLIST_KEY = 'theme_engine_main_watchlist'
 const watchlist = ref(new Set())
 
 const loadWatchlist = () => {
   try {
-    const raw = JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]')
+    const raw = JSON.parse(localStorage.getItem(MAIN_WATCHLIST_KEY) || '[]')
     watchlist.value = new Set(raw)
   } catch {
     watchlist.value = new Set()
@@ -205,33 +365,132 @@ const loadWatchlist = () => {
 
 const saveWatchlist = () => {
   try {
-    localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...watchlist.value]))
+    localStorage.setItem(MAIN_WATCHLIST_KEY, JSON.stringify([...watchlist.value]))
   } catch {}
 }
 
-const toggleWatch = (communityId) => {
+const toggleWatch = (themeName) => {
   const w = new Set(watchlist.value)
-  if (w.has(communityId)) {
-    w.delete(communityId)
-  } else {
-    w.add(communityId)
-  }
+  if (w.has(themeName)) w.delete(themeName)
+  else w.add(themeName)
   watchlist.value = w
   saveWatchlist()
 }
 
-// ─── Derived cards ───────────────────────────────────────────────────────────
-/**
- * Build a map from community_id to metrics row.
- * theme_metrics rows are linked via snapshots: community_id -> snapshot -> metrics
- */
+// Flat community watchlist (keyed by community_id)
+const FLAT_WATCHLIST_KEY = 'theme_engine_watchlist'
+const flatWatchlist = ref(new Set())
+
+const loadFlatWatchlist = () => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FLAT_WATCHLIST_KEY) || '[]')
+    flatWatchlist.value = new Set(raw)
+  } catch {
+    flatWatchlist.value = new Set()
+  }
+}
+
+const saveFlatWatchlist = () => {
+  try {
+    localStorage.setItem(FLAT_WATCHLIST_KEY, JSON.stringify([...flatWatchlist.value]))
+  } catch {}
+}
+
+const toggleFlatWatch = (communityId) => {
+  const w = new Set(flatWatchlist.value)
+  if (w.has(communityId)) w.delete(communityId)
+  else w.add(communityId)
+  flatWatchlist.value = w
+  saveFlatWatchlist()
+}
+
+// ─── Community lookup helpers ─────────────────────────────────────────────────
+const communityMap = computed(() => {
+  const m = new Map()
+  for (const c of communities.value) m.set(c.community_id, c)
+  return m
+})
+
+const subThemeName = (communityId) => {
+  const c = communityMap.value.get(communityId)
+  if (!c) return communityId
+  return c.theme_name && c.theme_name.trim() && c.theme_name !== communityId
+    ? c.theme_name
+    : ((c.top_entities || []).slice(0, 3).join(' · ') || communityId)
+}
+
+const subThemeMeta = (communityId) => communityMap.value.get(communityId) || null
+
+const subThemeCompanies = (communityId) => {
+  const c = communityMap.value.get(communityId)
+  if (c?.top_companies?.length) return c.top_companies
+  const expRows = exposures.value
+    .filter(e => e.community_id === communityId)
+    .sort((a, b) => Number(b.exposure_score || 0) - Number(a.exposure_score || 0))
+    .slice(0, 6)
+    .map(e => e.company_id)
+  return expRows
+}
+
+const subThemeSummary = (communityId) => {
+  return communityMap.value.get(communityId)?.theme_summary || ''
+}
+
+// ─── Main theme filters ───────────────────────────────────────────────────────
+const displayedMainThemes = computed(() => {
+  let themes = mainThemes.value
+
+  if (activeFilter.value === 'watched') {
+    themes = themes.filter(t => watchlist.value.has(t.name))
+  }
+
+  const q = searchQuery.value.trim().toLowerCase()
+  if (q) {
+    themes = themes.filter(t => {
+      const haystack = [t.name, t.summary].filter(Boolean).join(' ').toLowerCase()
+      return haystack.includes(q)
+    })
+  }
+
+  return themes
+})
+
+// ─── Expand/drill-in ─────────────────────────────────────────────────────────
+const toggleExpand = (mt) => {
+  expandedTheme.value = expandedTheme.value === mt.name ? null : mt.name
+}
+
+const openSubTheme = (communityId) => {
+  if (!currentRun.value) return
+  router.push({
+    name: 'Themes',
+    params: { runId: currentRun.value.run_id },
+    query: { community: communityId }
+  })
+}
+
+// ─── Build hierarchy action ───────────────────────────────────────────────────
+const triggerBuildHierarchy = async () => {
+  if (!currentRun.value || buildingHierarchy.value) return
+  buildingHierarchy.value = true
+  buildError.value = ''
+  try {
+    const result = await buildThemeHierarchy(currentRun.value.run_id)
+    mainThemes.value = result?.main_themes || []
+    hierarchyNotBuilt.value = false
+  } catch (err) {
+    buildError.value = err?.response?.data?.detail || err.message || 'Failed to build themes'
+  } finally {
+    buildingHierarchy.value = false
+  }
+}
+
+// ─── Flat community cards (fallback view) ────────────────────────────────────
 const metricsMap = computed(() => {
   const map = new Map()
   for (const snap of snapshots.value) {
     const m = metrics.value.find(r => r.theme_snapshot_id === snap.theme_snapshot_id)
-    if (m) {
-      map.set(snap.community_id, m)
-    }
+    if (m) map.set(snap.community_id, m)
   }
   return map
 })
@@ -239,12 +498,10 @@ const metricsMap = computed(() => {
 const allCards = computed(() => {
   return communities.value
     .map(c => {
-      // Build display title
-      let displayTitle = c.theme_name && c.theme_name.trim() && c.theme_name !== c.community_id
+      const displayTitle = c.theme_name && c.theme_name.trim() && c.theme_name !== c.community_id
         ? c.theme_name
         : (c.top_entities || []).slice(0, 3).join(' · ') || c.community_id
 
-      // Merge top_companies from exposure data if community lacks them
       const expRows = exposures.value
         .filter(e => e.community_id === c.community_id)
         .sort((a, b) => Number(b.exposure_score || 0) - Number(a.exposure_score || 0))
@@ -266,32 +523,36 @@ const allCards = computed(() => {
 const displayedCards = computed(() => {
   let cards = allCards.value
 
-  // Filter: watched only
   if (activeFilter.value === 'watched') {
-    cards = cards.filter(c => watchlist.value.has(c.community_id))
+    cards = cards.filter(c => flatWatchlist.value.has(c.community_id))
   }
 
-  // Filter: text search
   const q = searchQuery.value.trim().toLowerCase()
   if (q) {
     cards = cards.filter(c => {
       const haystack = [
-        c.displayTitle,
-        c.theme_name,
-        c.theme_summary,
-        ...(c.top_companies || []),
-        ...(c.top_entities || [])
+        c.displayTitle, c.theme_name, c.theme_summary,
+        ...(c.top_companies || []), ...(c.top_entities || [])
       ].filter(Boolean).join(' ').toLowerCase()
       return haystack.includes(q)
     })
   }
 
-  // Cap only the default unfiltered landing view; watched/search show all matches.
   if (activeFilter.value === 'all' && !q) {
     cards = cards.slice(0, 12)
   }
   return cards
 })
+
+// ─── Flat card navigation ─────────────────────────────────────────────────────
+const openTheme = (card) => {
+  if (!currentRun.value) return
+  router.push({
+    name: 'Themes',
+    params: { runId: currentRun.value.run_id },
+    query: { community: card.community_id }
+  })
+}
 
 // ─── Metrics helpers ──────────────────────────────────────────────────────────
 const METRIC_KEYS = ['strength', 'cohesion', 'novelty', 'saturation']
@@ -315,12 +576,6 @@ const formatPct = (val) => {
   return (Number(val) * 100).toFixed(0) + '%'
 }
 
-// ─── Navigation ──────────────────────────────────────────────────────────────
-const openTheme = (card) => {
-  if (!currentRun.value) return
-  router.push({ name: 'Themes', params: { runId: currentRun.value.run_id }, query: { community: card.community_id } })
-}
-
 // ─── Data loading ─────────────────────────────────────────────────────────────
 const bootstrap = async () => {
   loading.value = true
@@ -330,6 +585,10 @@ const bootstrap = async () => {
   snapshots.value = []
   metrics.value = []
   exposures.value = []
+  mainThemes.value = []
+  hierarchyNotBuilt.value = false
+  expandedTheme.value = null
+  buildError.value = ''
 
   try {
     const runs = await listRuns()
@@ -341,19 +600,28 @@ const bootstrap = async () => {
     // Pick the most recent frozen run; fall back to newest
     const frozen = runs.find(r => r.discovery_frozen)
     currentRun.value = frozen || runs[0]
-
     const runId = currentRun.value.run_id
-    const [commRes, snapRes, metricsRes, expRes] = await Promise.allSettled([
+
+    // Load communities in parallel with trying to get the hierarchy
+    const [commRes, snapRes, metricsRes, expRes, hierarchyRes] = await Promise.allSettled([
       getCommunitiesJson(runId),
       getThemeSnapshots(runId),
       getThemeMetrics(runId),
-      getCompanyThemeExposure(runId)
+      getCompanyThemeExposure(runId),
+      getThemeHierarchy(runId)
     ])
 
     communities.value = commRes.status === 'fulfilled' ? (commRes.value?.communities || []) : []
     snapshots.value = snapRes.status === 'fulfilled' ? (snapRes.value?.snapshots || []) : []
     metrics.value = metricsRes.status === 'fulfilled' ? (metricsRes.value || []) : []
     exposures.value = expRes.status === 'fulfilled' ? (expRes.value || []) : []
+
+    if (hierarchyRes.status === 'fulfilled') {
+      mainThemes.value = hierarchyRes.value?.main_themes || []
+    } else {
+      // 404 means not built yet; other errors are silent (fallback to flat view)
+      hierarchyNotBuilt.value = true
+    }
   } catch (err) {
     loadError.value = err?.response?.data?.detail || err.message || 'Failed to load snapshot'
   } finally {
@@ -363,6 +631,7 @@ const bootstrap = async () => {
 
 onMounted(() => {
   loadWatchlist()
+  loadFlatWatchlist()
   bootstrap()
 })
 </script>
@@ -665,6 +934,53 @@ onMounted(() => {
   pointer-events: none;
 }
 
+/* ── Build hierarchy button ── */
+.build-hierarchy-btn {
+  background: transparent;
+  border: 1px dashed #ccc;
+  color: #888;
+  padding: 8px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.build-hierarchy-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #f0f4ff;
+}
+
+.build-hierarchy-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.build-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #ddd;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.build-error-msg {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+  padding: 10px 16px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  margin-bottom: 20px;
+}
+
 /* ── No results ── */
 .no-results {
   text-align: center;
@@ -682,7 +998,7 @@ onMounted(() => {
   gap: 20px;
 }
 
-/* ── Theme card ── */
+/* ── Theme card (shared) ── */
 .theme-card {
   border: 1px solid var(--border);
   padding: 22px 22px 18px;
@@ -711,6 +1027,18 @@ onMounted(() => {
   box-shadow: 0 4px 20px rgba(245, 158, 11, 0.12);
 }
 
+/* Main theme card — slightly bolder visual weight */
+.main-theme-card {
+  border-width: 1.5px;
+}
+
+.main-theme-card.expanded {
+  border-color: var(--accent);
+  box-shadow: 0 4px 24px rgba(26, 86, 219, 0.1);
+  transform: none;
+  grid-column: span 1; /* don't span; sub-themes panel flows below */
+}
+
 /* Card top row */
 .card-top {
   display: flex;
@@ -722,6 +1050,16 @@ onMounted(() => {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: #bbb;
+}
+
+.card-sub-count {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: #aaa;
+  background: #f5f5f5;
+  border: 1px solid #eee;
+  padding: 2px 8px;
+  border-radius: 10px;
 }
 
 .watch-btn {
@@ -762,6 +1100,27 @@ onMounted(() => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* Sub-theme pills in footer */
+.sub-theme-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+}
+
+.sub-pill {
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  border-radius: 2px;
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Chips */
@@ -873,6 +1232,96 @@ onMounted(() => {
 }
 
 .theme-card:hover .card-arrow {
+  color: var(--accent);
+}
+
+/* ── Sub-themes panel (expanded) ── */
+.sub-themes-panel {
+  border-top: 1px solid #eee;
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sub-themes-header {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #bbb;
+  margin-bottom: 4px;
+}
+
+.sub-themes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sub-theme-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid #f0f0f0;
+  background: #fafafa;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  gap: 12px;
+}
+
+.sub-theme-row:hover {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.sub-theme-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sub-theme-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--black);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sub-theme-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sub-meta-item {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: #999;
+}
+
+.sub-theme-summary {
+  font-size: 0.76rem;
+  color: var(--gray-text);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sub-theme-arrow {
+  color: #ccc;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+  transition: color 0.12s;
+}
+
+.sub-theme-row:hover .sub-theme-arrow {
   color: var(--accent);
 }
 

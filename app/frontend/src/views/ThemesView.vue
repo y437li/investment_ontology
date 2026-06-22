@@ -20,7 +20,7 @@
             :key="c.community_id"
             class="community-card"
             :class="{ active: selectedCommunity?.community_id === c.community_id }"
-            @click="selectedCommunity = c"
+            @click="selectCommunity(c)"
           >
             <div class="comm-id">{{ c.community_id }}</div>
             <div class="comm-name">{{ c.theme_name || '(unnamed)' }}</div>
@@ -32,7 +32,7 @@
         </div>
       </div>
 
-      <!-- Main: community detail + radar -->
+      <!-- Main: community detail + narrative panel -->
       <div class="main-panel">
         <div v-if="!selectedCommunity && communities.length" class="placeholder-msg">
           Select a community to view details.
@@ -115,6 +115,107 @@
               </tbody>
             </table>
           </div>
+
+          <!-- ── CONNECT-THE-DOTS NARRATIVE PANEL ────────────────────── -->
+          <div class="narrative-section">
+            <div class="narrative-section-header">
+              <div class="section-title">Connect-the-Dots Narrative</div>
+              <button
+                v-if="!narrative && !narrativeLoading && !narrativeError"
+                class="load-narrative-btn"
+                @click="loadNarrative"
+              >
+                Load narrative
+              </button>
+            </div>
+
+            <!-- Loading (first call ~20s) -->
+            <div v-if="narrativeLoading" class="narrative-loading">
+              <div class="narrative-spinner"></div>
+              <div class="narrative-loading-text">
+                <span class="narrative-loading-title">Building narrative…</span>
+                <span class="narrative-loading-sub">This can take up to 20 seconds on first access</span>
+              </div>
+            </div>
+
+            <!-- LLM not configured (503) -->
+            <div v-else-if="narrativeLlmUnconfigured" class="narrative-unavailable">
+              <span class="unavailable-icon">ℹ</span>
+              <div>
+                <div class="unavailable-title">Narrative not available</div>
+                <div class="unavailable-msg">The LLM service is not configured on this server. A system administrator can enable it in the backend settings.</div>
+              </div>
+            </div>
+
+            <!-- Other error -->
+            <div v-else-if="narrativeError" class="narrative-error">
+              <span class="narrative-error-icon">⚠</span>
+              <div>
+                <div class="narrative-error-title">Could not load narrative</div>
+                <div class="narrative-error-msg">{{ narrativeError }}</div>
+                <button class="narrative-retry-btn" @click="loadNarrative">Retry</button>
+              </div>
+            </div>
+
+            <!-- Narrative content -->
+            <div v-else-if="narrative" class="narrative-body">
+              <!-- Prose narrative -->
+              <div class="narrative-prose">
+                <p>{{ narrative.narrative }}</p>
+              </div>
+
+              <!-- Collapsible reasoning chain -->
+              <div class="narrative-collapsible" v-if="narrative.reasoning_chain">
+                <button
+                  class="collapsible-toggle"
+                  @click="reasoningOpen = !reasoningOpen"
+                >
+                  <span class="collapsible-label">Reasoning chain</span>
+                  <span class="collapsible-arrow">{{ reasoningOpen ? '▲' : '▼' }}</span>
+                </button>
+                <div v-if="reasoningOpen" class="collapsible-content reasoning-content">
+                  <pre class="reasoning-pre">{{ narrative.reasoning_chain }}</pre>
+                </div>
+              </div>
+
+              <!-- Supporting relationships -->
+              <div class="narrative-relationships" v-if="narrative.relationships?.length">
+                <div class="relationships-title">Supporting relationships</div>
+                <div class="relationships-list">
+                  <div
+                    v-for="(rel, idx) in narrative.relationships"
+                    :key="idx"
+                    class="relationship-row"
+                  >
+                    <div class="rel-edge">
+                      <span class="rel-source">{{ rel.source }}</span>
+                      <span class="rel-edge-type">{{ rel.edge_type }}</span>
+                      <span class="rel-target">{{ rel.target }}</span>
+                    </div>
+                    <div v-if="rel.explanation" class="rel-explanation">{{ rel.explanation }}</div>
+                    <div v-if="rel.evidence?.length" class="rel-evidence">
+                      <span class="evidence-label">Evidence</span>
+                      <span
+                        v-for="(ev, ei) in rel.evidence.slice(0, 2)"
+                        :key="ei"
+                        class="evidence-snippet"
+                      >"{{ typeof ev === 'string' ? ev : (ev.text || ev.snippet || JSON.stringify(ev)) }}"</span>
+                      <span v-if="rel.evidence.length > 2" class="evidence-more">+{{ rel.evidence.length - 2 }} more</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Prompt to load (before first click) -->
+            <div v-else class="narrative-prompt">
+              <div class="narrative-prompt-text">
+                A narrative connects this theme's sub-themes and surfaces the relationships linking them.
+                Click "Load narrative" to generate it (requires LLM; first call takes ~20s).
+              </div>
+            </div>
+          </div>
+          <!-- ── END NARRATIVE PANEL ──────────────────────────────────── -->
         </div>
       </div>
     </div>
@@ -126,6 +227,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import RunNav from '../components/RunNav.vue'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
+import { getCommunityNarrative } from '../api/themes.js'
 
 const props = defineProps({ runId: String })
 const route = useRoute()
@@ -138,6 +240,24 @@ const snapshots = ref([])
 const metrics = ref([])
 const exposures = ref([])
 const selectedCommunity = ref(null)
+
+// ─── Narrative state ──────────────────────────────────────────────────────────
+const narrative = ref(null)
+const narrativeLoading = ref(false)
+const narrativeError = ref('')
+const narrativeLlmUnconfigured = ref(false)
+const reasoningOpen = ref(false)
+
+// ─── Community selection ──────────────────────────────────────────────────────
+const selectCommunity = (c) => {
+  selectedCommunity.value = c
+  // Reset narrative state for new community
+  narrative.value = null
+  narrativeLoading.value = false
+  narrativeError.value = ''
+  narrativeLlmUnconfigured.value = false
+  reasoningOpen.value = false
+}
 
 const selectedSnapshot = computed(() => {
   if (!selectedCommunity.value) return null
@@ -166,6 +286,29 @@ const pct = (val) => {
   return (Number(val) * 100).toFixed(1) + '%'
 }
 
+// ─── Narrative loading ────────────────────────────────────────────────────────
+const loadNarrative = async () => {
+  if (!selectedCommunity.value || narrativeLoading.value) return
+  narrativeLoading.value = true
+  narrativeError.value = ''
+  narrativeLlmUnconfigured.value = false
+  reasoningOpen.value = false
+  try {
+    const result = await getCommunityNarrative(props.runId, selectedCommunity.value.community_id)
+    narrative.value = result
+  } catch (err) {
+    const status = err?.response?.status
+    if (status === 503) {
+      narrativeLlmUnconfigured.value = true
+    } else {
+      narrativeError.value = err?.response?.data?.detail || err.message || 'Failed to load narrative'
+    }
+  } finally {
+    narrativeLoading.value = false
+  }
+}
+
+// ─── Data loading ─────────────────────────────────────────────────────────────
 const loadData = async () => {
   loading.value = true
   error.value = ''
@@ -180,7 +323,8 @@ const loadData = async () => {
     // Deep-link: auto-select the community passed from the landing (?community=...)
     const wanted = route.query.community
     if (wanted) {
-      selectedCommunity.value = communities.value.find(c => c.community_id === wanted) || selectedCommunity.value
+      const found = communities.value.find(c => c.community_id === wanted)
+      if (found) selectCommunity(found)
     }
     snapshots.value = snapDoc.status === 'fulfilled' ? (snapDoc.value.snapshots || []) : []
     metrics.value = metricsRows.status === 'fulfilled' ? (metricsRows.value || []) : []
@@ -510,5 +654,351 @@ onMounted(loadData)
   border-radius: 4px;
   font-size: 12px;
   font-family: var(--font-mono);
+}
+
+/* ── Narrative section ── */
+.narrative-section {
+  margin-bottom: 32px;
+  border: 1px solid #E5E5E5;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #FFF;
+}
+
+.narrative-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid #F0F0F0;
+  background: #F8F9FA;
+}
+
+.narrative-section-header .section-title {
+  margin-bottom: 0;
+}
+
+.load-narrative-btn {
+  background: var(--accent, #1a56db);
+  color: #fff;
+  border: none;
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: opacity 0.15s;
+}
+
+.load-narrative-btn:hover {
+  opacity: 0.85;
+}
+
+/* Loading state */
+.narrative-loading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 24px 20px;
+}
+
+.narrative-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #eee;
+  border-top-color: var(--accent, #1a56db);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.narrative-loading-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.narrative-loading-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+.narrative-loading-sub {
+  font-size: 12px;
+  color: #999;
+  font-family: var(--font-mono);
+}
+
+/* Unavailable (503) */
+.narrative-unavailable {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px;
+  background: #F8F9FA;
+  color: #666;
+}
+
+.unavailable-icon {
+  font-size: 1.2rem;
+  color: #999;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.unavailable-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 4px;
+}
+
+.unavailable-msg {
+  font-size: 12px;
+  color: #888;
+  line-height: 1.5;
+}
+
+/* Error state */
+.narrative-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px;
+  background: #FFF5F5;
+}
+
+.narrative-error-icon {
+  font-size: 1.1rem;
+  color: #ef4444;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.narrative-error-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #c0392b;
+  margin-bottom: 4px;
+}
+
+.narrative-error-msg {
+  font-size: 12px;
+  color: #e74c3c;
+  font-family: var(--font-mono);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.narrative-retry-btn {
+  background: transparent;
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s;
+}
+
+.narrative-retry-btn:hover {
+  background: #ef4444;
+  color: #fff;
+}
+
+/* Prompt to load */
+.narrative-prompt {
+  padding: 20px;
+}
+
+.narrative-prompt-text {
+  font-size: 13px;
+  color: #999;
+  line-height: 1.6;
+}
+
+/* Narrative body */
+.narrative-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.narrative-prose {
+  font-size: 14px;
+  line-height: 1.75;
+  color: #222;
+  background: #FAFBFF;
+  border-left: 3px solid var(--accent, #1a56db);
+  padding: 16px 18px;
+  border-radius: 0 6px 6px 0;
+}
+
+.narrative-prose p {
+  margin: 0;
+}
+
+/* Collapsible reasoning chain */
+.narrative-collapsible {
+  border: 1px solid #E5E5E5;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.collapsible-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 16px;
+  background: #F8F9FA;
+  border: none;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.collapsible-toggle:hover {
+  background: #EEF2FF;
+}
+
+.collapsible-label {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #555;
+}
+
+.collapsible-arrow {
+  font-size: 10px;
+  color: #aaa;
+}
+
+.collapsible-content {
+  border-top: 1px solid #E5E5E5;
+}
+
+.reasoning-content {
+  padding: 14px 16px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #FAFAFA;
+}
+
+.reasoning-pre {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #444;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Relationships list */
+.narrative-relationships {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.relationships-title {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  color: #888;
+  letter-spacing: 0.5px;
+}
+
+.relationships-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.relationship-row {
+  background: #F8F9FA;
+  border: 1px solid #E8E8E8;
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.rel-edge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rel-source,
+.rel-target {
+  font-size: 13px;
+  font-weight: 600;
+  color: #222;
+}
+
+.rel-edge-type {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: #EEF2FF;
+  color: #3730A3;
+  border: 1px solid #C7D2FE;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.rel-explanation {
+  font-size: 12px;
+  color: #555;
+  line-height: 1.5;
+}
+
+.rel-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.evidence-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #bbb;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.evidence-snippet {
+  font-size: 11px;
+  color: #777;
+  font-style: italic;
+  background: #FFF;
+  border: 1px solid #E5E5E5;
+  padding: 3px 8px;
+  border-radius: 3px;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-more {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #aaa;
 }
 </style>
