@@ -597,6 +597,13 @@ const mainThemeLevelMap = computed(() => {
   return m
 })
 
+// Maps main-theme name -> full levels entry (dominant_level + level_counts)
+const mainThemeInfoMap = computed(() => {
+  const m = new Map()
+  for (const t of (levelsData.value?.main_themes || [])) { if (t.name) m.set(t.name, t) }
+  return m
+})
+
 // Maps community_id -> levels entry (for sub-theme filtering + badging)
 const subThemeLevelMap = computed(() => {
   if (!levelsData.value?.themes) return new Map()
@@ -625,12 +632,13 @@ const toggleLevelFilter = (level) => {
   activeLevelFilters.value = next
 }
 
-// Merge dominant_level into themes that already have relevance merged in
+// Merge dominant_level + company count into themes that already have relevance merged in
 const mainThemesWithLevels = computed(() => {
-  return mainThemesWithRelevance.value.map(t => ({
-    ...t,
-    dominant_level: mainThemeLevelMap.value.get(t.name) || null
-  }))
+  return mainThemesWithRelevance.value.map(t => {
+    const info = mainThemeInfoMap.value.get(t.name)
+    const lc = info?.level_counts || {}
+    return { ...t, dominant_level: info?.dominant_level || null, company_count: lc.company || 0 }
+  })
 })
 
 // ─── Main theme filters ───────────────────────────────────────────────────────
@@ -720,12 +728,17 @@ const TIERS = [
   { key: 'company', label: 'Company' },
   { key: 'idiosyncratic', label: 'Company-specific' },
 ]
+// A multi-company theme is a Sector/Industry narrative; single-company -> Company.
+const tierOf = (mt) => {
+  if (mt.dominant_level === 'macro') return 'macro'
+  if (mt.dominant_level === 'idiosyncratic') return 'idiosyncratic'
+  if ((mt.company_count || 0) >= 2) return 'industry'
+  if ((mt.company_count || 0) === 1) return 'company'
+  return mt.dominant_level === 'industry' ? 'industry' : 'company'
+}
 const themesByTier = computed(() => {
   const buckets = { macro: [], industry: [], company: [], idiosyncratic: [] }
-  for (const mt of displayedMainThemes.value) {
-    const k = buckets[mt.dominant_level] ? mt.dominant_level : 'company'
-    buckets[k].push(mt)
-  }
+  for (const mt of displayedMainThemes.value) buckets[tierOf(mt)].push(mt)
   return buckets
 })
 
