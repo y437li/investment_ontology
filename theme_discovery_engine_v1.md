@@ -924,6 +924,74 @@ theme_summary
 naming_model
 ```
 
+## Principle — Everything Is Connected; a Theme Is a Slice
+
+In a sufficiently rich graph, every node is eventually connected to every other node. A theme is therefore NOT a hard, disjoint partition of the graph — it is a SLICE: a perspective-anchored projection of the one connected graph.
+
+A slice is defined by:
+
+- an ANCHOR — a node or a level (a macro driver, a commodity, a sector, a company, an event) that fixes the perspective;
+- a PROPAGATION rule — how far and along which edge types the slice extends from the anchor (multi-hop);
+- a FILTER — which levels / edge types are in or out of this slice.
+
+Implications:
+
+- Community detection (Louvain/Leiden, above) produces ONE default slicing of the graph by modularity. It is a convenience, not the fundamental object.
+- The factor levels (macro / industry / company / idiosyncratic) are the canonical slicing DIMENSIONS. A theme is a slice taken along an anchor at one of these levels.
+- The SAME node participates in different themes under different anchors. "One company, one theme" means: from the company's own anchor, its theme is the single coherent propagation chain around it; from a macro anchor, that company is one of many touched by a broader slice.
+- The PM chooses a slice (an anchor + depth); the engine returns the connected subgraph and its connect-the-dots narrative. Themes are queryable slices, not a fixed list.
+
+## Theme Architecture — Factor Propagation Hierarchy
+
+Communities are fine-grained sub-themes. They are organized into a top-down factor-propagation hierarchy — the structure a top-down research process uses — with four levels (dimensions):
+
+```text
+Macro driver  ->  Industry / Sector  ->  Company  ->  Company idiosyncratic
+```
+
+Level assignment (data-driven, not predefined):
+
+- Macro: `MacroIndicator` entities, macro-driver `Commodity` nodes (oil, gas, uranium, copper, gold), and broad macro `EconomicConcept` nodes (interest rates, inflation, energy transition, electricity demand). A concept is macro when it is not tied to a single company.
+- Industry / Sector: promoted from the universe `sector` field; each company belongs to exactly one sector.
+- Company: `Company` entities in the universe.
+- Idiosyncratic: `Event` nodes and any `EconomicConcept` connected to exactly one company (single-company degree), e.g. a specific lawsuit, fine, or workplace incident.
+
+Propagation edges (the layered backbone):
+
+- Macro -> Industry: structural edges (e.g. oil price `benefits` Oil & Gas) plus company exposures aggregated to the sector.
+- Industry -> Company: deterministic from the universe `sector` membership.
+- Company -> Idiosyncratic: structural edges whose other endpoint is a single-company node/event.
+
+One company, one theme:
+
+- A company belongs to exactly one sector and is anchored to one dominant macro chain (its strongest macro exposure). It appears once in the hierarchy; its detailed sub-clusters become idiosyncratic facets attached to it.
+
+Filtering:
+
+- Keep cross-level propagation edges (Macro <-> Industry <-> Company <-> Idiosyncratic) as the structural backbone.
+- Drop same-level cross-company co-occurrence noise that does not propagate.
+- Idiosyncratic nodes attach to a single company and never pollute the macro level.
+
+PM presentation:
+
+- Main themes = macro-level narratives (a small set, e.g. 5-8) — what a PM sees first.
+- Sub-themes = the industry/company/idiosyncratic facets, revealed by drilling into a main theme.
+
+Artifact: `theme_hierarchy.json` records the main themes and, for each, the macro -> industry -> company -> idiosyncratic membership.
+
+Data-breadth note (MVP caveat): a narrow, single-company corpus yields a shallow tree (one company + many idiosyncratic facets, little macro/industry breadth). The full macro -> industry -> company tree requires cross-company, cross-sector documents plus macro/commodity data. The structure is fixed; breadth fills it in.
+
+## Connect-the-Dots Narrative Reasoning
+
+For a theme (a community or a main theme) the engine connects the dots into an evidence-backed narrative:
+
+- Gather the theme's relationships (each with its edge explanation + evidence chunk ids) and source excerpts.
+- An LLM synthesizes an ORDERED reasoning sequence (the derivation order, multi-hop) and a concise narrative, grounded ONLY in the provided relationships and evidence — no outside knowledge, no investment advice.
+- The LLM's chain of thought is captured as `reasoning_chain` for audit.
+- This is interpretation metadata (section 17): it never alters discovery structure, and every claim is traceable to an edge explanation + evidence chunk.
+
+Artifact: theme narratives are written under `discovery/narratives/<community_id>.json` as `{narrative, reasoning_chain, ordered_steps, relationships}`. Both `theme_hierarchy.json` and `discovery/narratives/` are optional interpretation artifacts (present only when an LLM is configured).
+
 ---
 
 # 12. Theme Lifecycle
@@ -958,6 +1026,18 @@ MVP rule:
 
 - Single `as_of_date` demo only needs snapshots.
 - Multi-month demo should add lineage by matching communities across adjacent months.
+
+## Structural Lineage (factor hierarchy)
+
+Theme lineage has two axes:
+
+- Temporal lineage (above): how a theme evolves across snapshots (`evolves_into`, `splits_into`, `merges_into`, `renamed_as`, `revived_from`).
+- Structural lineage: how a theme sits in the factor-propagation hierarchy (section 11). Relationships:
+  - `propagates_to` — Macro driver -> Industry -> Company.
+  - `contains` — Industry -> its companies; Main theme -> its sub-themes.
+  - `has_idiosyncratic` — Company -> its company-specific facets.
+
+`theme_lineage.json` records BOTH axes, so a theme can be traced across time AND up/down the macro -> industry -> company -> idiosyncratic hierarchy. A lineage record carries `lineage_axis` (`temporal` | `structural`) and `relationship`. Single-snapshot runs may carry structural lineage even when temporal lineage is empty.
 
 ---
 

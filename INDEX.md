@@ -12,7 +12,7 @@ Rule:
 
 | Path | Purpose | Status |
 |---|---|---|
-| `theme_discovery_engine_v1.md` | Source-of-truth product, architecture, ontology, agents, validation, and implementation milestone spec. | Core |
+| `theme_discovery_engine_v1.md` | Source-of-truth product, architecture, ontology, agents, validation, and milestone spec — incl. the factor-propagation theme hierarchy (macro→industry→company→idiosyncratic), structural lineage, and connect-the-dots narrative reasoning. | Core |
 | `README.md` | Short workspace entrypoint and reading order. | Core |
 | `INDEX.md` | Maintained navigation map for this workspace. | Core |
 | `CODE_OF_CONDUCT.md` | Collaboration, evidence, code quality, research, and agent conduct rules. | Core |
