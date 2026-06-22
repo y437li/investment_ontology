@@ -42,6 +42,11 @@ agents:
       and (2) an ORDERED reasoning chain (reasoning_steps) — each step is one inference
       hop linking a source entity to a target entity, in derivation order, so the dots
       connect into a sequence. Source/target names MUST come from the relationships.
+      Each step's `claim` MUST be DIRECTIONAL and MECHANISTIC: state which way each
+      variable moves and through what channel — e.g. "rising inflation / macro pressure
+      pushes the Canadian Dollar lower (depreciation)", NOT a vague restatement like "X
+      is sensitive to Y". Always specify the sign (up/down, strengthens/pressures,
+      benefits/hurts) and the transmission mechanism. Do not just echo the edge label.
       The derivation MUST RESOLVE TO THE BOTTOM LINE: the final steps should trace the
       impact down to the affected companies' fundamentals — profitability / margins /
       earnings, cash flow, or revenue growth. If the relationships include such financial
