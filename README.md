@@ -28,6 +28,18 @@ Raw Unstructured Sources -> Cleaned Documents/Chunks -> Structured Entities/Edge
 
 The first demo should be local, reproducible, and evidence-backed.
 
+## Quickstart (local dev)
+
+```bash
+./scripts/dev_setup.sh          # create .venv (py3.11), install deps, run tests + gate
+source .venv/bin/activate
+uvicorn theme_engine.main:app --app-dir app/backend --reload   # start the backend
+python -m pytest tests/ -q                                     # run the suite
+python scripts/ci/check_consistency.py                         # spec + leakage gate
+```
+
+Implemented pipeline endpoints (M1–M2): `POST /api/runs/create`, `POST /api/data/import`, `POST /api/data/clean`, `POST /api/data/chunk`, `GET /api/runs/{id}/status`. Run artifacts are written as Parquet under `data/runs/<run_id>/discovery/` (point-in-time discovery inputs) and `validation/` (future market/fundamentals).
+
 Maintenance rule:
 
 - When adding, renaming, or materially changing a source document, config, agent, skill, or guide, update `INDEX.md`.
