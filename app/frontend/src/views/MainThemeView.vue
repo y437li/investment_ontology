@@ -57,7 +57,7 @@
         <p v-else class="narrative">{{ story.narrative }}</p>
 
         <div class="walk-bar" v-if="steps.length">
-          <span class="walk-label">Derivation (推演)</span>
+          <span class="walk-label">Derivation</span>
           <div class="walk-ctrls">
             <button @click="prevStep" :disabled="activeIdx <= 0">‹</button>
             <span class="walk-count">{{ activeIdx >= 0 ? activeIdx + 1 : '–' }} / {{ steps.length }}</span>

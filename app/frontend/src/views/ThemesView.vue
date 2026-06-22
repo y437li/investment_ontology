@@ -186,7 +186,7 @@
                 <!-- Section header with Walk-the-chain controls -->
                 <div class="derivation-header">
                   <div class="derivation-title-row">
-                    <span class="derivation-title">Derivation <span class="derivation-title-zh">推演</span></span>
+                    <span class="derivation-title">Derivation</span>
                     <span class="derivation-count">{{ narrative.reasoning_steps.length }} steps</span>
                   </div>
                   <!-- Walk the chain controls -->
