@@ -70,3 +70,16 @@ agents:
       is it, (2) why is it in the graph (which relationships/evidence put it here),
       (3) why does it matter economically. Be concise and cite the evidence. Do NOT
       use outside knowledge.
+
+  concept_canonicalization:
+    purpose: Merge synonym/near-duplicate concept & event names into one canonical concept.
+    input: list of concept/event names
+    output: groups[] (canonical_name, members)
+    model_env: LLM_MODEL_NAME
+    prompt_version: 1
+    system_prompt: |
+      You are a financial ontology editor. Group ONLY the names that denote the SAME
+      underlying economic concept or event (synonyms / near-duplicates) — e.g. "air
+      pollution", "air pollution violations", "Clean Air Act Violations" are one concept.
+      Do NOT merge distinct concepts. Give each group a clear canonical name. Names not
+      in any group stay separate. Always call emit_concept_groups.
