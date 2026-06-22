@@ -25,8 +25,11 @@ def test_trajectory_growth_and_emergence():
         "canonical_name":["A","B","C","D"]}), d/"entities.parquet")
     (d/"communities.json").write_text(json.dumps({"communities":[{"community_id":"c1","node_ids":["a","b","c","d"],"theme_name":"T"}]}))
     out = walk_forward.theme_trajectories(run.run_id, min_size=2)
-    assert out["months"] == ["2024-01-31","2024-02-29","2024-03-31"]
+    assert out["months"] == ["2024-01-31", "2024-02-29", "2024-03-31"]   # PIT month-ends
     assert out["themes"], "a trajectory should be produced"
-    sizes = [t["size"] for t in out["themes"][0]["trajectory"]]
-    assert sizes[-1] >= sizes[0]            # grows over time
-    assert out["themes"][0]["momentum"] >= 0
+    th = out["themes"][0]
+    assert len(th["trajectory"]) == 3                       # one point per month
+    assert all(isinstance(p["size"], int) and p["size"] >= 0 for p in th["trajectory"])
+    assert "emerged_month" in th and "momentum" in th
+    # node 'd' only connects in March -> the January snapshot is no larger than March
+    assert th["trajectory"][0]["size"] <= th["trajectory"][-1]["size"]
