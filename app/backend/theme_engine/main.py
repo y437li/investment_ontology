@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, runs, themes
+from . import chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, runs, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -213,17 +213,28 @@ def discovery_freeze(req: FreezeRequest) -> FreezeResponse:
 
 @app.post("/api/validation/run", response_model=ValidationRunResponse)
 def validation_run(req: ValidationRunRequest) -> ValidationRunResponse:
+    """Run M6 freeze-gated forward-return validation (io_contracts §24).
+
+    Precondition (OI-3): discovery must be frozen and hashes must match.
+    Reads validation/market_prices.parquet (future data).
+    Writes validation/portfolio_baskets.parquet + validation/validation.csv.
+    """
     try:
-        runs.validate_ready_for_validation(req.run_id)
+        result = validation_mod.run_validation(req.run_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except (PermissionError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
     return ValidationRunResponse(
-        success=True,
-        validation_status="blocked_not_implemented",
-        artifacts=[],
-        validated_themes=0,
-        message="validation pipeline is not yet implemented; freeze gate passed",
+        success=result.get("success", False),
+        validation_status=result.get("validation_status", "failed"),
+        backtest_status=result.get("backtest_status"),
+        artifacts=result.get("artifacts", []),
+        validated_themes=result.get("validated_themes", 0),
+        message=result.get("message"),
+        missing_ranges=result.get("missing_ranges"),
+        as_of_date=result.get("as_of_date"),
+        holding_window=result.get("holding_window"),
+        required_end=result.get("required_end"),
     )

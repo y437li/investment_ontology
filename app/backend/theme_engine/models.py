@@ -120,9 +120,15 @@ class ValidationRunRequest(BaseModel):
 class ValidationRunResponse(BaseModel):
     success: bool
     validation_status: str
+    backtest_status: Optional[str] = None
     artifacts: list[str]
     validated_themes: int = 0
     message: Optional[str] = None
+    # Populated when validation_status == 'blocked_insufficient_forward_data'
+    missing_ranges: Optional[list[str]] = None
+    as_of_date: Optional[str] = None
+    holding_window: Optional[str] = None
+    required_end: Optional[str] = None
 
 
 class ExtractionRunRequest(BaseModel):

@@ -8,6 +8,12 @@ forward_coverage_months:
   1M: 1
   3M: 3
 
+# Basket construction parameters.
+# basket_top_n: maximum number of top-exposed companies per theme basket.
+basket_top_n: 10
+# random_seed: deterministic seed for random-community baseline benchmark.
+random_seed: 42
+
 # Sweep/backtesting gating.
 walk_forward:
   # Explicit walk-forward schedule for a single sweep (single-snapshot mode may leave empty).
@@ -22,6 +28,7 @@ walk_forward:
 benchmarks:
   - equal_weight_universe
   - sector_equal_weight
+  - random_community_baseline
 
 metrics:
   - forward_return
