@@ -52,21 +52,21 @@
           <div class="metrics-section">
             <div class="metrics-title">Theme Metrics</div>
             <div class="metrics-grid" v-if="communityMetrics">
-              <div class="metric-card">
+              <div class="metric-card" v-if="communityMetrics.strength">
                 <div class="metric-value">{{ pct(communityMetrics.strength) }}</div>
                 <div class="metric-label">Strength</div>
                 <div class="metric-bar">
                   <div class="metric-fill" :style="{ width: pct(communityMetrics.strength) }"></div>
                 </div>
               </div>
-              <div class="metric-card">
+              <div class="metric-card" v-if="communityMetrics.cohesion">
                 <div class="metric-value">{{ pct(communityMetrics.cohesion) }}</div>
                 <div class="metric-label">Cohesion</div>
                 <div class="metric-bar">
                   <div class="metric-fill" :style="{ width: pct(communityMetrics.cohesion) }"></div>
                 </div>
               </div>
-              <div class="metric-card">
+              <div class="metric-card" v-if="communityMetrics.saturation">
                 <div class="metric-value">{{ pct(communityMetrics.saturation) }}</div>
                 <div class="metric-label">Saturation</div>
                 <div class="metric-bar">
@@ -177,6 +177,82 @@
                   <pre class="reasoning-pre">{{ narrative.reasoning_chain }}</pre>
                 </div>
               </div>
+
+              <!-- ── DERIVATION CHAIN (推演) PANEL ───────────────────────── -->
+              <div
+                class="derivation-section"
+                v-if="narrative.reasoning_steps?.length"
+              >
+                <!-- Section header with Walk-the-chain controls -->
+                <div class="derivation-header">
+                  <div class="derivation-title-row">
+                    <span class="derivation-title">Derivation <span class="derivation-title-zh">推演</span></span>
+                    <span class="derivation-count">{{ narrative.reasoning_steps.length }} steps</span>
+                  </div>
+                  <!-- Walk the chain controls -->
+                  <div class="walk-controls">
+                    <button
+                      class="walk-btn"
+                      :disabled="walkStep <= 0"
+                      @click="walkPrev"
+                      title="Previous step"
+                    >&#8592;</button>
+                    <span class="walk-label">
+                      <template v-if="walkStep >= 0">
+                        {{ walkStep + 1 }} / {{ narrative.reasoning_steps.length }}
+                      </template>
+                      <template v-else>Walk the chain</template>
+                    </span>
+                    <button
+                      class="walk-btn"
+                      :disabled="walkStep >= narrative.reasoning_steps.length - 1"
+                      @click="walkNext"
+                      title="Next step"
+                    >&#8594;</button>
+                    <button
+                      class="walk-reset-btn"
+                      v-if="walkStep >= 0"
+                      @click="walkReset"
+                      title="Clear highlight"
+                    >&#10005;</button>
+                  </div>
+                </div>
+
+                <!-- Ordered step list -->
+                <div class="derivation-list">
+                  <div
+                    v-for="step in sortedReasoningSteps"
+                    :key="step.order"
+                    class="derivation-row"
+                    :class="{
+                      'derivation-row--active': activeDerivationStep === step.order,
+                      'derivation-row--dimmed': activeDerivationStep !== null && activeDerivationStep !== step.order
+                    }"
+                    @mouseenter="hoverDerivationStep(step)"
+                    @mouseleave="unhoverDerivationStep"
+                    @click="clickDerivationStep(step)"
+                  >
+                    <div class="derivation-step-num">{{ step.order }}</div>
+                    <div class="derivation-step-body">
+                      <div class="derivation-step-edge">
+                        <span class="deriv-source">{{ step.source }}</span>
+                        <span class="deriv-arrow">--</span>
+                        <span class="deriv-edge-type">{{ step.edge_type }}</span>
+                        <span class="deriv-arrow">--&gt;</span>
+                        <span class="deriv-target">{{ step.target }}</span>
+                        <span
+                          v-if="step.provenance"
+                          class="deriv-prov"
+                          :class="`prov-${step.provenance}`"
+                          :title="step.provenance === 'document_stated' ? 'Backed by document evidence' : 'Model inference (not directly stated)'"
+                        >{{ step.provenance === 'document_stated' ? 'evidence' : 'inferred' }}</span>
+                      </div>
+                      <div class="derivation-step-claim">{{ step.claim }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <!-- ── END DERIVATION CHAIN ─────────────────────────────── -->
 
               <!-- Supporting relationships -->
               <div class="narrative-relationships" v-if="narrative.relationships?.length">
@@ -346,6 +422,17 @@ const narrativeError = ref('')
 const narrativeLlmUnconfigured = ref(false)
 const reasoningOpen = ref(false)
 
+// ─── Derivation chain state ───────────────────────────────────────────────────
+// activeDerivationStep: the step.order currently highlighted (null = none)
+const activeDerivationStep = ref(null)
+// walkStep: current walk position (-1 = not started, 0..n-1 = step index)
+const walkStep = ref(-1)
+
+const sortedReasoningSteps = computed(() => {
+  if (!narrative.value?.reasoning_steps?.length) return []
+  return [...narrative.value.reasoning_steps].sort((a, b) => a.order - b.order)
+})
+
 // ─── Subgraph refs ────────────────────────────────────────────────────────────
 const subgraphContainer = ref(null)
 const subgraphSvg = ref(null)
@@ -367,6 +454,8 @@ const selectCommunity = (c) => {
   narrativeError.value = ''
   narrativeLlmUnconfigured.value = false
   reasoningOpen.value = false
+  activeDerivationStep.value = null
+  walkStep.value = -1
   clearSubgraph()
   closeNodeProfile()
 }
@@ -405,6 +494,8 @@ const loadNarrative = async () => {
   narrativeError.value = ''
   narrativeLlmUnconfigured.value = false
   reasoningOpen.value = false
+  activeDerivationStep.value = null
+  walkStep.value = -1
   try {
     const result = await getCommunityNarrative(props.runId, selectedCommunity.value.community_id)
     narrative.value = result
@@ -418,6 +509,161 @@ const loadNarrative = async () => {
   } finally {
     narrativeLoading.value = false
   }
+}
+
+// ─── Derivation chain interactivity ──────────────────────────────────────────
+
+/**
+ * Highlight a derivation step on the subgraph by emphasizing source/target nodes
+ * and the edge between them, dimming everything else.
+ * @param {object|null} step - reasoning step or null to restore
+ */
+const highlightDerivationOnGraph = (step) => {
+  if (!subgraphSvg.value) return
+  const svg = d3.select(subgraphSvg.value)
+
+  if (!step) {
+    // Restore all nodes and edges to default appearance
+    svg.selectAll('circle')
+      .attr('opacity', 1)
+      .attr('stroke', '#fff')
+      .attr('stroke-width', 2)
+      .attr('r', 9)
+    svg.selectAll('line')
+      .attr('opacity', 1)
+      .attr('stroke', '#d0d0d0')
+      .attr('stroke-width', 1.5)
+    svg.selectAll('text.nl')
+      .attr('opacity', 1)
+    svg.selectAll('text.el')
+      .attr('opacity', 1)
+    svg.selectAll('rect.elb')
+      .attr('opacity', 1)
+    return
+  }
+
+  const srcId = step.source_id != null ? String(step.source_id) : step.source
+  const tgtId = step.target_id != null ? String(step.target_id) : step.target
+
+  // Dim all nodes, then highlight matched ones
+  svg.selectAll('circle')
+    .attr('opacity', (d) => {
+      if (d.id === srcId || d.id === tgtId) return 1
+      return 0.18
+    })
+    .attr('stroke', (d) => {
+      if (d.id === srcId) return '#f59e0b'   // amber for source
+      if (d.id === tgtId) return '#10b981'   // green for target
+      return '#fff'
+    })
+    .attr('stroke-width', (d) => {
+      if (d.id === srcId || d.id === tgtId) return 3.5
+      return 2
+    })
+    .attr('r', (d) => {
+      if (d.id === srcId || d.id === tgtId) return 11
+      return 9
+    })
+
+  // Dim all node labels
+  svg.selectAll('text.nl')
+    .attr('opacity', (d) => {
+      if (d.id === srcId || d.id === tgtId) return 1
+      return 0.18
+    })
+
+  // Highlight the edge between source and target; dim others
+  svg.selectAll('line')
+    .attr('opacity', (d) => {
+      const s = typeof d.source === 'object' ? d.source.id : d.source
+      const t = typeof d.target === 'object' ? d.target.id : d.target
+      if ((s === srcId && t === tgtId) || (s === tgtId && t === srcId)) return 1
+      return 0.1
+    })
+    .attr('stroke', (d) => {
+      const s = typeof d.source === 'object' ? d.source.id : d.source
+      const t = typeof d.target === 'object' ? d.target.id : d.target
+      if ((s === srcId && t === tgtId) || (s === tgtId && t === srcId)) return '#f59e0b'
+      return '#d0d0d0'
+    })
+    .attr('stroke-width', (d) => {
+      const s = typeof d.source === 'object' ? d.source.id : d.source
+      const t = typeof d.target === 'object' ? d.target.id : d.target
+      if ((s === srcId && t === tgtId) || (s === tgtId && t === srcId)) return 3
+      return 1.5
+    })
+
+  // Dim edge labels
+  svg.selectAll('text.el')
+    .attr('opacity', (d) => {
+      const s = typeof d.source === 'object' ? d.source.id : d.source
+      const t = typeof d.target === 'object' ? d.target.id : d.target
+      if ((s === srcId && t === tgtId) || (s === tgtId && t === srcId)) return 1
+      return 0.1
+    })
+  svg.selectAll('rect.elb')
+    .attr('opacity', (d) => {
+      const s = typeof d.source === 'object' ? d.source.id : d.source
+      const t = typeof d.target === 'object' ? d.target.id : d.target
+      if ((s === srcId && t === tgtId) || (s === tgtId && t === srcId)) return 1
+      return 0.1
+    })
+}
+
+const hoverDerivationStep = (step) => {
+  // Only highlight on hover if no step is actively clicked/walked
+  if (activeDerivationStep.value === null) {
+    highlightDerivationOnGraph(step)
+  }
+}
+
+const unhoverDerivationStep = () => {
+  // Only restore on unhover if no step is actively clicked/walked
+  if (activeDerivationStep.value === null) {
+    highlightDerivationOnGraph(null)
+  }
+}
+
+const clickDerivationStep = (step) => {
+  if (activeDerivationStep.value === step.order) {
+    // Clicking the active step deselects it
+    activeDerivationStep.value = null
+    walkStep.value = -1
+    highlightDerivationOnGraph(null)
+  } else {
+    activeDerivationStep.value = step.order
+    // Sync walkStep index
+    const idx = sortedReasoningSteps.value.findIndex(s => s.order === step.order)
+    walkStep.value = idx
+    highlightDerivationOnGraph(step)
+  }
+}
+
+// ─── Walk the chain controls ──────────────────────────────────────────────────
+const walkNext = () => {
+  const steps = sortedReasoningSteps.value
+  if (!steps.length) return
+  const nextIdx = walkStep.value < 0 ? 0 : Math.min(walkStep.value + 1, steps.length - 1)
+  walkStep.value = nextIdx
+  const step = steps[nextIdx]
+  activeDerivationStep.value = step.order
+  highlightDerivationOnGraph(step)
+}
+
+const walkPrev = () => {
+  const steps = sortedReasoningSteps.value
+  if (!steps.length || walkStep.value <= 0) return
+  const prevIdx = walkStep.value - 1
+  walkStep.value = prevIdx
+  const step = steps[prevIdx]
+  activeDerivationStep.value = step.order
+  highlightDerivationOnGraph(step)
+}
+
+const walkReset = () => {
+  walkStep.value = -1
+  activeDerivationStep.value = null
+  highlightDerivationOnGraph(null)
 }
 
 // ─── Subgraph helpers ─────────────────────────────────────────────────────────
@@ -564,6 +810,11 @@ const renderSubgraph = () => {
     )
     .on('click', (event, d) => {
       event.stopPropagation()
+      // If a derivation step is active, clear it first on node click
+      if (activeDerivationStep.value !== null) {
+        activeDerivationStep.value = null
+        walkStep.value = -1
+      }
       node.attr('stroke', '#fff').attr('stroke-width', 2)
       d3.select(event.target).attr('stroke', '#1a56db').attr('stroke-width', 3.5)
       fetchNodeProfile(d.id)
@@ -604,8 +855,20 @@ const renderSubgraph = () => {
   })
 
   svg.on('click', () => {
-    node.attr('stroke', '#fff').attr('stroke-width', 2)
+    // Restore graph default only if no derivation step is holding the highlight
+    if (activeDerivationStep.value === null) {
+      node.attr('stroke', '#fff').attr('stroke-width', 2)
+    }
   })
+
+  // If a derivation step is already active when graph re-renders (e.g. after walk),
+  // re-apply the highlight once the simulation has settled a bit
+  if (activeDerivationStep.value !== null) {
+    const step = sortedReasoningSteps.value.find(s => s.order === activeDerivationStep.value)
+    if (step) {
+      setTimeout(() => highlightDerivationOnGraph(step), 600)
+    }
+  }
 }
 
 // Watch for narrative changes to re-render subgraph
@@ -1281,6 +1544,225 @@ onMounted(loadData)
   margin: 0;
 }
 
+/* ── Derivation chain section ── */
+.derivation-section {
+  border: 1px solid #E5E5E5;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #FAFBFF;
+}
+
+.derivation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #F0F4FF;
+  border-bottom: 1px solid #DDE4F8;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.derivation-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.derivation-title {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #3730A3;
+}
+
+.derivation-title-zh {
+  font-family: system-ui, sans-serif;
+  font-size: 11px;
+  color: #7c7cb5;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.derivation-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #999;
+  background: #E5E7FA;
+  padding: 1px 7px;
+  border-radius: 8px;
+}
+
+/* Walk the chain controls */
+.walk-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.walk-btn {
+  background: #FFF;
+  border: 1px solid #C7D2FE;
+  color: #3730A3;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+
+.walk-btn:hover:not(:disabled) {
+  background: #EEF2FF;
+}
+
+.walk-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.walk-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #555;
+  min-width: 90px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.walk-reset-btn {
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: color 0.12s;
+  line-height: 1;
+}
+
+.walk-reset-btn:hover {
+  color: #ef4444;
+}
+
+/* Derivation step list */
+.derivation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.derivation-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 11px 16px;
+  border-bottom: 1px solid #EEF0FB;
+  cursor: pointer;
+  transition: background 0.12s, opacity 0.2s;
+  background: transparent;
+}
+
+.derivation-row:last-child {
+  border-bottom: none;
+}
+
+.derivation-row:hover {
+  background: #EEF2FF;
+}
+
+.derivation-row--active {
+  background: #EEF2FF;
+  border-left: 3px solid #f59e0b;
+}
+
+.derivation-row--dimmed {
+  opacity: 0.38;
+}
+
+.derivation-step-num {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  background: #DDE4F8;
+  color: #3730A3;
+  border-radius: 50%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.derivation-row--active .derivation-step-num {
+  background: #f59e0b;
+  color: #fff;
+}
+
+.derivation-step-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.derivation-step-edge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.deriv-source,
+.deriv-target {
+  font-size: 12px;
+  font-weight: 600;
+  color: #222;
+  white-space: nowrap;
+}
+
+.deriv-arrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #bbb;
+  white-space: nowrap;
+}
+
+.deriv-edge-type {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: #EEF2FF;
+  color: #3730A3;
+  border: 1px solid #C7D2FE;
+  padding: 1px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.derivation-row--active .deriv-edge-type {
+  background: #FEF3C7;
+  color: #92400E;
+  border-color: #FDE68A;
+}
+
+.derivation-step-claim {
+  font-size: 12px;
+  color: #555;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
 /* Relationships list */
 .narrative-relationships {
   display: flex;
@@ -1646,6 +2128,12 @@ onMounted(loadData)
 
 .dir-out { background: #ECFDF5; color: #065F46; }
 .dir-in  { background: #EEF2FF; color: #3730A3; }
+
+/* Reasoning-step provenance badge: evidence-backed vs model inference. */
+.deriv-prov { margin-left: 6px; padding: 1px 6px; border-radius: 3px; font-size: 0.65rem;
+  font-family: var(--font-mono); font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
+.prov-document_stated { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; }
+.prov-llm_inferred    { background: #FFF7ED; color: #C2410C; border: 1px solid #FED7AA; }
 
 .why-edge-type {
   font-family: var(--font-mono);
