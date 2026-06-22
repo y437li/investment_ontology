@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, runs, themes, validation as validation_mod
+from . import chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, report as report_mod, runs, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -33,6 +33,8 @@ from .models import (
     ThemeDiscoverResponse,
     ExposureComputeRequest,
     ExposureComputeResponse,
+    ReportGenerateRequest,
+    ReportGenerateResponse,
 )
 
 app = FastAPI(title="Theme Discovery Engine", version="0.1.0")
@@ -237,4 +239,35 @@ def validation_run(req: ValidationRunRequest) -> ValidationRunResponse:
         as_of_date=result.get("as_of_date"),
         holding_window=result.get("holding_window"),
         required_end=result.get("required_end"),
+    )
+
+
+@app.post("/api/report/generate", response_model=ReportGenerateResponse)
+def report_generate(req: ReportGenerateRequest) -> ReportGenerateResponse:
+    """Generate a research report from existing run artifacts (M7, io_contracts §23).
+
+    Assembles report.md deterministically from:
+      - run_manifest.json
+      - discovery/communities.json
+      - discovery/theme_snapshots.json
+      - discovery/theme_metrics.parquet
+      - discovery/company_theme_exposure.parquet
+      - validation/validation.csv (optional)
+
+    No new discovery or validation computation is performed.
+    Every key claim references a specific artifact.
+    Carries the single-snapshot / illustrative caveat per spec §2.
+    """
+    try:
+        report_path = report_mod.generate_report(run_id=req.run_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    relative_path = f"data/runs/{req.run_id}/report.md"
+    return ReportGenerateResponse(
+        success=True,
+        artifact="report.md",
+        report_path=relative_path,
     )
