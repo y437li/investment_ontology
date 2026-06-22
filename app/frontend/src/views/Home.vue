@@ -88,6 +88,18 @@
                 <span class="toggle-slider"></span>
               </span>
             </label>
+
+            <!-- Factor-level filter chips (only when /levels data is available) -->
+            <div class="level-filter-chips" v-if="levelsData">
+              <span class="level-chips-label">Level:</span>
+              <button
+                v-for="lvl in ['macro', 'industry', 'company', 'idiosyncratic']"
+                :key="lvl"
+                class="level-chip"
+                :class="[`level-chip-${lvl}`, { active: activeLevelFilters.has(lvl) }]"
+                @click="toggleLevelFilter(lvl)"
+              >{{ lvl }}</button>
+            </div>
           </div>
         </div>
 
@@ -116,6 +128,13 @@
             <div class="card-top">
               <div class="card-sub-count">{{ mt.sub_theme_ids.length }} sub-themes</div>
               <div class="card-top-right">
+                <!-- Factor-level badge (from /levels) -->
+                <span
+                  v-if="mt.dominant_level"
+                  class="level-badge"
+                  :class="`level-badge-${mt.dominant_level}`"
+                  :title="`Dominant factor level: ${mt.dominant_level}`"
+                >{{ mt.dominant_level }}</span>
                 <!-- State badge (from relevance) -->
                 <span
                   v-if="mt.state"
@@ -173,10 +192,15 @@
 
             <!-- Expanded sub-themes list -->
             <div v-if="expandedTheme === mt.name" class="sub-themes-panel" @click.stop>
-              <div class="sub-themes-header">Sub-themes</div>
+              <div class="sub-themes-header">
+                Sub-themes
+                <span v-if="levelsData && substantiveSubIds(mt).length < mt.sub_theme_ids.length" class="sub-themes-noise-note">
+                  ({{ mt.sub_theme_ids.length - substantiveSubIds(mt).length }} low-signal hidden)
+                </span>
+              </div>
               <div class="sub-themes-list">
                 <div
-                  v-for="sid in mt.sub_theme_ids"
+                  v-for="sid in substantiveSubIds(mt)"
                   :key="sid"
                   class="sub-theme-row"
                   @click.stop="openSubTheme(sid)"
@@ -184,6 +208,13 @@
                   <div class="sub-theme-info">
                     <div class="sub-theme-name-row">
                       <div class="sub-theme-name">{{ subThemeName(sid) }}</div>
+                      <!-- Sub-theme dominant_level badge -->
+                      <span
+                        v-if="subThemeDominantLevel(sid)"
+                        class="level-badge level-badge-sm"
+                        :class="`level-badge-${subThemeDominantLevel(sid)}`"
+                        :title="`Dominant factor level: ${subThemeDominantLevel(sid)}`"
+                      >{{ subThemeDominantLevel(sid) }}</span>
                       <!-- Sub-theme state badge from relevance -->
                       <span
                         v-if="subThemeState(sid)"
@@ -366,7 +397,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listRuns } from '../api/runs.js'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
-import { getThemeHierarchy, buildThemeHierarchy, getThemeRelevance } from '../api/themes.js'
+import { getThemeHierarchy, buildThemeHierarchy, getThemeRelevance, getThemeLevels } from '../api/themes.js'
 
 const router = useRouter()
 
@@ -388,6 +419,10 @@ const hierarchyNotBuilt = ref(false)
 // Temporal relevance
 const relevanceData = ref(null)   // full relevance response
 const relevanceLoaded = ref(false)
+
+// Factor levels
+const levelsData = ref(null)      // full levels response
+const activeLevelFilters = ref(new Set(['macro', 'industry', 'company', 'idiosyncratic']))
 
 // Expand/drill-in state
 const expandedTheme = ref(null)
@@ -537,9 +572,56 @@ const mainThemesWithRelevance = computed(() => {
   return merged
 })
 
+// ─── Factor levels lookup ─────────────────────────────────────────────────────
+// Maps main-theme name -> dominant_level (from /levels response)
+const mainThemeLevelMap = computed(() => {
+  if (!levelsData.value?.main_themes) return new Map()
+  const m = new Map()
+  for (const t of levelsData.value.main_themes) {
+    if (t.name && t.dominant_level) m.set(t.name, t.dominant_level)
+  }
+  return m
+})
+
+// Maps community_id -> levels entry (for sub-theme filtering + badging)
+const subThemeLevelMap = computed(() => {
+  if (!levelsData.value?.themes) return new Map()
+  const m = new Map()
+  for (const t of levelsData.value.themes) {
+    m.set(t.community_id, t)
+  }
+  return m
+})
+
+const FACTOR_LEVELS = ['macro', 'industry', 'company', 'idiosyncratic']
+
+const allLevelFiltersActive = computed(() =>
+  FACTOR_LEVELS.every(l => activeLevelFilters.value.has(l))
+)
+
+const toggleLevelFilter = (level) => {
+  const next = new Set(activeLevelFilters.value)
+  if (next.has(level)) {
+    // Don't allow deselecting the last active filter
+    if (next.size === 1) return
+    next.delete(level)
+  } else {
+    next.add(level)
+  }
+  activeLevelFilters.value = next
+}
+
+// Merge dominant_level into themes that already have relevance merged in
+const mainThemesWithLevels = computed(() => {
+  return mainThemesWithRelevance.value.map(t => ({
+    ...t,
+    dominant_level: mainThemeLevelMap.value.get(t.name) || null
+  }))
+})
+
 // ─── Main theme filters ───────────────────────────────────────────────────────
 const displayedMainThemes = computed(() => {
-  let themes = mainThemesWithRelevance.value
+  let themes = mainThemesWithLevels.value
 
   // Hide dormant (default ON, only when relevance data is available)
   if (hideDormant.value && relevanceLoaded.value) {
@@ -558,8 +640,35 @@ const displayedMainThemes = computed(() => {
     })
   }
 
+  // Factor-level filter (only when levels data is available and not all selected)
+  if (levelsData.value && !allLevelFiltersActive.value) {
+    themes = themes.filter(t =>
+      !t.dominant_level || activeLevelFilters.value.has(t.dominant_level)
+    )
+  }
+
   return themes
 })
+
+// ─── Sub-theme level helpers ──────────────────────────────────────────────────
+// Returns the dominant_level for a sub-theme community
+const subThemeDominantLevel = (communityId) => {
+  return subThemeLevelMap.value.get(communityId)?.dominant_level || null
+}
+
+// Returns true if a sub-theme is substantive (no /levels data = assume substantive)
+const subThemeIsSubstantive = (communityId) => {
+  if (!levelsData.value) return true
+  const entry = subThemeLevelMap.value.get(communityId)
+  if (!entry) return true  // not in levels data, show it
+  return entry.substantive !== false
+}
+
+// Filter a main theme's sub_theme_ids to only substantive ones
+const substantiveSubIds = (mt) => {
+  if (!levelsData.value) return mt.sub_theme_ids
+  return mt.sub_theme_ids.filter(sid => subThemeIsSubstantive(sid))
+}
 
 // ─── Expand/drill-in ─────────────────────────────────────────────────────────
 const toggleExpand = (mt) => {
@@ -708,6 +817,8 @@ const bootstrap = async () => {
   buildError.value = ''
   relevanceData.value = null
   relevanceLoaded.value = false
+  levelsData.value = null
+  activeLevelFilters.value = new Set(['macro', 'industry', 'company', 'idiosyncratic'])
 
   try {
     const runs = await listRuns()
@@ -721,14 +832,15 @@ const bootstrap = async () => {
     currentRun.value = frozen || runs[0]
     const runId = currentRun.value.run_id
 
-    // Load communities in parallel with trying to get the hierarchy + relevance
-    const [commRes, snapRes, metricsRes, expRes, hierarchyRes, relevanceRes] = await Promise.allSettled([
+    // Load communities in parallel with trying to get the hierarchy + relevance + levels
+    const [commRes, snapRes, metricsRes, expRes, hierarchyRes, relevanceRes, levelsRes] = await Promise.allSettled([
       getCommunitiesJson(runId),
       getThemeSnapshots(runId),
       getThemeMetrics(runId),
       getCompanyThemeExposure(runId),
       getThemeHierarchy(runId),
-      getThemeRelevance(runId)
+      getThemeRelevance(runId),
+      getThemeLevels(runId)
     ])
 
     communities.value = commRes.status === 'fulfilled' ? (commRes.value?.communities || []) : []
@@ -747,6 +859,11 @@ const bootstrap = async () => {
     if (relevanceRes.status === 'fulfilled' && relevanceRes.value) {
       relevanceData.value = relevanceRes.value
       relevanceLoaded.value = true
+    }
+
+    // Levels is optional — gracefully skip if unavailable
+    if (levelsRes.status === 'fulfilled' && levelsRes.value) {
+      levelsData.value = levelsRes.value
     }
   } catch (err) {
     loadError.value = err?.response?.data?.detail || err.message || 'Failed to load snapshot'
@@ -1139,6 +1256,80 @@ onMounted(() => {
 .state-mature    { background: #dbeafe; color: #1e40af; }
 .state-declining { background: #fef3c7; color: #92400e; }
 .state-dormant   { background: #f3f4f6; color: #6b7280; }
+
+/* ── Factor-level filter chips ── */
+.level-filter-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.level-chips-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: #999;
+  white-space: nowrap;
+}
+
+.level-chip {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: lowercase;
+  cursor: pointer;
+  color: #888;
+  border-radius: 2px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.level-chip:hover:not(.active) {
+  border-color: #999;
+  color: #555;
+}
+
+.level-chip-macro.active         { background: #eff6ff; border-color: #3b82f6; color: #1d4ed8; }
+.level-chip-industry.active      { background: #f0fdf4; border-color: #22c55e; color: #15803d; }
+.level-chip-company.active       { background: #fdf4ff; border-color: #a855f7; color: #7e22ce; }
+.level-chip-idiosyncratic.active { background: #fff7ed; border-color: #f97316; color: #c2410c; }
+
+/* ── Factor-level badge (on cards and sub-theme rows) ── */
+.level-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  border-radius: 2px;
+  text-transform: lowercase;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.level-badge-sm {
+  font-size: 0.58rem;
+  padding: 1px 5px;
+}
+
+.level-badge-macro         { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+.level-badge-industry      { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
+.level-badge-company       { background: #fdf4ff; border-color: #e9d5ff; color: #7e22ce; }
+.level-badge-idiosyncratic { background: #fff7ed; border-color: #fed7aa; color: #c2410c; }
+
+/* ── Sub-themes noise note ── */
+.sub-themes-noise-note {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: #bbb;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 6px;
+}
 
 /* ── Relevance bar ── */
 .relevance-bar-wrap {

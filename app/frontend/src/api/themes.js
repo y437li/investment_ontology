@@ -47,3 +47,16 @@ export function getThemeRelevance(runId) {
 export function getNodeProfile(runId, entityId) {
   return service.get(`/api/themes/${runId}/nodes/${entityId}/profile`)
 }
+
+/**
+ * Fetch factor-level breakdown for all themes in a run.
+ * Returns {
+ *   factor_levels: ["macro","industry","company","idiosyncratic"],
+ *   themes: [{community_id, level_counts:{macro:n,...}, dominant_level, size, strength, substantive}],
+ *   main_themes: [{name, level_counts, dominant_level, substantive_sub_count}]
+ * }
+ * Gracefully fails: callers should catch and treat as unavailable.
+ */
+export function getThemeLevels(runId) {
+  return service.get(`/api/themes/${runId}/levels`)
+}
