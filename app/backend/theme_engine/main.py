@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -157,6 +157,13 @@ def extraction_resolve(req: ExtractionResolveRequest) -> ExtractionResolveRespon
         artifacts=["discovery/entity_aliases.parquet"],
         alias_count=alias_count,
     )
+
+
+@app.post("/api/macro/integrate")
+def macro_integrate(req: GraphBuildRequest):
+    """Integrate point-in-time macro series as MacroIndicator nodes + structural
+    edges to sensitive-sector companies. Run after extraction/resolve, before graph/build."""
+    return macro_adapter.integrate_macro(req.run_id)
 
 
 @app.post("/api/graph/build", response_model=GraphBuildResponse)

@@ -1,0 +1,44 @@
+# Macro series integrated as MacroIndicator nodes with structural edges to
+# companies in sensitive sectors. The sector sensitivities are config-driven
+# FACTOR exposures (structural finance, not predefined themes); the edges are
+# metadata_inferred and labeled as such. The macro VALUE is evidence (source +
+# point-in-time vintage). Edit here to add/adjust macro coverage — not in code.
+version: 1
+release_lag_days: 35   # FRED monthly data is released ~1 month after the reference month
+
+series:
+  - id: us_fed_funds
+    label: US Fed Funds Rate
+    csv: data/inputs/market/macro/FEDFUNDS.csv
+    date_col: observation_date
+    value_col: FEDFUNDS
+    unit: "%"
+    sensitivities:
+      - {sector: Financials, edge_type: benefits, rationale: higher policy rates widen bank net interest margins}
+      - {sector: Utilities,  edge_type: hurts,    rationale: higher rates raise financing and discount-rate costs}
+
+  - id: ca_policy_rate
+    label: Canada Policy Rate (BoC)
+    csv: data/inputs/market/macro_ca/policy_rate.csv
+    lag_days: 2          # BoC series is daily
+    sensitivities:
+      - {sector: Financials, edge_type: benefits, rationale: BoC policy rate drives Canadian bank margins and loan demand}
+
+  - id: us_cpi
+    label: US CPI Inflation
+    csv: data/inputs/market/macro/CPIAUCSL.csv
+    date_col: observation_date
+    value_col: CPIAUCSL
+    unit: index
+    sensitivities:
+      - {sector: Energy,    edge_type: benefits, rationale: inflation tends to track higher energy and commodity prices}
+      - {sector: Materials, edge_type: benefits, rationale: inflation tends to lift materials and commodity prices}
+
+  - id: us_unemployment
+    label: US Unemployment Rate
+    csv: data/inputs/market/macro/UNRATE.csv
+    date_col: observation_date
+    value_col: UNRATE
+    unit: "%"
+    sensitivities:
+      - {sector: Financials, edge_type: hurts, rationale: rising unemployment raises bank credit losses}
