@@ -26,6 +26,8 @@ duplicates, and future documents (``available_at > as_of_date``).
 from __future__ import annotations
 
 import hashlib
+import html
+import html.parser
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,6 +93,7 @@ CLEANING_LOG_COLUMNS: list[str] = [
 ]
 
 # Deterministic cleaning rule ids (stable for audit).
+RULE_HTML_EXTRACT = "html_extract"
 RULE_NORMALIZE_LINE_ENDINGS = "norm_line_endings_v1"
 RULE_NORMALIZE_WHITESPACE = "norm_whitespace_v1"
 RULE_STRIP_PAGE_NUMBERS = "strip_page_numbers_v1"
@@ -103,6 +106,118 @@ _PAGE_NUMBER_PATTERNS = [
     re.compile(r"^\s*page\s+\d+(\s+of\s+\d+)?\s*$", re.I),    # "Page 3 of 10"
     re.compile(r"^\s*\d+\s*/\s*\d+\s*$"),                     # "3 / 10"
 ]
+
+
+# Patterns that identify EDGAR SGML wrapper tags (case-insensitive, line-level).
+_SGML_WRAPPER_TAG_RE = re.compile(
+    r"^<(DOCUMENT|TYPE|SEQUENCE|FILENAME|DESCRIPTION|TEXT|/DOCUMENT|/TEXT)\b.*",
+    re.IGNORECASE,
+)
+
+# Sniff patterns: we treat content as HTML/SGML when the raw text begins with
+# any of these tokens (after stripping leading whitespace).
+_HTML_SNIFF_RE = re.compile(
+    r"^\s*(<DOCUMENT\b|<html\b|<!DOCTYPE\b|<\?xml\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_html_sgml(raw_text: str, raw_path: str = "") -> bool:
+    """Return True when the content should be treated as HTML/SGML.
+
+    Detection is by file extension (.htm/.html) or a content sniff for the
+    leading tokens used by EDGAR filings and standard HTML/XML documents.
+    """
+    ext = Path(raw_path).suffix.lower()
+    if ext in (".htm", ".html"):
+        return True
+    return bool(_HTML_SNIFF_RE.match(raw_text))
+
+
+class _TextExtractor(html.parser.HTMLParser):
+    """Minimal stdlib HTML parser that collects visible text, skipping
+    <script> and <style> blocks.  Deterministic: produces the same output
+    for identical input."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._skip_depth: int = 0  # depth counter for skip-tags
+        self._SKIP_TAGS = frozenset(("script", "style"))
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag.lower() in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in self._SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0:
+            self._parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self._parts)
+
+
+def _extract_html_text(raw_text: str) -> str:
+    """Extract readable plain text from an HTML/SGML document.
+
+    Steps (all deterministic, meaning-preserving):
+    1. Strip EDGAR SGML wrapper lines (<DOCUMENT>, <TYPE>, <SEQUENCE> etc.)
+       that sit outside any HTML block.
+    2. Feed the remaining content through a stdlib HTML parser that collects
+       visible text while skipping <script>/<style> blocks.
+    3. Decode any residual HTML entities (html.unescape).
+    4. Collapse runs of whitespace and blank lines.
+    """
+    # --- Step 1: strip EDGAR SGML wrapper lines --------------------------
+    # EDGAR wraps HTML filings in an outer SGML envelope.  Lines that are
+    # purely SGML wrapper tags are removed; everything else is kept verbatim
+    # so the HTML parser can see the real markup.
+    stripped_lines: list[str] = []
+    for line in raw_text.split("\n"):
+        stripped = line.strip()
+        if _SGML_WRAPPER_TAG_RE.match(stripped):
+            continue
+        stripped_lines.append(line)
+    sgml_stripped = "\n".join(stripped_lines)
+
+    # --- Step 2: parse HTML and collect visible text ----------------------
+    parser = _TextExtractor()
+    # Feed the content; errors in malformed HTML are tolerated (HTMLParser
+    # is lenient by default).
+    try:
+        parser.feed(sgml_stripped)
+    except Exception:
+        # Fallback: strip all tags with a regex if the parser throws.
+        sgml_stripped = re.sub(r"<[^>]+>", " ", sgml_stripped)
+        return html.unescape(sgml_stripped)
+
+    extracted = parser.get_text()
+
+    # --- Step 3: decode residual HTML entities ----------------------------
+    extracted = html.unescape(extracted)
+
+    # --- Step 4: collapse whitespace / blank lines -----------------------
+    # Replace non-newline whitespace runs with a single space, then
+    # collapse 2+ consecutive blank lines to one.
+    lines = extracted.split("\n")
+    normalised: list[str] = []
+    for line in lines:
+        normalised.append(re.sub(r"[ \t]+", " ", line).strip())
+    out: list[str] = []
+    blank_run = 0
+    for line in normalised:
+        if line == "":
+            blank_run += 1
+            if blank_run <= 1:
+                out.append(line)
+        else:
+            blank_run = 0
+            out.append(line)
+    return "\n".join(out).strip("\n")
 
 
 def _sha256_text(text: str) -> str:
@@ -191,10 +306,24 @@ def _strip_repeated_headers(text: str) -> tuple[str, int]:
     return "\n".join(kept), removed
 
 
-def _clean_text(raw_text: str) -> tuple[str, list[dict]]:
+def _clean_text(raw_text: str, raw_path: str = "") -> tuple[str, list[dict]]:
     """Apply deterministic cleaning steps, returning the cleaned text and a
     list of per-step action descriptors for the cleaning log."""
     actions: list[dict] = []
+
+    # --- Pre-step: HTML/SGML extraction (runs before normalization) -------
+    if _is_html_sgml(raw_text, raw_path):
+        extracted = _extract_html_text(raw_text)
+        actions.append(
+            {
+                "cleaning_step": "html_extract",
+                "action_type": "extract",
+                "rule_id": RULE_HTML_EXTRACT,
+                "before": raw_text,
+                "after": extracted,
+            }
+        )
+        raw_text = extracted
 
     step_text = _normalize_line_endings(raw_text)
     actions.append(
@@ -375,7 +504,7 @@ def clean_documents(
             continue
 
         # --- Clean (deterministic).
-        clean_text, actions = _clean_text(raw_text)
+        clean_text, actions = _clean_text(raw_text, raw_path=raw_path_value)
         clean_content_hash = _sha256_text(clean_text)
 
         # --- Quarantine: duplicate (same cleaned content).
