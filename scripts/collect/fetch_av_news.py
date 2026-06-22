@@ -25,7 +25,10 @@ OUT = REPO / "data" / "inputs" / "documents" / "news"
 VINTAGE = "2026-06-22T00:00:00Z"
 AS_OF = "2024-06-30"
 TIME_FROM, TIME_TO = "20240101T0000", "20240630T2359"
-TICKERS = ["SU", "ENB", "CNQ", "RY", "BNS"]
+# Cross-sector TSX cross-listed names (US-listed symbols): energy, banks,
+# uranium, fertilizer, gold/mining, tech. Already-collected tickers are skipped.
+TICKERS = ["SU", "ENB", "CNQ", "RY", "BNS",
+           "TD", "BMO", "CVE", "CCJ", "NTR", "GOLD", "TECK", "SHOP"]
 MAX_PER_TICKER = 50
 RELEVANCE_MIN = 0.3  # drop tangential multi-tag mentions
 # Auto-generated price-move boilerplate (no narrative value).
@@ -65,9 +68,14 @@ def _to_date(t: str) -> str:  # 20240606T132146 -> 2024-06-06
 
 def main() -> None:
     key = _key()
-    shutil.rmtree(OUT, ignore_errors=True)  # fresh collection
-    rows: list[dict] = []
+    # Append mode: keep already-collected tickers, only fetch new ones.
+    man = OUT / "source_manifest.csv"
+    rows: list[dict] = list(csv.DictReader(man.open())) if man.exists() else []
+    done = {r["company_id"] for r in rows}
     for ticker in TICKERS:
+        if ticker in done:
+            print(f"  {ticker}: already collected, skip")
+            continue
         feed = _fetch(ticker, key)
         (OUT / ticker).mkdir(parents=True, exist_ok=True)
         kept = dropped = 0
