@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, report as report_mod, runs, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, report as report_mod, runs, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -43,6 +43,27 @@ app = FastAPI(title="Theme Discovery Engine", version="0.1.0")
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/artifacts/{run_id}/{artifact_name:path}")
+def get_artifact(run_id: str, artifact_name: str):
+    """Serve an allowlisted run artifact.
+
+    Artifact names in the allowlist:
+      graph.json, communities.json, theme_snapshots.json, theme_lineage.json,
+      report.md, theme_metrics.parquet, company_theme_exposure.parquet,
+      validation/validation.csv
+
+    Parquet files are returned as JSON records (list of objects).
+    JSON/Markdown files are returned as-is with appropriate Content-Type.
+    CSV under validation/ is returned as JSON records.
+
+    Security:
+      - Only allowlisted names are served; others get 400.
+      - Path traversal ('..') or absolute paths get 400.
+      - Missing run or artifact gets 404.
+    """
+    return artifacts_mod.serve_artifact(run_id=run_id, artifact_name=artifact_name)
 
 
 @app.post("/api/runs/create", response_model=RunManifest)
