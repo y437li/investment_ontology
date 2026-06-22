@@ -3,8 +3,20 @@
     <nav class="mtv-nav">
       <router-link to="/" class="back">← Themes</router-link>
       <span class="mtv-title">{{ themeName }}</span>
-      <span class="mtv-sub">main theme · {{ communityIds.length }} sub-themes</span>
+      <span class="mtv-sub">{{ activeCommunityIds.length }} sub-themes</span>
     </nav>
+
+    <!-- Filter the graph by main theme(s) -->
+    <div class="theme-filter" v-if="allMainThemes.length">
+      <span class="tf-label">Graph:</span>
+      <button
+        v-for="mt in allMainThemes"
+        :key="mt.name"
+        class="tf-chip"
+        :class="{ active: selectedNames.has(mt.name) }"
+        @click="toggleTheme(mt.name)"
+      >{{ mt.name }}</button>
+    </div>
 
     <div v-if="loading" class="mtv-state">
       <div class="spinner"></div>
@@ -40,7 +52,9 @@
 
       <!-- RIGHT: the one story -->
       <div class="story-pane">
-        <p class="narrative">{{ story.narrative }}</p>
+        <div v-if="storyLoading" class="story-loading"><div class="spinner small"></div><span>Composing the story…</span></div>
+        <div v-else-if="storyError" class="story-err">{{ storyError }}</div>
+        <p v-else class="narrative">{{ story.narrative }}</p>
 
         <div class="walk-bar" v-if="steps.length">
           <span class="walk-label">Derivation (推演)</span>
@@ -78,12 +92,37 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import * as d3 from 'd3'
-import { getSubgraph, getMainNarrative, getNodeProfile } from '../api/themes.js'
+import { getSubgraph, getMainNarrative, getNodeProfile, getThemeHierarchy } from '../api/themes.js'
 
 const route = useRoute()
 const runId = route.params.runId
-const themeName = computed(() => route.query.name || 'Main theme')
 const communityIds = computed(() => String(route.query.communities || '').split(',').filter(Boolean))
+
+// All main themes (filter chips) + the currently selected set
+const allMainThemes = ref([])
+const selectedNames = ref(new Set())
+const nameToIds = computed(() => {
+  const m = {}
+  allMainThemes.value.forEach((mt) => { m[mt.name] = mt.sub_theme_ids || [] })
+  return m
+})
+const activeCommunityIds = computed(() => {
+  const ids = new Set()
+  selectedNames.value.forEach((n) => (nameToIds.value[n] || []).forEach((c) => ids.add(c)))
+  const arr = [...ids]
+  return arr.length ? arr : communityIds.value
+})
+const themeName = computed(() => {
+  const sel = [...selectedNames.value]
+  if (sel.length === 1) return sel[0]
+  if (sel.length > 1) return `${sel.length} themes`
+  return route.query.name || 'Main theme'
+})
+const toggleTheme = (name) => {
+  const next = new Set(selectedNames.value)
+  if (next.has(name)) { if (next.size > 1) next.delete(name) } else next.add(name)
+  selectedNames.value = next
+}
 
 const LEVELS = ['macro', 'industry', 'company', 'idiosyncratic', 'contextual']
 const LEVEL_COLORS = { macro: '#7c3aed', industry: '#2563eb', company: '#16a34a', idiosyncratic: '#ea580c', contextual: '#9ca3af', evidence: '#d1d5db' }
@@ -94,6 +133,8 @@ const levelOf = (n) => (n && LEVEL_COLORS[n.level] ? n.level : 'contextual')
 
 const loading = ref(true)
 const error = ref('')
+const storyLoading = ref(false)
+const storyError = ref('')
 const subgraph = ref({ nodes: [], edges: [] })
 const story = ref({ narrative: '', reasoning_steps: [] })
 const steps = computed(() => (story.value.reasoning_steps || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0)))
@@ -111,24 +152,32 @@ let labelSel = null
 async function load() {
   loading.value = true
   error.value = ''
-  const ids = communityIds.value
-  if (!ids.length) { error.value = 'No sub-themes for this main theme.'; loading.value = false; return }
+  const ids = activeCommunityIds.value
+  if (!ids.length) { error.value = 'No sub-themes selected.'; loading.value = false; return }
   try {
-    const [sg, st] = await Promise.all([
-      getSubgraph(runId, ids),
-      getMainNarrative(runId, ids).catch((e) => {
-        if (e?.response?.status === 503) throw new Error('LLM not configured — story unavailable.')
-        throw e
-      }),
-    ])
-    subgraph.value = sg || { nodes: [], edges: [] }
-    story.value = st || { narrative: '', reasoning_steps: [] }
+    subgraph.value = (await getSubgraph(runId, ids)) || { nodes: [], edges: [] }
     loading.value = false
     await nextTick()
     renderGraph()
   } catch (e) {
-    error.value = e?.message || e?.response?.data?.detail || 'Failed to load the main theme.'
+    error.value = e?.response?.data?.detail || e?.message || 'Failed to load the graph.'
     loading.value = false
+    return
+  }
+  loadStory(ids)   // graph is up; the story streams in separately
+}
+
+async function loadStory(ids) {
+  storyLoading.value = true
+  storyError.value = ''
+  story.value = { narrative: '', reasoning_steps: [] }
+  activeIdx.value = -1
+  try {
+    story.value = (await getMainNarrative(runId, ids)) || { narrative: '', reasoning_steps: [] }
+  } catch (e) {
+    storyError.value = e?.response?.status === 503 ? 'LLM not configured — story unavailable.' : (e?.message || 'Story failed to load.')
+  } finally {
+    storyLoading.value = false
   }
 }
 
@@ -267,8 +316,20 @@ function startPlay() {
 }
 function stopPlay() { playing.value = false; if (playTimer) { clearInterval(playTimer); playTimer = null } }
 
+async function init() {
+  try {
+    const h = await getThemeHierarchy(runId)
+    allMainThemes.value = h?.main_themes || []
+  } catch { allMainThemes.value = [] }
+  const clicked = route.query.name
+  if (clicked && allMainThemes.value.some((m) => m.name === clicked)) selectedNames.value = new Set([clicked])
+  else if (allMainThemes.value.length) selectedNames.value = new Set([allMainThemes.value[0].name])
+  await load()
+}
+
 watch(activeIdx, (i) => highlight(i))
-onMounted(load)
+watch(selectedNames, () => { activeIdx.value = -1; selectedNode.value = null; load() })
+onMounted(init)
 onBeforeUnmount(() => { stopPlay(); if (sim) sim.stop() })
 </script>
 
@@ -278,6 +339,14 @@ onBeforeUnmount(() => { stopPlay(); if (sim) sim.stop() })
 .back { color: #2563eb; text-decoration: none; font-size: 0.85rem; }
 .mtv-title { font-weight: 700; font-size: 1.05rem; }
 .mtv-sub { color: #999; font-size: 0.78rem; font-family: monospace; }
+.theme-filter { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 24px; border-bottom: 1px solid #eee; background: #fafafa; }
+.story-loading { display: flex; align-items: center; gap: 10px; color: #888; font-size: 0.85rem; padding: 20px 0; }
+.spinner.small { width: 18px; height: 18px; border-width: 2px; }
+.story-err { color: #c0392b; font-size: 0.85rem; padding: 14px; background: #fdf0ef; border-radius: 4px; }
+.tf-label { font-family: monospace; font-size: 0.72rem; color: #888; text-transform: uppercase; }
+.tf-chip { border: 1px solid #ddd; background: #fff; color: #777; font-size: 0.74rem; padding: 4px 10px; border-radius: 14px; cursor: pointer; transition: all 0.15s; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-chip:hover { border-color: #999; }
+.tf-chip.active { background: #111; color: #fff; border-color: #111; }
 .mtv-state { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 80px; color: #777; }
 .mtv-state.error { color: #c0392b; }
 .spinner { width: 34px; height: 34px; border: 3px solid #eee; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; }
