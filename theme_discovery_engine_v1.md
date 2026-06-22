@@ -924,6 +924,23 @@ theme_summary
 naming_model
 ```
 
+## Principle — Everything Is Connected; a Theme Is a Slice
+
+In a sufficiently rich graph, every node is eventually connected to every other node. A theme is therefore NOT a hard, disjoint partition of the graph — it is a SLICE: a perspective-anchored projection of the one connected graph.
+
+A slice is defined by:
+
+- an ANCHOR — a node or a level (a macro driver, a commodity, a sector, a company, an event) that fixes the perspective;
+- a PROPAGATION rule — how far and along which edge types the slice extends from the anchor (multi-hop);
+- a FILTER — which levels / edge types are in or out of this slice.
+
+Implications:
+
+- Community detection (Louvain/Leiden, above) produces ONE default slicing of the graph by modularity. It is a convenience, not the fundamental object.
+- The factor levels (macro / industry / company / idiosyncratic) are the canonical slicing DIMENSIONS. A theme is a slice taken along an anchor at one of these levels.
+- The SAME node participates in different themes under different anchors. "One company, one theme" means: from the company's own anchor, its theme is the single coherent propagation chain around it; from a macro anchor, that company is one of many touched by a broader slice.
+- The PM chooses a slice (an anchor + depth); the engine returns the connected subgraph and its connect-the-dots narrative. Themes are queryable slices, not a fixed list.
+
 ## Theme Architecture — Factor Propagation Hierarchy
 
 Communities are fine-grained sub-themes. They are organized into a top-down factor-propagation hierarchy — the structure a top-down research process uses — with four levels (dimensions):
