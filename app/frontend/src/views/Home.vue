@@ -121,10 +121,13 @@
           <span v-else>No themes match your search.</span>
         </div>
 
-        <!-- Main Theme Cards Grid -->
+        <!-- Main themes, tiered by factor level -->
+        <template v-for="tier in TIERS" :key="tier.key">
+        <section v-if="themesByTier[tier.key].length" class="tier-section">
+          <h2 class="tier-header">{{ tier.label }}<span class="tier-count">{{ themesByTier[tier.key].length }}</span></h2>
         <div class="cards-grid">
           <div
-            v-for="mt in displayedMainThemes"
+            v-for="mt in themesByTier[tier.key]"
             :key="mt.name"
             class="theme-card main-theme-card"
             :class="{ watched: watchlist.has(mt.name), expanded: expandedTheme === mt.name }"
@@ -249,6 +252,8 @@
             </div>
           </div>
         </div>
+        </section>
+        </template>
       </template>
 
       <!-- ─── FALLBACK: flat community view + build action ───────────── -->
@@ -707,6 +712,22 @@ const openMainTheme = (mt) => {
 const resetLevelFilters = () => {
   activeLevelFilters.value = new Set(['macro', 'industry', 'company', 'idiosyncratic'])
 }
+
+// Tier the main themes by factor level for the landing sections
+const TIERS = [
+  { key: 'macro', label: 'Macro' },
+  { key: 'industry', label: 'Industry / Sector' },
+  { key: 'company', label: 'Company' },
+  { key: 'idiosyncratic', label: 'Company-specific' },
+]
+const themesByTier = computed(() => {
+  const buckets = { macro: [], industry: [], company: [], idiosyncratic: [] }
+  for (const mt of displayedMainThemes.value) {
+    const k = buckets[mt.dominant_level] ? mt.dominant_level : 'company'
+    buckets[k].push(mt)
+  }
+  return buckets
+})
 
 // ─── Build hierarchy action ───────────────────────────────────────────────────
 const triggerBuildHierarchy = async () => {
@@ -1493,6 +1514,17 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 20px;
+}
+.tier-section { margin-bottom: 34px; }
+.tier-header {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--font-mono); font-size: 0.95rem; font-weight: 700;
+  letter-spacing: 1px; text-transform: uppercase; color: var(--black);
+  margin: 0 0 14px; padding-bottom: 8px; border-bottom: 2px solid var(--black);
+}
+.tier-count {
+  font-size: 0.7rem; color: #fff; background: var(--black);
+  border-radius: 10px; padding: 1px 8px; font-weight: 700;
 }
 
 /* ── Theme card (shared) ── */
