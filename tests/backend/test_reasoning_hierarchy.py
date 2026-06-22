@@ -113,6 +113,21 @@ def test_hierarchy_groups_and_loads():
     assert theme_hierarchy.load_hierarchy(rid)["sub_theme_count"] == 1
 
 
+def test_narrative_emits_ordered_reasoning_steps_with_ids():
+    rid = _seed_run()
+    args = json.dumps({"narrative": "Oil up benefits Suncor.", "reasoning_steps": [
+        {"order": 1, "claim": "higher oil prices benefit Suncor", "source": "oil prices",
+         "target": "Suncor Energy", "edge_type": "benefits"}]})
+    fake = FakeClient(_Msg(content="<think>trace</think>", tool_calls=[_ToolCall(args)]))
+    out = reasoning.synthesize_narrative(rid, "c1", client=fake, model="x")
+    assert out["narrative"] == "Oil up benefits Suncor."
+    steps = out["reasoning_steps"]
+    assert len(steps) == 1 and steps[0]["order"] == 1
+    # step endpoints mapped to entity ids so the graph can highlight the path
+    assert steps[0]["source_id"] == "a" and steps[0]["target_id"] == "b"
+    assert out["reasoning_chain"] == "trace"
+
+
 def test_endpoints_guard_when_llm_absent(monkeypatch):
     for k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL_NAME"):
         monkeypatch.delenv(k, raising=False)
