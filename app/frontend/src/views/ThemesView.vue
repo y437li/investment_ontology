@@ -123,10 +123,12 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import RunNav from '../components/RunNav.vue'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
 
 const props = defineProps({ runId: String })
+const route = useRoute()
 
 const loading = ref(false)
 const error = ref('')
@@ -175,6 +177,11 @@ const loadData = async () => {
       getCompanyThemeExposure(props.runId)
     ])
     communities.value = commDoc.status === 'fulfilled' ? (commDoc.value.communities || []) : []
+    // Deep-link: auto-select the community passed from the landing (?community=...)
+    const wanted = route.query.community
+    if (wanted) {
+      selectedCommunity.value = communities.value.find(c => c.community_id === wanted) || selectedCommunity.value
+    }
     snapshots.value = snapDoc.status === 'fulfilled' ? (snapDoc.value.snapshots || []) : []
     metrics.value = metricsRows.status === 'fulfilled' ? (metricsRows.value || []) : []
     exposures.value = expRows.status === 'fulfilled' ? (expRows.value || []) : []
