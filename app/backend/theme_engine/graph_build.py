@@ -51,6 +51,11 @@ STRUCTURAL_EDGE_TYPES: list[str] = [
 # Evidence edges (not used for structural clustering)
 EVIDENCE_EDGE_TYPES: list[str] = ["mentioned_in", "co_occurs_with"]
 
+# Extraction methods admitted into community discovery (spec §11): document_stated
+# plus config-approved metadata_inferred (structured adapters, e.g. the macro
+# adapter — trusted factor edges, not weak LLM inference). llm_inferred stays out.
+COMMUNITY_INPUT_METHODS: frozenset = frozenset({"document_stated", "metadata_inferred"})
+
 # Node types included in the entity-only structural graph (excludes Document)
 STRUCTURAL_NODE_TYPES: list[str] = [
     "Company",
@@ -185,12 +190,12 @@ def build_graph(run_id: str) -> tuple[int, int]:
         # OI-5: community_input_edges must have:
         # 1. Both endpoints are structural (non-Document) entities
         # 2. Edge type is structural
-        # 3. Extraction method is document_stated (default policy)
+        # 3. Extraction method is admitted (document_stated or approved metadata_inferred)
         if (
             edge_type in STRUCTURAL_EDGE_TYPES
             and source_id in structural_entity_ids
             and target_id in structural_entity_ids
-            and extraction_method == "document_stated"
+            and extraction_method in COMMUNITY_INPUT_METHODS
         ):
             community_input_edge_ids.append(edge_id)
 
