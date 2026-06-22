@@ -1,0 +1,140 @@
+# Universe seed: S&P/TSX 60 constituents (high-confidence subset).
+#
+# CAVEATS — READ BEFORE USE:
+# (1) HUMAN-VERIFIED REQUIRED. This is a hand-seeded list and MUST be
+#     human-verified against an authoritative source before production use.
+#     Tickers, CIKs, and sector labels can be stale or wrong.
+# (2) POINT-IN-TIME MEMBERSHIP. Index membership is point-in-time and changes
+#     per as_of_date. Do NOT apply today's membership to historical graphs:
+#     companies are added/removed/merged/delisted over time. Treating the
+#     current roster as the historical roster introduces SURVIVORSHIP BIAS.
+#     For a historical as_of_date, resolve membership as of that date.
+#
+# Notes:
+# - tsx_ticker uses the Yahoo-style ".TO" suffix for the TSX listing.
+# - sec_cik is the U.S. SEC Central Index Key for cross-listed filers;
+#   null for companies that do not file with the SEC.
+
+universe_name: sp_tsx_60_seed
+description: High-confidence subset of S&P/TSX 60 constituents for theme discovery.
+currency: CAD
+country: Canada
+
+companies:
+  # --- Banks / Financials ---
+  - name: Royal Bank of Canada
+    tsx_ticker: RY.TO
+    sec_cik: "0001000275"
+    sector: Financials
+  - name: Toronto-Dominion Bank
+    tsx_ticker: TD.TO
+    sec_cik: "0000947263"
+    sector: Financials
+  - name: Bank of Nova Scotia
+    tsx_ticker: BNS.TO
+    sec_cik: "0000009631"
+    sector: Financials
+  - name: Bank of Montreal
+    tsx_ticker: BMO.TO
+    sec_cik: "0000927971"
+    sector: Financials
+  - name: Canadian Imperial Bank of Commerce
+    tsx_ticker: CM.TO
+    sec_cik: "0001045520"
+    sector: Financials
+  - name: Manulife Financial
+    tsx_ticker: MFC.TO
+    sec_cik: "0001086888"
+    sector: Financials
+  - name: Brookfield Corporation
+    tsx_ticker: BN.TO
+    sec_cik: "0001001085"
+    sector: Financials
+
+  # --- Energy / Pipelines ---
+  - name: Enbridge
+    tsx_ticker: ENB.TO
+    sec_cik: "0000895728"
+    sector: Energy
+  - name: TC Energy
+    tsx_ticker: TRP.TO
+    sec_cik: "0001232384"
+    sector: Energy
+  - name: Canadian Natural Resources
+    tsx_ticker: CNQ.TO
+    sec_cik: "0001017413"
+    sector: Energy
+  - name: Suncor Energy
+    tsx_ticker: SU.TO
+    sec_cik: "0000311337"
+    sector: Energy
+  - name: Cenovus Energy
+    tsx_ticker: CVE.TO
+    sec_cik: "0001475260"
+    sector: Energy
+
+  # --- Utilities ---
+  - name: Fortis
+    tsx_ticker: FTS.TO
+    sec_cik: "0001666175"
+    sector: Utilities
+  - name: Hydro One
+    tsx_ticker: H.TO
+    sec_cik: null
+    sector: Utilities
+
+  # --- Materials / Mining ---
+  - name: Nutrien
+    tsx_ticker: NTR.TO
+    sec_cik: "0001725964"
+    sector: Materials
+  - name: Barrick Gold
+    tsx_ticker: ABX.TO
+    sec_cik: "0000756894"
+    sector: Materials
+  - name: Agnico Eagle Mines
+    tsx_ticker: AEM.TO
+    sec_cik: "0000002809"
+    sector: Materials
+  - name: Wheaton Precious Metals
+    tsx_ticker: WPM.TO
+    sec_cik: "0001323404"
+    sector: Materials
+  - name: Teck Resources
+    tsx_ticker: TECK-B.TO
+    sec_cik: "0000886986"
+    sector: Materials
+
+  # --- Technology ---
+  - name: Shopify
+    tsx_ticker: SHOP.TO
+    sec_cik: "0001594805"
+    sector: Information Technology
+  - name: Constellation Software
+    tsx_ticker: CSU.TO
+    sec_cik: null
+    sector: Information Technology
+
+  # --- Telecom / Communication Services ---
+  - name: BCE
+    tsx_ticker: BCE.TO
+    sec_cik: "0000718940"
+    sector: Communication Services
+  - name: Telus
+    tsx_ticker: T.TO
+    sec_cik: "0001156459"
+    sector: Communication Services
+  - name: Rogers Communications
+    tsx_ticker: RCI-B.TO
+    sec_cik: "0001088373"
+    sector: Communication Services
+
+  # --- Rails / Industrials ---
+  - name: Canadian National Railway
+    tsx_ticker: CNR.TO
+    sec_cik: "0001084961"
+    sector: Industrials
+  - name: Canadian Pacific Kansas City
+    tsx_ticker: CP.TO
+    sec_cik: "0000016875"
+    sector: Industrials
