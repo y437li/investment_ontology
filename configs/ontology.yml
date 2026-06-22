@@ -3,6 +3,26 @@
 # is validated against it. Edit here to change extraction behavior — not in code.
 version: 1
 
+# Core definitions — what the engine's two primitives ARE.
+definitions:
+  node: >
+    A typed, evidence-grounded ENTITY in the graph. Must (1) map to exactly one
+    entity_type below, which fixes its factor level; (2) be grounded in >=1 evidence
+    chunk available at as_of; (3) survive denoise (no dates/persons/tickers-as-
+    entities/boilerplate). Identified by a stable id + canonical name (aliases
+    merged). Document nodes are evidence-only and excluded from discovery. Every
+    node answers: what it is, why it is in the graph, why it matters (spec section 13).
+  theme: >
+    A SLICE of the one connected graph (anchor + propagation + filter), realized as
+    a community of structurally-connected nodes (default: Louvain over
+    document_stated structural edges; also sliceable by factor level). SUBSTANTIVE
+    when it has >=3 nodes and non-zero strength; non-substantive fragments are kept
+    for audit but hidden from the PM. Carries: factor-level composition + dominant
+    level; a temporal state at as_of (emerging/mature/declining/dormant); metrics
+    (strength, cohesion; temporal metrics like novelty need a multi-snapshot run); a
+    connect-the-dots narrative with an ordered, provenance-labeled derivation; and a
+    place in the main-theme -> sub-theme hierarchy. Not fixed — it depends on the slice.
+
 # Entity types. `level` places the type in the factor hierarchy
 # (macro -> industry -> company -> idiosyncratic; `contextual` = supporting).
 entity_types:

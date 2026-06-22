@@ -924,6 +924,26 @@ theme_summary
 naming_model
 ```
 
+## Definitions — Node and Theme
+
+NODE. A node is a typed, evidence-grounded ENTITY in the knowledge graph. It must:
+
+- map to exactly one ontology entity type (Company, Sector, Commodity, MacroIndicator, EconomicConcept, Event, Geography), which fixes its factor-hierarchy LEVEL (macro / industry / company / idiosyncratic / contextual);
+- be grounded in at least one evidence chunk available at the as_of date;
+- survive denoise (no dates, person names, ticker symbols as standalone entities, or boilerplate).
+
+A node is identified by a stable id and a canonical name (aliases merged, point-in-time). Document nodes are evidence-only and excluded from the discovery (entity-only) graph. Every node answers the Node Explanation Framework (section 13): what it is, why it is in the graph, why it matters.
+
+THEME. A theme is a SLICE of the one connected graph — a perspective-anchored projection (anchor + propagation + filter), realized as a community of structurally-connected nodes. The default slice is a Louvain community over `document_stated` structural edges; a theme can also be sliced along the factor levels. A theme is SUBSTANTIVE when it has at least 3 nodes and non-zero strength (real structural support); non-substantive fragments are kept in the artifacts for audit but hidden from the PM view and from hierarchy grouping. A theme carries:
+
+- a factor-level composition and a dominant level;
+- a temporal STATE at as_of (emerging / mature / declining / dormant) from evidence recency;
+- metrics (strength, cohesion; temporal metrics such as novelty/momentum require a multi-snapshot run and are otherwise undefined, not zero);
+- a connect-the-dots NARRATIVE with an ordered, provenance-labeled derivation (each step `document_stated` or `llm_inferred`);
+- a place in the main-theme -> sub-theme hierarchy.
+
+A theme is not a fixed object — it depends on the slice.
+
 ## Principle — Everything Is Connected; a Theme Is a Slice
 
 In a sufficiently rich graph, every node is eventually connected to every other node. A theme is therefore NOT a hard, disjoint partition of the graph — it is a SLICE: a perspective-anchored projection of the one connected graph.
