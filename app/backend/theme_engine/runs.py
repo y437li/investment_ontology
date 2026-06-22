@@ -81,6 +81,30 @@ def get_run_dir(run_id: str) -> Path:
     return settings.run_output_dir / run_id
 
 
+def list_runs() -> list[dict]:
+    """Summaries of all runs on disk, newest first."""
+    base = settings.run_output_dir
+    if not base.exists():
+        return []
+    summaries: list[dict] = []
+    for d in base.iterdir():
+        manifest_path = d / MANIFEST_NAME
+        if not d.is_dir() or not manifest_path.exists():
+            continue
+        try:
+            man = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        summaries.append({
+            "run_id": man.get("run_id", d.name),
+            "as_of_date": man.get("as_of_date"),
+            "created_at": man.get("created_at"),
+            "discovery_frozen": man.get("discovery_frozen", False),
+        })
+    summaries.sort(key=lambda s: s.get("created_at") or "", reverse=True)
+    return summaries
+
+
 def _discovery_dir(run_id: str) -> Path:
     return get_run_dir(run_id) / DISCOVERY_DIR
 

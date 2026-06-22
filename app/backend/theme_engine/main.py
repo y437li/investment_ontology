@@ -66,6 +66,12 @@ def get_artifact(run_id: str, artifact_name: str):
     return artifacts_mod.serve_artifact(run_id=run_id, artifact_name=artifact_name)
 
 
+@app.get("/api/runs")
+def list_runs_endpoint() -> list[dict]:
+    """List all runs on disk (newest first) for the Home run history."""
+    return runs.list_runs()
+
+
 @app.post("/api/runs/create", response_model=RunManifest)
 def create_run(req: RunCreateRequest) -> RunManifest:
     return runs.create_run(req)
