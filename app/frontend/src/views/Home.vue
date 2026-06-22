@@ -99,6 +99,12 @@
                 :class="[`level-chip-${lvl}`, { active: activeLevelFilters.has(lvl) }]"
                 @click="toggleLevelFilter(lvl)"
               >{{ lvl }}</button>
+              <button
+                class="level-chip level-chip-all"
+                :class="{ active: activeLevelFilters.size === 4 }"
+                title="Show all factor levels"
+                @click="resetLevelFilters"
+              >all</button>
             </div>
           </div>
         </div>
@@ -152,6 +158,9 @@
 
             <!-- Theme title -->
             <h3 class="card-title">{{ mt.name }}</h3>
+
+            <!-- Open the whole main theme as one story + graph -->
+            <button class="view-story-btn" @click.stop="openMainTheme(mt)">View story &amp; graph →</button>
 
             <!-- Summary -->
             <p v-if="mt.summary" class="card-summary">{{ mt.summary }}</p>
@@ -682,6 +691,21 @@ const openSubTheme = (communityId) => {
     params: { runId: currentRun.value.run_id },
     query: { community: communityId }
   })
+}
+
+// Open a whole main theme as one combined story + graph
+const openMainTheme = (mt) => {
+  if (!currentRun.value) return
+  router.push({
+    name: 'MainTheme',
+    params: { runId: currentRun.value.run_id },
+    query: { name: mt.name, communities: (mt.sub_theme_ids || []).join(',') }
+  })
+}
+
+// Reset the factor-level filter to show all levels
+const resetLevelFilters = () => {
+  activeLevelFilters.value = new Set(['macro', 'industry', 'company', 'idiosyncratic'])
 }
 
 // ─── Build hierarchy action ───────────────────────────────────────────────────
@@ -1285,6 +1309,21 @@ onMounted(() => {
   transition: all 0.15s;
   white-space: nowrap;
 }
+.level-chip.active { color: #111; font-weight: 700; }
+.level-chip-all.active { background: #111; color: #fff; border-color: #111; }
+.view-story-btn {
+  margin: 8px 0 2px;
+  padding: 6px 12px;
+  border: 1px solid var(--accent, #1a56db);
+  background: transparent;
+  color: var(--accent, #1a56db);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s;
+}
+.view-story-btn:hover { background: var(--accent, #1a56db); color: #fff; }
 
 .level-chip:hover:not(.active) {
   border-color: #999;

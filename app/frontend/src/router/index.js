@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import MainThemeView from '../views/MainThemeView.vue'
 import Home from '../views/Home.vue'
 import AdminView from '../views/AdminView.vue'
 import ImportView from '../views/ImportView.vue'
@@ -35,6 +36,12 @@ const routes = [
     path: '/runs/:runId/themes',
     name: 'Themes',
     component: ThemesView,
+    props: true
+  },
+  {
+    path: '/runs/:runId/main-theme',
+    name: 'MainTheme',
+    component: MainThemeView,
     props: true
   },
   {

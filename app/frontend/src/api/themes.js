@@ -60,3 +60,20 @@ export function getNodeProfile(runId, entityId) {
 export function getThemeLevels(runId) {
   return service.get(`/api/themes/${runId}/levels`)
 }
+
+/**
+ * Union structural subgraph for a set of communities (a whole main theme).
+ * Returns { nodes:[{id,label,entity_type,level}], edges:[{source,target,edge_type}], node_count, edge_count }
+ */
+export function getSubgraph(runId, communityIds) {
+  return service.get(`/api/themes/${runId}/subgraph?communities=${communityIds.join(',')}`)
+}
+
+/**
+ * ONE story for a whole main theme: connect-the-dots narrative + ordered 推演.
+ * Returns { community_ids, narrative, reasoning_steps:[{order,claim,source,source_id,target,target_id,edge_type,provenance}], reasoning_chain, relationships }
+ * First call ~20s (LLM) then cached; throws 503 if LLM unconfigured.
+ */
+export function getMainNarrative(runId, communityIds) {
+  return service.get(`/api/themes/${runId}/main-narrative?communities=${communityIds.join(',')}`)
+}
