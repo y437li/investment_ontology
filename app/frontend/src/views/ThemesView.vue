@@ -205,6 +205,18 @@
                   </div>
                 </div>
               </div>
+
+              <!-- ── INTERACTIVE SUBGRAPH ────────────────────────────────── -->
+              <div class="subgraph-section" v-if="narrative.relationships?.length">
+                <div class="subgraph-header">
+                  <div class="subgraph-title">Relationship Graph</div>
+                  <span class="subgraph-hint">Click a node to view its profile</span>
+                </div>
+                <div class="subgraph-container" ref="subgraphContainer">
+                  <svg ref="subgraphSvg" class="subgraph-svg"></svg>
+                </div>
+              </div>
+              <!-- ── END SUBGRAPH ─────────────────────────────────────────── -->
             </div>
 
             <!-- Prompt to load (before first click) -->
@@ -218,16 +230,102 @@
           <!-- ── END NARRATIVE PANEL ──────────────────────────────────── -->
         </div>
       </div>
+
+      <!-- ── NODE PROFILE PANEL (right sidebar) ──────────────────────── -->
+      <div class="sidebar right-sidebar" v-if="nodeProfileOpen">
+        <div class="sidebar-header">
+          <span class="sidebar-title">Entity Profile</span>
+          <button class="profile-close-btn" @click="closeNodeProfile" title="Close">×</button>
+        </div>
+
+        <!-- Loading -->
+        <div v-if="nodeProfileLoading" class="profile-loading">
+          <div class="profile-spinner"></div>
+          <span class="profile-loading-text">Loading profile…</span>
+        </div>
+
+        <!-- Error -->
+        <div v-else-if="nodeProfileError" class="profile-error">
+          <span class="profile-error-icon">⚠</span>
+          <div>
+            <div class="profile-error-title">Could not load profile</div>
+            <div class="profile-error-msg">{{ nodeProfileError }}</div>
+            <button class="profile-retry-btn" @click="retryNodeProfile">Retry</button>
+          </div>
+        </div>
+
+        <!-- Profile content -->
+        <div v-else-if="nodeProfile" class="profile-content">
+          <!-- Identity -->
+          <div class="profile-identity">
+            <div class="profile-type-row">
+              <span class="profile-type-badge">{{ nodeProfile.entity_type }}</span>
+              <span v-if="nodeProfile.level" class="profile-level">{{ nodeProfile.level }}</span>
+            </div>
+            <h3 class="profile-name">{{ nodeProfile.name || nodeProfile.entity_id }}</h3>
+            <p v-if="nodeProfile.definition" class="profile-definition">{{ nodeProfile.definition }}</p>
+          </div>
+
+          <!-- Stats -->
+          <div class="profile-stats">
+            <div class="profile-stat">
+              <span class="stat-num">{{ nodeProfile.evidence_count ?? '—' }}</span>
+              <span class="stat-label">evidence</span>
+            </div>
+            <div class="profile-stat">
+              <span class="stat-num">{{ nodeProfile.degree ?? '—' }}</span>
+              <span class="stat-label">connections</span>
+            </div>
+            <div class="profile-stat" v-if="nodeProfile.first_seen_at">
+              <span class="stat-num stat-date">{{ formatDate(nodeProfile.first_seen_at) }}</span>
+              <span class="stat-label">first seen</span>
+            </div>
+          </div>
+
+          <!-- Why present -->
+          <div class="profile-section" v-if="nodeProfile.why_present?.length">
+            <div class="profile-section-title">Why it appears in this theme</div>
+            <div class="why-list">
+              <div
+                v-for="(wp, i) in nodeProfile.why_present"
+                :key="i"
+                class="why-row"
+              >
+                <div class="why-edge">
+                  <span class="why-direction" :class="`dir-${wp.direction}`">{{ wp.direction }}</span>
+                  <span class="why-edge-type">{{ wp.edge_type }}</span>
+                  <span class="why-other">{{ wp.other }}</span>
+                </div>
+                <div v-if="wp.explanation" class="why-explanation">{{ wp.explanation }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Related entities -->
+          <div class="profile-section" v-if="nodeProfile.related_entities?.length">
+            <div class="profile-section-title">Related entities</div>
+            <div class="related-tags">
+              <span
+                v-for="re in nodeProfile.related_entities"
+                :key="re"
+                class="related-tag"
+              >{{ re }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- ── END NODE PROFILE PANEL ──────────────────────────────────── -->
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
+import * as d3 from 'd3'
 import RunNav from '../components/RunNav.vue'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
-import { getCommunityNarrative } from '../api/themes.js'
+import { getCommunityNarrative, getNodeProfile } from '../api/themes.js'
 
 const props = defineProps({ runId: String })
 const route = useRoute()
@@ -248,6 +346,18 @@ const narrativeError = ref('')
 const narrativeLlmUnconfigured = ref(false)
 const reasoningOpen = ref(false)
 
+// ─── Subgraph refs ────────────────────────────────────────────────────────────
+const subgraphContainer = ref(null)
+const subgraphSvg = ref(null)
+let subgraphSimulation = null
+
+// ─── Node profile state ───────────────────────────────────────────────────────
+const nodeProfileOpen = ref(false)
+const nodeProfileLoading = ref(false)
+const nodeProfileError = ref('')
+const nodeProfile = ref(null)
+let lastProfileEntityId = null
+
 // ─── Community selection ──────────────────────────────────────────────────────
 const selectCommunity = (c) => {
   selectedCommunity.value = c
@@ -257,6 +367,8 @@ const selectCommunity = (c) => {
   narrativeError.value = ''
   narrativeLlmUnconfigured.value = false
   reasoningOpen.value = false
+  clearSubgraph()
+  closeNodeProfile()
 }
 
 const selectedSnapshot = computed(() => {
@@ -305,6 +417,245 @@ const loadNarrative = async () => {
     }
   } finally {
     narrativeLoading.value = false
+  }
+}
+
+// ─── Subgraph helpers ─────────────────────────────────────────────────────────
+const clearSubgraph = () => {
+  if (subgraphSimulation) {
+    subgraphSimulation.stop()
+    subgraphSimulation = null
+  }
+  if (subgraphSvg.value) {
+    d3.select(subgraphSvg.value).selectAll('*').remove()
+  }
+}
+
+const buildSubgraphData = (relationships) => {
+  // Deduplicate nodes by id
+  const nodeMap = new Map()
+  for (const rel of relationships) {
+    if (rel.source_id != null && !nodeMap.has(String(rel.source_id))) {
+      nodeMap.set(String(rel.source_id), { id: String(rel.source_id), label: rel.source || String(rel.source_id) })
+    }
+    if (rel.target_id != null && !nodeMap.has(String(rel.target_id))) {
+      nodeMap.set(String(rel.target_id), { id: String(rel.target_id), label: rel.target || String(rel.target_id) })
+    }
+    // Fallback: if ids missing, use names as ids
+    if (rel.source_id == null && rel.source && !nodeMap.has(rel.source)) {
+      nodeMap.set(rel.source, { id: rel.source, label: rel.source })
+    }
+    if (rel.target_id == null && rel.target && !nodeMap.has(rel.target)) {
+      nodeMap.set(rel.target, { id: rel.target, label: rel.target })
+    }
+  }
+
+  const nodes = Array.from(nodeMap.values())
+  const nodeIdSet = new Set(nodes.map(n => n.id))
+
+  const edges = relationships
+    .map(rel => ({
+      source: rel.source_id != null ? String(rel.source_id) : rel.source,
+      target: rel.target_id != null ? String(rel.target_id) : rel.target,
+      label: rel.edge_type || 'related',
+      rawRel: rel
+    }))
+    .filter(e => nodeIdSet.has(e.source) && nodeIdSet.has(e.target))
+
+  return { nodes, edges }
+}
+
+const SUBGRAPH_COLORS = [
+  '#1a56db', '#7c3aed', '#059669', '#dc2626', '#d97706',
+  '#0891b2', '#be185d', '#65a30d', '#0f766e', '#b45309'
+]
+
+const renderSubgraph = () => {
+  if (!subgraphSvg.value || !subgraphContainer.value || !narrative.value?.relationships?.length) return
+  clearSubgraph()
+
+  const { nodes, edges } = buildSubgraphData(narrative.value.relationships)
+  if (nodes.length === 0) return
+
+  const containerEl = subgraphContainer.value
+  const width = containerEl.clientWidth || 560
+  const height = 320
+
+  const svg = d3.select(subgraphSvg.value)
+    .attr('width', width)
+    .attr('height', height)
+    .attr('viewBox', `0 0 ${width} ${height}`)
+  svg.selectAll('*').remove()
+
+  // Assign stable colors by node index
+  const colorOf = (_, i) => SUBGRAPH_COLORS[i % SUBGRAPH_COLORS.length]
+
+  const simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(edges).id(d => d.id).distance(100))
+    .force('charge', d3.forceManyBody().strength(-220))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collide', d3.forceCollide(38))
+    .force('x', d3.forceX(width / 2).strength(0.05))
+    .force('y', d3.forceY(height / 2).strength(0.05))
+
+  subgraphSimulation = simulation
+
+  const g = svg.append('g')
+  svg.call(
+    d3.zoom()
+      .extent([[0, 0], [width, height]])
+      .scaleExtent([0.3, 3])
+      .on('zoom', event => g.attr('transform', event.transform))
+  )
+
+  // Arrow marker
+  svg.append('defs').append('marker')
+    .attr('id', 'sg-arrow')
+    .attr('viewBox', '0 -4 8 8')
+    .attr('refX', 18)
+    .attr('refY', 0)
+    .attr('markerWidth', 6)
+    .attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-4L8,0L0,4')
+    .attr('fill', '#b0b0b0')
+
+  const linkGroup = g.append('g')
+
+  const link = linkGroup.selectAll('line')
+    .data(edges).enter().append('line')
+    .attr('stroke', '#d0d0d0')
+    .attr('stroke-width', 1.5)
+    .attr('marker-end', 'url(#sg-arrow)')
+
+  // Edge labels
+  const edgeLabelBg = linkGroup.selectAll('rect.elb')
+    .data(edges).enter().append('rect')
+    .attr('class', 'elb')
+    .attr('fill', 'rgba(255,255,255,0.88)')
+    .attr('rx', 2)
+
+  const edgeLabel = linkGroup.selectAll('text.el')
+    .data(edges).enter().append('text')
+    .attr('class', 'el')
+    .text(d => d.label)
+    .attr('font-size', '9px')
+    .attr('fill', '#888')
+    .attr('text-anchor', 'middle')
+    .attr('dominant-baseline', 'middle')
+    .style('font-family', 'var(--font-mono, monospace)')
+    .style('pointer-events', 'none')
+
+  const nodeGroup = g.append('g')
+
+  const node = nodeGroup.selectAll('circle')
+    .data(nodes).enter().append('circle')
+    .attr('r', 9)
+    .attr('fill', colorOf)
+    .attr('stroke', '#fff')
+    .attr('stroke-width', 2)
+    .style('cursor', 'pointer')
+    .call(
+      d3.drag()
+        .on('start', (event, d) => { d.fx = d.x; d.fy = d.y; simulation.alphaTarget(0.3).restart() })
+        .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y })
+        .on('end', (event, d) => { simulation.alphaTarget(0); d.fx = null; d.fy = null })
+    )
+    .on('click', (event, d) => {
+      event.stopPropagation()
+      node.attr('stroke', '#fff').attr('stroke-width', 2)
+      d3.select(event.target).attr('stroke', '#1a56db').attr('stroke-width', 3.5)
+      fetchNodeProfile(d.id)
+    })
+
+  const nodeLabels = nodeGroup.selectAll('text.nl')
+    .data(nodes).enter().append('text')
+    .attr('class', 'nl')
+    .text(d => d.label.length > 14 ? d.label.slice(0, 13) + '…' : d.label)
+    .attr('font-size', '10px')
+    .attr('fill', '#333')
+    .attr('font-weight', '500')
+    .attr('dx', 12).attr('dy', 4)
+    .style('pointer-events', 'none')
+    .style('font-family', 'system-ui, sans-serif')
+
+  simulation.on('tick', () => {
+    link
+      .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x).attr('y2', d => d.target.y)
+
+    edgeLabel
+      .attr('x', d => (d.source.x + d.target.x) / 2)
+      .attr('y', d => (d.source.y + d.target.y) / 2)
+
+    edgeLabelBg.each(function(d, i) {
+      const textEl = edgeLabel.nodes()[i]
+      try {
+        const bbox = textEl.getBBox()
+        d3.select(this)
+          .attr('x', bbox.x - 2).attr('y', bbox.y - 1)
+          .attr('width', bbox.width + 4).attr('height', bbox.height + 2)
+      } catch {}
+    })
+
+    node.attr('cx', d => d.x).attr('cy', d => d.y)
+    nodeLabels.attr('x', d => d.x).attr('y', d => d.y)
+  })
+
+  svg.on('click', () => {
+    node.attr('stroke', '#fff').attr('stroke-width', 2)
+  })
+}
+
+// Watch for narrative changes to re-render subgraph
+watch(narrative, async (val) => {
+  if (val?.relationships?.length) {
+    await nextTick()
+    renderSubgraph()
+  } else {
+    clearSubgraph()
+  }
+})
+
+// ─── Node profile loading ─────────────────────────────────────────────────────
+const fetchNodeProfile = async (entityId) => {
+  if (!entityId) return
+  lastProfileEntityId = entityId
+  nodeProfileOpen.value = true
+  nodeProfileLoading.value = true
+  nodeProfileError.value = ''
+  nodeProfile.value = null
+  try {
+    const result = await getNodeProfile(props.runId, entityId)
+    nodeProfile.value = result
+  } catch (err) {
+    nodeProfileError.value = err?.response?.data?.detail || err.message || 'Failed to load entity profile'
+  } finally {
+    nodeProfileLoading.value = false
+  }
+}
+
+const retryNodeProfile = () => {
+  if (lastProfileEntityId) fetchNodeProfile(lastProfileEntityId)
+}
+
+const closeNodeProfile = () => {
+  nodeProfileOpen.value = false
+  nodeProfile.value = null
+  nodeProfileError.value = ''
+  nodeProfileLoading.value = false
+  lastProfileEntityId = null
+}
+
+// ─── Date formatting ──────────────────────────────────────────────────────────
+const formatDate = (dateStr) => {
+  if (!dateStr) return ''
+  try {
+    const d = new Date(dateStr)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  } catch {
+    return dateStr
   }
 }
 
@@ -363,6 +714,17 @@ onMounted(loadData)
   overflow: hidden;
 }
 
+/* Right sidebar: node profile */
+.right-sidebar {
+  width: 320px;
+  flex-shrink: 0;
+  background: #FFF;
+  border-left: 1px solid #EAEAEA;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .sidebar-header {
   padding: 16px 20px;
   border-bottom: 1px solid #F0F0F0;
@@ -378,6 +740,7 @@ onMounted(loadData)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  flex: 1;
 }
 
 .count-badge {
@@ -388,6 +751,21 @@ onMounted(loadData)
   font-size: 10px;
   font-family: var(--font-mono);
   font-weight: 700;
+}
+
+.profile-close-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  color: #999;
+  cursor: pointer;
+  padding: 0 2px;
+  transition: color 0.15s;
+}
+
+.profile-close-btn:hover {
+  color: #333;
 }
 
 .community-list {
@@ -1000,5 +1378,314 @@ onMounted(loadData)
   font-family: var(--font-mono);
   font-size: 11px;
   color: #aaa;
+}
+
+/* ── Subgraph section ── */
+.subgraph-section {
+  border: 1px solid #E5E5E5;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #FAFAFA;
+  background-image: radial-gradient(#D8D8D8 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.subgraph-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #F8F9FA;
+  border-bottom: 1px solid #EEE;
+  background-image: none;
+}
+
+.subgraph-title {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  color: #888;
+  letter-spacing: 0.5px;
+}
+
+.subgraph-hint {
+  font-size: 11px;
+  color: #aaa;
+  font-family: var(--font-mono);
+}
+
+.subgraph-container {
+  width: 100%;
+  height: 320px;
+  position: relative;
+  overflow: hidden;
+}
+
+.subgraph-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ── Node Profile sidebar ── */
+.profile-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.profile-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 16px;
+}
+
+.profile-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #eee;
+  border-top-color: var(--accent, #1a56db);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: spin 0.8s linear infinite;
+}
+
+.profile-loading-text {
+  font-size: 12px;
+  color: #999;
+  font-family: var(--font-mono);
+}
+
+.profile-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  background: #FFF5F5;
+}
+
+.profile-error-icon {
+  font-size: 1rem;
+  color: #ef4444;
+  flex-shrink: 0;
+}
+
+.profile-error-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #c0392b;
+  margin-bottom: 4px;
+}
+
+.profile-error-msg {
+  font-size: 11px;
+  color: #e74c3c;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
+.profile-retry-btn {
+  background: transparent;
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s;
+}
+
+.profile-retry-btn:hover {
+  background: #ef4444;
+  color: #fff;
+}
+
+.profile-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.profile-type-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-type-badge {
+  background: #EEF2FF;
+  color: #3730A3;
+  border: 1px solid #C7D2FE;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+
+.profile-level {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #999;
+  background: #F5F5F5;
+  border: 1px solid #E5E5E5;
+  padding: 2px 7px;
+  border-radius: 2px;
+}
+
+.profile-name {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--black, #111);
+  margin: 0;
+  line-height: 1.3;
+}
+
+.profile-definition {
+  font-size: 12px;
+  color: #555;
+  line-height: 1.6;
+  margin: 0;
+  background: #FAFBFF;
+  border-left: 2px solid var(--accent, #1a56db);
+  padding: 8px 10px;
+  border-radius: 0 4px 4px 0;
+}
+
+.profile-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: #F8F9FA;
+  border: 1px solid #EEE;
+  border-radius: 6px;
+}
+
+.profile-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+
+.stat-num {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--black, #111);
+}
+
+.stat-date {
+  font-size: 0.72rem;
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: #aaa;
+  text-transform: uppercase;
+}
+
+.profile-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.profile-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  color: #888;
+  letter-spacing: 0.4px;
+}
+
+.why-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.why-row {
+  background: #F8F9FA;
+  border: 1px solid #E8E8E8;
+  border-radius: 5px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.why-edge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.why-direction {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 2px;
+  letter-spacing: 0.3px;
+}
+
+.dir-out { background: #ECFDF5; color: #065F46; }
+.dir-in  { background: #EEF2FF; color: #3730A3; }
+
+.why-edge-type {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: #EEF2FF;
+  color: #3730A3;
+  border: 1px solid #C7D2FE;
+  padding: 1px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.why-other {
+  font-size: 12px;
+  font-weight: 600;
+  color: #222;
+}
+
+.why-explanation {
+  font-size: 11px;
+  color: #666;
+  line-height: 1.5;
+}
+
+.related-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.related-tag {
+  background: #F5F5F5;
+  color: #555;
+  border: 1px solid #E5E5E5;
+  padding: 3px 9px;
+  font-size: 11px;
+  border-radius: 2px;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

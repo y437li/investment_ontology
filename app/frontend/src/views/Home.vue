@@ -80,6 +80,14 @@
               />
               <span class="search-icon">⌕</span>
             </div>
+            <!-- Hide dormant toggle -->
+            <label class="dormant-toggle" v-if="relevanceLoaded">
+              <span class="dormant-toggle-label">Hide dormant</span>
+              <span class="toggle-switch-wrap">
+                <input type="checkbox" v-model="hideDormant" class="toggle-input" />
+                <span class="toggle-slider"></span>
+              </span>
+            </label>
           </div>
         </div>
 
@@ -87,6 +95,10 @@
         <div v-if="displayedMainThemes.length === 0" class="no-results">
           <span v-if="activeFilter === 'watched' && watchlist.size === 0">
             No watched themes yet — click ★ on a card to add one.
+          </span>
+          <span v-else-if="hideDormant">
+            No active themes match your filters.
+            <button class="inline-link-btn" @click="hideDormant = false">Show dormant</button>
           </span>
           <span v-else>No themes match your search.</span>
         </div>
@@ -103,12 +115,20 @@
             <!-- Card top row -->
             <div class="card-top">
               <div class="card-sub-count">{{ mt.sub_theme_ids.length }} sub-themes</div>
-              <button
-                class="watch-btn"
-                :class="{ active: watchlist.has(mt.name) }"
-                @click.stop="toggleWatch(mt.name)"
-                :title="watchlist.has(mt.name) ? 'Remove from watchlist' : 'Add to watchlist'"
-              >★</button>
+              <div class="card-top-right">
+                <!-- State badge (from relevance) -->
+                <span
+                  v-if="mt.state"
+                  class="state-badge"
+                  :class="`state-${mt.state}`"
+                >{{ mt.state }}</span>
+                <button
+                  class="watch-btn"
+                  :class="{ active: watchlist.has(mt.name) }"
+                  @click.stop="toggleWatch(mt.name)"
+                  :title="watchlist.has(mt.name) ? 'Remove from watchlist' : 'Add to watchlist'"
+                >★</button>
+              </div>
             </div>
 
             <!-- Theme title -->
@@ -122,6 +142,21 @@
               <div class="size-badge">
                 <span class="size-num">{{ mt.size }}</span>
                 <span class="size-label">nodes</span>
+              </div>
+              <!-- Relevance score bar -->
+              <div class="relevance-bar-wrap" v-if="mt.relevance_score != null">
+                <div class="relevance-bar">
+                  <div
+                    class="relevance-fill"
+                    :class="`state-fill-${mt.state || 'unknown'}`"
+                    :style="{ width: (mt.relevance_score * 100).toFixed(0) + '%' }"
+                  ></div>
+                </div>
+                <span class="relevance-score">{{ (mt.relevance_score * 100).toFixed(0) }}</span>
+              </div>
+              <!-- Last evidence date -->
+              <div class="last-evidence" v-if="mt.last_evidence_at">
+                {{ formatDate(mt.last_evidence_at) }}
               </div>
               <div class="sub-theme-pills">
                 <span
@@ -147,12 +182,23 @@
                   @click.stop="openSubTheme(sid)"
                 >
                   <div class="sub-theme-info">
-                    <div class="sub-theme-name">{{ subThemeName(sid) }}</div>
+                    <div class="sub-theme-name-row">
+                      <div class="sub-theme-name">{{ subThemeName(sid) }}</div>
+                      <!-- Sub-theme state badge from relevance -->
+                      <span
+                        v-if="subThemeState(sid)"
+                        class="state-badge state-badge-sm"
+                        :class="`state-${subThemeState(sid)}`"
+                      >{{ subThemeState(sid) }}</span>
+                    </div>
                     <div class="sub-theme-meta" v-if="subThemeMeta(sid)">
                       <span class="sub-meta-item">{{ subThemeMeta(sid).size }} nodes</span>
                       <span v-if="subThemeCompanies(sid).length" class="sub-meta-item">
                         {{ subThemeCompanies(sid).slice(0, 3).join(', ') }}
                         <span v-if="subThemeCompanies(sid).length > 3"> +{{ subThemeCompanies(sid).length - 3 }}</span>
+                      </span>
+                      <span v-if="subThemeLastEvidence(sid)" class="sub-meta-item sub-meta-date">
+                        {{ formatDate(subThemeLastEvidence(sid)) }}
                       </span>
                     </div>
                     <p v-if="subThemeSummary(sid)" class="sub-theme-summary">{{ subThemeSummary(sid) }}</p>
@@ -320,7 +366,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listRuns } from '../api/runs.js'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
-import { getThemeHierarchy, buildThemeHierarchy } from '../api/themes.js'
+import { getThemeHierarchy, buildThemeHierarchy, getThemeRelevance } from '../api/themes.js'
 
 const router = useRouter()
 
@@ -339,6 +385,10 @@ const exposures = ref([])
 const mainThemes = ref([])
 const hierarchyNotBuilt = ref(false)
 
+// Temporal relevance
+const relevanceData = ref(null)   // full relevance response
+const relevanceLoaded = ref(false)
+
 // Expand/drill-in state
 const expandedTheme = ref(null)
 
@@ -348,6 +398,7 @@ const buildError = ref('')
 
 const activeFilter = ref('all')
 const searchQuery = ref('')
+const hideDormant = ref(true)
 
 // ─── Watchlists (localStorage) ────────────────────────────────────────────────
 // Main-theme watchlist (keyed by theme name)
@@ -436,9 +487,64 @@ const subThemeSummary = (communityId) => {
   return communityMap.value.get(communityId)?.theme_summary || ''
 }
 
+// ─── Relevance lookup helpers ─────────────────────────────────────────────────
+// Maps community_id -> relevance entry
+const subThemeRelevanceMap = computed(() => {
+  if (!relevanceData.value?.themes) return new Map()
+  const m = new Map()
+  for (const t of relevanceData.value.themes) {
+    m.set(t.community_id, t)
+  }
+  return m
+})
+
+const subThemeState = (communityId) => {
+  return subThemeRelevanceMap.value.get(communityId)?.state || null
+}
+
+const subThemeLastEvidence = (communityId) => {
+  return subThemeRelevanceMap.value.get(communityId)?.last_evidence_at || null
+}
+
+// ─── Merge relevance into main themes ────────────────────────────────────────
+const mainThemesWithRelevance = computed(() => {
+  const themes = mainThemes.value
+  if (!relevanceData.value?.main_themes) return themes
+
+  const relMap = new Map()
+  for (const r of relevanceData.value.main_themes) {
+    relMap.set(r.name, r)
+  }
+
+  const merged = themes.map(t => {
+    const rel = relMap.get(t.name)
+    if (!rel) return t
+    return {
+      ...t,
+      relevance_score: rel.relevance_score,
+      state: rel.state,
+      last_evidence_at: rel.last_evidence_at
+    }
+  })
+
+  // Sort by relevance_score descending (themes without score go to end)
+  merged.sort((a, b) => {
+    const sa = a.relevance_score ?? -1
+    const sb = b.relevance_score ?? -1
+    return sb - sa
+  })
+
+  return merged
+})
+
 // ─── Main theme filters ───────────────────────────────────────────────────────
 const displayedMainThemes = computed(() => {
-  let themes = mainThemes.value
+  let themes = mainThemesWithRelevance.value
+
+  // Hide dormant (default ON, only when relevance data is available)
+  if (hideDormant.value && relevanceLoaded.value) {
+    themes = themes.filter(t => t.state !== 'dormant')
+  }
 
   if (activeFilter.value === 'watched') {
     themes = themes.filter(t => watchlist.value.has(t.name))
@@ -576,6 +682,17 @@ const formatPct = (val) => {
   return (Number(val) * 100).toFixed(0) + '%'
 }
 
+// ─── Date formatting ──────────────────────────────────────────────────────────
+const formatDate = (dateStr) => {
+  if (!dateStr) return ''
+  try {
+    const d = new Date(dateStr)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  } catch {
+    return dateStr
+  }
+}
+
 // ─── Data loading ─────────────────────────────────────────────────────────────
 const bootstrap = async () => {
   loading.value = true
@@ -589,6 +706,8 @@ const bootstrap = async () => {
   hierarchyNotBuilt.value = false
   expandedTheme.value = null
   buildError.value = ''
+  relevanceData.value = null
+  relevanceLoaded.value = false
 
   try {
     const runs = await listRuns()
@@ -602,13 +721,14 @@ const bootstrap = async () => {
     currentRun.value = frozen || runs[0]
     const runId = currentRun.value.run_id
 
-    // Load communities in parallel with trying to get the hierarchy
-    const [commRes, snapRes, metricsRes, expRes, hierarchyRes] = await Promise.allSettled([
+    // Load communities in parallel with trying to get the hierarchy + relevance
+    const [commRes, snapRes, metricsRes, expRes, hierarchyRes, relevanceRes] = await Promise.allSettled([
       getCommunitiesJson(runId),
       getThemeSnapshots(runId),
       getThemeMetrics(runId),
       getCompanyThemeExposure(runId),
-      getThemeHierarchy(runId)
+      getThemeHierarchy(runId),
+      getThemeRelevance(runId)
     ])
 
     communities.value = commRes.status === 'fulfilled' ? (commRes.value?.communities || []) : []
@@ -621,6 +741,12 @@ const bootstrap = async () => {
     } else {
       // 404 means not built yet; other errors are silent (fallback to flat view)
       hierarchyNotBuilt.value = true
+    }
+
+    // Relevance is optional — gracefully skip if unavailable
+    if (relevanceRes.status === 'fulfilled' && relevanceRes.value) {
+      relevanceData.value = relevanceRes.value
+      relevanceLoaded.value = true
     }
   } catch (err) {
     loadError.value = err?.response?.data?.detail || err.message || 'Failed to load snapshot'
@@ -934,6 +1060,131 @@ onMounted(() => {
   pointer-events: none;
 }
 
+/* ── Dormant toggle ── */
+.dormant-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.dormant-toggle-label {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: #666;
+  white-space: nowrap;
+}
+
+.toggle-switch-wrap {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+}
+
+.toggle-input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: #ddd;
+  border-radius: 20px;
+  transition: 0.25s;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 14px; width: 14px;
+  left: 3px; bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: 0.25s;
+}
+
+.toggle-input:checked + .toggle-slider {
+  background: var(--accent);
+}
+
+.toggle-input:checked + .toggle-slider:before {
+  transform: translateX(16px);
+}
+
+/* ── State badges ── */
+.state-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  border-radius: 2px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.state-badge-sm {
+  font-size: 0.6rem;
+  padding: 1px 6px;
+}
+
+.state-emerging  { background: #d1fae5; color: #065f46; }
+.state-mature    { background: #dbeafe; color: #1e40af; }
+.state-declining { background: #fef3c7; color: #92400e; }
+.state-dormant   { background: #f3f4f6; color: #6b7280; }
+
+/* ── Relevance bar ── */
+.relevance-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 60px;
+  max-width: 90px;
+}
+
+.relevance-bar {
+  flex: 1;
+  height: 4px;
+  background: #eee;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.relevance-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.5s ease;
+  background: var(--accent);
+}
+
+.state-fill-emerging  { background: #10b981; }
+.state-fill-mature    { background: #3b82f6; }
+.state-fill-declining { background: #f59e0b; }
+.state-fill-dormant   { background: #9ca3af; }
+.state-fill-unknown   { background: var(--accent, #1a56db); }
+
+.relevance-score {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: #888;
+  flex-shrink: 0;
+}
+
+.last-evidence {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: #aaa;
+  white-space: nowrap;
+}
+
 /* ── Build hierarchy button ── */
 .build-hierarchy-btn {
   background: transparent;
@@ -989,6 +1240,22 @@ onMounted(() => {
   padding: 60px 20px;
   border: 1px dashed var(--border);
   font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inline-link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
 }
 
 /* ── Cards grid ── */
@@ -1044,6 +1311,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.card-top-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .card-id {
@@ -1283,6 +1556,13 @@ onMounted(() => {
   min-width: 0;
 }
 
+.sub-theme-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .sub-theme-name {
   font-size: 0.88rem;
   font-weight: 600;
@@ -1302,6 +1582,10 @@ onMounted(() => {
   font-family: var(--font-mono);
   font-size: 0.7rem;
   color: #999;
+}
+
+.sub-meta-date {
+  color: #bbb;
 }
 
 .sub-theme-summary {
