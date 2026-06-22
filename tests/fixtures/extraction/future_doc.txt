@@ -1,0 +1,5 @@
+FUTURE CORP ANNUAL REPORT 2025
+
+This document is dated after the as_of_date and must NOT enter discovery.
+Acme Corp and Beta Industries co_occurs_with Uranium.
+This document should be excluded by point-in-time filtering.

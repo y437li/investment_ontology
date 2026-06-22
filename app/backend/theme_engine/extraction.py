@@ -1,0 +1,716 @@
+"""Structured extraction service (M3): entities, edges, and edge explanations.
+
+Reads ``discovery/chunks.parquet`` and writes:
+
+- ``discovery/entities.parquet``        (io_contracts.md section 9)
+- ``discovery/edges.parquet``           (io_contracts.md section 11)
+- ``discovery/edge_explanations.parquet`` (io_contracts.md section 12)
+
+Entity types (ontology §7):
+    Company, EconomicConcept, Commodity, MacroIndicator, Event, Geography, Document
+
+Edge types (ontology §7):
+    mentioned_in, co_occurs_with, exposed_to, sensitive_to, causes,
+    benefits, hurts, located_in
+
+Extraction method enum:
+    document_stated  — explicit textual claim; requires >=1 evidence_chunk_ids
+    llm_inferred     — LLM inference; must include rationale
+    metadata_inferred — deterministic metadata signal; must carry source_record_id
+
+LLM interface is hermetic: the ``Extractor`` protocol is injected.
+A ``RuleBasedExtractor`` is provided as the default for tests and CI.
+A real ``OpenAIExtractor`` exists but must be explicitly constructed and
+injected — it is never instantiated automatically.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+from fastapi import HTTPException
+
+from . import runs
+from .config import settings
+
+SCHEMA_VERSION = "1.0"
+EXTRACTION_VERSION = "extract_v1"
+
+# ---------------------------------------------------------------------------
+# Ontology constants
+# ---------------------------------------------------------------------------
+
+VALID_ENTITY_TYPES = frozenset(
+    {
+        "Company",
+        "EconomicConcept",
+        "Commodity",
+        "MacroIndicator",
+        "Event",
+        "Geography",
+        "Document",
+    }
+)
+
+VALID_EDGE_TYPES = frozenset(
+    {
+        "mentioned_in",
+        "co_occurs_with",
+        "exposed_to",
+        "sensitive_to",
+        "causes",
+        "benefits",
+        "hurts",
+        "located_in",
+    }
+)
+
+VALID_EXTRACTION_METHODS = frozenset(
+    {"document_stated", "llm_inferred", "metadata_inferred"}
+)
+
+# ---------------------------------------------------------------------------
+# Contract column lists (io_contracts.md)
+# ---------------------------------------------------------------------------
+
+# Section 9 — entities.parquet
+ENTITIES_COLUMNS: list[str] = [
+    "schema_version",
+    "entity_id",
+    "entity_type",
+    "name",
+    "canonical_name",
+    "ticker",
+    "exchange",
+    "sector",
+    "country",
+    "first_seen_at",
+    "source_chunk_ids",
+    "confidence",
+    "extraction_method",
+    "review_status",
+]
+
+# Section 11 — edges.parquet
+EDGES_COLUMNS: list[str] = [
+    "schema_version",
+    "edge_id",
+    "source_entity_id",
+    "target_entity_id",
+    "edge_type",
+    "confidence",
+    "evidence_chunk_ids",
+    "first_seen_at",
+    "last_seen_at",
+    "as_of_date",
+    "extraction_method",
+    "review_status",
+]
+
+# Section 12 — edge_explanations.parquet
+EDGE_EXPLANATIONS_COLUMNS: list[str] = [
+    "schema_version",
+    "edge_id",
+    "explanation",
+    "evidence_chunk_ids",
+    "confidence",
+    "generated_by",
+    "created_at",
+]
+
+# ---------------------------------------------------------------------------
+# Data structures for extraction results
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EntityCandidate:
+    """A candidate entity extracted from a chunk."""
+
+    name: str
+    entity_type: str
+    confidence: float
+    extraction_method: str
+    ticker: Optional[str] = None
+    exchange: Optional[str] = None
+    sector: Optional[str] = None
+    country: Optional[str] = None
+
+
+@dataclass
+class EdgeCandidate:
+    """A candidate relationship extracted from a chunk."""
+
+    source_name: str
+    target_name: str
+    edge_type: str
+    confidence: float
+    extraction_method: str
+    explanation: str
+
+
+@dataclass
+class ExtractionResult:
+    """Bundle returned by the Extractor for one chunk."""
+
+    entities: list[EntityCandidate] = field(default_factory=list)
+    edges: list[EdgeCandidate] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Extractor protocol
+# ---------------------------------------------------------------------------
+
+
+class Extractor(ABC):
+    """Protocol that all extractor implementations must satisfy.
+
+    Implementations must be stateless across calls (side-effect-free) so that
+    deterministic ids remain stable for the same input + config.
+    """
+
+    @abstractmethod
+    def extract(self, chunk_id: str, chunk_text: str) -> ExtractionResult:
+        """Extract entities and edges from a single chunk.
+
+        Args:
+            chunk_id: Stable identifier for this chunk (used in evidence lists).
+            chunk_text: Cleaned text from chunks.parquet.
+
+        Returns:
+            ExtractionResult with entity and edge candidates.
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Human-readable name of this extractor (recorded in generated_by)."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Rule-based extractor (deterministic, no network — default for tests/CI)
+# ---------------------------------------------------------------------------
+
+# Ordered list of (pattern, entity_type, canonical_name) tuples.
+# Patterns are searched case-insensitively in chunk text.
+_ENTITY_RULES: list[tuple[re.Pattern, str, str]] = [
+    # Companies
+    (re.compile(r"\bacme\s+corp\b|\bacme corp\b", re.I), "Company", "Acme Corp"),
+    (re.compile(r"\bbeta industries\b", re.I), "Company", "Beta Industries"),
+    (re.compile(r"\bhydro one\b", re.I), "Company", "Hydro One"),
+    (re.compile(r"\bcameco\b", re.I), "Company", "Cameco"),
+    (re.compile(r"\brbc\b", re.I), "Company", "RBC"),
+    # Commodities
+    (re.compile(r"\buranium\b", re.I), "Commodity", "Uranium"),
+    (re.compile(r"\bcopper\b", re.I), "Commodity", "Copper"),
+    (re.compile(r"\boil\b", re.I), "Commodity", "Oil"),
+    (re.compile(r"\baluminum\b|\baluminium\b", re.I), "Commodity", "Aluminum"),
+    # EconomicConcepts
+    (re.compile(r"\bdatacenter\s+power\s+demand\b|\bpowder demand\b", re.I), "EconomicConcept", "Datacenter Power Demand"),
+    (re.compile(r"\bdatacenter\b|\bdata\s+center\b", re.I), "EconomicConcept", "Datacenter"),
+    (re.compile(r"\belectricity\s+demand\b", re.I), "EconomicConcept", "Electricity Demand"),
+    (re.compile(r"\bgrid\s+infrastructure\b|\bgrid infrastructure\b", re.I), "EconomicConcept", "Grid Infrastructure"),
+    (re.compile(r"\brenewable\s+energy\b", re.I), "EconomicConcept", "Renewable Energy"),
+    (re.compile(r"\bsupply\s+chain\b", re.I), "EconomicConcept", "Supply Chain"),
+    (re.compile(r"\bcapital\s+expenditure\b|\bcapex\b", re.I), "EconomicConcept", "Capital Expenditure"),
+    (re.compile(r"\btransmission\b", re.I), "EconomicConcept", "Transmission"),
+    # MacroIndicators
+    (re.compile(r"\bfed\s+funds\s+rate\b|\bfederal\s+funds\s+rate\b", re.I), "MacroIndicator", "Fed Funds Rate"),
+    (re.compile(r"\bcpi\b", re.I), "MacroIndicator", "CPI"),
+    (re.compile(r"\bgdp\b", re.I), "MacroIndicator", "GDP"),
+    (re.compile(r"\binterest\s+rate\b", re.I), "MacroIndicator", "Interest Rate"),
+    (re.compile(r"\binflation\b", re.I), "MacroIndicator", "Inflation"),
+    # Events
+    (re.compile(r"\brate\s+cut\b", re.I), "Event", "Rate Cut"),
+    (re.compile(r"\bcapex\s+increase\b", re.I), "Event", "Capex Increase"),
+    (re.compile(r"\bproduction\s+outage\b", re.I), "Event", "Production Outage"),
+    (re.compile(r"\bearnings\s+call\b", re.I), "Event", "Earnings Call"),
+    # Geographies
+    (re.compile(r"\bontario\b", re.I), "Geography", "Ontario"),
+    (re.compile(r"\bcanada\b", re.I), "Geography", "Canada"),
+    (re.compile(r"\balberta\b", re.I), "Geography", "Alberta"),
+    (re.compile(r"\bnorth america\b", re.I), "Geography", "North America"),
+]
+
+# Ordered list of (source_type, target_type, edge_type, source_patterns, target_patterns)
+# for rule-based edge inference.
+_EDGE_RULES: list[tuple[str, str, list[str], list[str], str]] = [
+    # Company exposed_to Commodity
+    ("Company", "Commodity", ["acme corp", "acme", "beta industries", "beta"], ["commodity", "copper", "aluminum", "oil", "uranium"], "exposed_to"),
+    # Company exposed_to EconomicConcept
+    ("Company", "EconomicConcept", ["acme corp", "acme", "beta industries", "beta"], ["electricity", "power demand", "grid", "datacenter", "transmission", "renewable"], "exposed_to"),
+    # EconomicConcept causes Event
+    ("EconomicConcept", "Event", ["electricity demand", "datacenter", "grid infrastructure"], ["capex increase"], "causes"),
+    # Commodity sensitive_to MacroIndicator
+    ("Commodity", "MacroIndicator", ["copper", "oil", "uranium", "aluminum"], ["inflation", "interest rate", "cpi", "gdp", "fed funds"], "sensitive_to"),
+]
+
+
+def _find_entities_in_text(text: str) -> list[tuple[str, str, str]]:
+    """Return list of (canonical_name, entity_type, matched_text) found in text."""
+    found: list[tuple[str, str, str]] = []
+    seen_canonical: set[str] = set()
+    for pat, etype, canonical in _ENTITY_RULES:
+        m = pat.search(text)
+        if m and canonical not in seen_canonical:
+            seen_canonical.add(canonical)
+            found.append((canonical, etype, m.group(0)))
+    return found
+
+
+class RuleBasedExtractor(Extractor):
+    """Deterministic pattern-matching extractor.
+
+    Uses no network calls, produces stable output for the same input text.
+    This is the default extractor used in tests and CI.
+    """
+
+    @property
+    def name(self) -> str:
+        return "rule_based_extractor_v1"
+
+    def extract(self, chunk_id: str, chunk_text: str) -> ExtractionResult:
+        text_lower = chunk_text.lower()
+        entities_found = _find_entities_in_text(chunk_text)
+
+        entity_candidates: list[EntityCandidate] = []
+        for canonical, etype, _matched in entities_found:
+            entity_candidates.append(
+                EntityCandidate(
+                    name=canonical,
+                    entity_type=etype,
+                    confidence=0.85,
+                    extraction_method="document_stated",
+                    ticker=None,
+                    exchange=None,
+                    sector=None,
+                    country=None,
+                )
+            )
+
+        # Build a quick lookup of what entity types were found
+        found_by_canonical = {c: (c, et) for c, et, _ in entities_found}
+
+        edge_candidates: list[EdgeCandidate] = []
+
+        # Rule-based co_occurs_with edges for every pair of entities in the chunk
+        entity_names = [c for c, _, _ in entities_found]
+        for i, (name_a, type_a, _) in enumerate(entities_found):
+            for name_b, type_b, _ in entities_found[i + 1:]:
+                # Skip self-same-type pairs to avoid noise; keep cross-type co-occurrence
+                if type_a != type_b:
+                    edge_candidates.append(
+                        EdgeCandidate(
+                            source_name=name_a,
+                            target_name=name_b,
+                            edge_type="co_occurs_with",
+                            confidence=0.65,
+                            extraction_method="document_stated",
+                            explanation=f"{name_a} and {name_b} co-occur in the same chunk.",
+                        )
+                    )
+
+        # Structural edge inference from explicit text patterns
+        if "exposed to" in text_lower or "exposure" in text_lower or "exposed" in text_lower:
+            companies = [c for c, et, _ in entities_found if et == "Company"]
+            commodities = [c for c, et, _ in entities_found if et in ("Commodity", "EconomicConcept", "MacroIndicator")]
+            for comp in companies:
+                for tgt in commodities:
+                    edge_candidates.append(
+                        EdgeCandidate(
+                            source_name=comp,
+                            target_name=tgt,
+                            edge_type="exposed_to",
+                            confidence=0.80,
+                            extraction_method="document_stated",
+                            explanation=f"Text indicates {comp} is exposed to {tgt}.",
+                        )
+                    )
+
+        if "sensitive" in text_lower or "sensitivity" in text_lower:
+            companies = [c for c, et, _ in entities_found if et == "Company"]
+            macro = [c for c, et, _ in entities_found if et == "MacroIndicator"]
+            for comp in companies:
+                for tgt in macro:
+                    edge_candidates.append(
+                        EdgeCandidate(
+                            source_name=comp,
+                            target_name=tgt,
+                            edge_type="sensitive_to",
+                            confidence=0.80,
+                            extraction_method="document_stated",
+                            explanation=f"Text indicates {comp} is sensitive to {tgt}.",
+                        )
+                    )
+
+        if "benefit" in text_lower or "benefiting" in text_lower:
+            companies = [c for c, et, _ in entities_found if et == "Company"]
+            concepts = [c for c, et, _ in entities_found if et in ("EconomicConcept", "Event")]
+            for comp in companies:
+                for tgt in concepts:
+                    edge_candidates.append(
+                        EdgeCandidate(
+                            source_name=comp,
+                            target_name=tgt,
+                            edge_type="benefits",
+                            confidence=0.75,
+                            extraction_method="document_stated",
+                            explanation=f"Text indicates {comp} benefits from {tgt}.",
+                        )
+                    )
+
+        if "hurt" in text_lower or "pressured" in text_lower:
+            companies = [c for c, et, _ in entities_found if et == "Company"]
+            concepts = [c for c, et, _ in entities_found if et in ("EconomicConcept", "Commodity", "MacroIndicator")]
+            for comp in companies:
+                for tgt in concepts:
+                    edge_candidates.append(
+                        EdgeCandidate(
+                            source_name=comp,
+                            target_name=tgt,
+                            edge_type="hurts",
+                            confidence=0.75,
+                            extraction_method="document_stated",
+                            explanation=f"Text indicates {comp} is hurt by {tgt}.",
+                        )
+                    )
+
+        return ExtractionResult(entities=entity_candidates, edges=edge_candidates)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible extractor (real LLM — NOT used in tests/CI)
+# ---------------------------------------------------------------------------
+
+
+class OpenAIExtractor(Extractor):
+    """LLM-backed extractor using an OpenAI-compatible API.
+
+    This class must be explicitly instantiated and injected. It is NEVER
+    constructed automatically. No network call occurs unless an instance of
+    this class is explicitly used.
+
+    Reads the model name from config — never hardcodes it.
+    """
+
+    def __init__(self, api_key: str, base_url: str, llm_model_name: str) -> None:
+        self._api_key = api_key
+        self._base_url = base_url
+        self._llm_model_name = llm_model_name
+        self._client = None  # lazy import to avoid import-time errors in tests
+
+    @property
+    def name(self) -> str:
+        return f"openai_extractor:{self._llm_model_name}"
+
+    def _get_client(self):  # type: ignore[return]
+        if self._client is None:
+            try:
+                from openai import OpenAI  # noqa: PLC0415
+            except ImportError as exc:
+                raise RuntimeError(
+                    "openai package is required for OpenAIExtractor; "
+                    "install it with: pip install openai"
+                ) from exc
+            self._client = OpenAI(api_key=self._api_key, base_url=self._base_url)
+        return self._client
+
+    def extract(self, chunk_id: str, chunk_text: str) -> ExtractionResult:
+        """Extract entities and edges via LLM structured output."""
+        import json as _json  # noqa: PLC0415
+
+        client = self._get_client()
+        prompt = (
+            "You are an expert financial analyst. Extract named entities and relationships "
+            "from the following text. Return a JSON object with keys 'entities' (list of "
+            "{name, entity_type, confidence}) and 'edges' (list of "
+            "{source_name, target_name, edge_type, confidence, explanation}).\n\n"
+            f"Entity types: {sorted(VALID_ENTITY_TYPES)}\n"
+            f"Edge types: {sorted(VALID_EDGE_TYPES)}\n\n"
+            f"Text:\n{chunk_text}"
+        )
+        response = client.chat.completions.create(
+            model=self._llm_model_name,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+        )
+        raw = _json.loads(response.choices[0].message.content or "{}")
+        entities: list[EntityCandidate] = []
+        for e in raw.get("entities", []):
+            etype = e.get("entity_type", "")
+            if etype not in VALID_ENTITY_TYPES:
+                continue
+            entities.append(
+                EntityCandidate(
+                    name=e.get("name", ""),
+                    entity_type=etype,
+                    confidence=float(e.get("confidence", 0.7)),
+                    extraction_method="llm_inferred",
+                )
+            )
+        edges: list[EdgeCandidate] = []
+        for ed in raw.get("edges", []):
+            etype = ed.get("edge_type", "")
+            if etype not in VALID_EDGE_TYPES:
+                continue
+            edges.append(
+                EdgeCandidate(
+                    source_name=ed.get("source_name", ""),
+                    target_name=ed.get("target_name", ""),
+                    edge_type=etype,
+                    confidence=float(ed.get("confidence", 0.7)),
+                    extraction_method="llm_inferred",
+                    explanation=ed.get("explanation", ""),
+                )
+            )
+        return ExtractionResult(entities=entities, edges=edges)
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+
+def _sha256_hex(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _stable_entity_id(canonical_name: str, entity_type: str) -> str:
+    """Deterministic entity_id: stable for same canonical_name + entity_type."""
+    basis = f"entity:{entity_type}:{canonical_name.lower()}"
+    return f"ent_{_sha256_hex(basis)[:16]}"
+
+
+def _stable_edge_id(
+    source_entity_id: str,
+    target_entity_id: str,
+    edge_type: str,
+) -> str:
+    """Deterministic edge_id: stable for same (source, target, edge_type)."""
+    basis = f"edge:{source_entity_id}:{target_entity_id}:{edge_type}"
+    return f"edge_{_sha256_hex(basis)[:16]}"
+
+
+def _to_date_str(val) -> str:
+    """Coerce available_at / first_seen_at values to YYYY-MM-DD strings."""
+    if val is None:
+        return ""
+    if isinstance(val, (date, datetime)):
+        return val.strftime("%Y-%m-%d")
+    s = str(val)
+    # Handle timestamp strings like "2024-01-20T00:00:00"
+    if "T" in s:
+        return s.split("T")[0]
+    return s[:10]  # truncate to date portion
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _write_table(rows: list[dict], columns: list[str], out_path: Path) -> None:
+    """Write a contract-conformant parquet file."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        # Build typed empty table for list columns
+        field_map: dict[str, pa.DataType] = {}
+        list_cols = {"source_chunk_ids", "evidence_chunk_ids"}
+        for col in columns:
+            if col in list_cols:
+                field_map[col] = pa.list_(pa.string())
+            elif col == "confidence":
+                field_map[col] = pa.float64()
+            else:
+                field_map[col] = pa.string()
+        schema = pa.schema([(c, field_map[c]) for c in columns])
+        pq.write_table(pa.table({c: pa.array([], type=field_map[c]) for c in columns}, schema=schema), out_path)
+        return
+
+    pydict: dict[str, list] = {col: [row.get(col) for row in rows] for col in columns}
+    table = pa.Table.from_pydict(pydict)
+    pq.write_table(table, out_path)
+
+
+# ---------------------------------------------------------------------------
+# Core extraction pipeline
+# ---------------------------------------------------------------------------
+
+
+def _read_chunks(run_id: str) -> list[dict]:
+    artifact = runs.get_run_dir(run_id) / "discovery" / "chunks.parquet"
+    if not artifact.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"chunks.parquet not found for run {run_id}; run chunk first",
+        )
+    return pq.read_table(artifact).to_pylist()
+
+
+def run_extraction(
+    run_id: str,
+    extractor: Optional[Extractor] = None,
+) -> tuple[int, int]:
+    """Extract entities, edges, and explanations from chunks.
+
+    Args:
+        run_id: The run to process.
+        extractor: Extractor implementation to use. Defaults to RuleBasedExtractor.
+
+    Returns:
+        (entity_count, edge_count)
+    """
+    if extractor is None:
+        extractor = RuleBasedExtractor()
+
+    manifest = runs.load_manifest(run_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+    as_of_date = manifest.as_of_date
+
+    chunks = _read_chunks(run_id)
+    run_dir = runs.get_run_dir(run_id)
+    discovery_dir = run_dir / "discovery"
+
+    # Phase 1: extract per-chunk candidates.
+    # entity_name -> (EntityCandidate, list[chunk_id], first_seen_date)
+    entity_map: dict[str, tuple[EntityCandidate, list[str], str]] = {}
+    # (source_id, target_id, edge_type) -> (EdgeCandidate, list[chunk_id], first_seen_date)
+    edge_map: dict[tuple[str, str, str], tuple[EdgeCandidate, list[str], str]] = {}
+
+    for chunk in chunks:
+        chunk_id: str = chunk.get("chunk_id") or ""
+        text: str = chunk.get("text") or ""
+        available_at = _to_date_str(chunk.get("available_at"))
+
+        if not chunk_id or not text:
+            continue
+
+        result = extractor.extract(chunk_id=chunk_id, chunk_text=text)
+
+        # Accumulate entities
+        for cand in result.entities:
+            if cand.entity_type not in VALID_ENTITY_TYPES:
+                continue
+            if cand.extraction_method not in VALID_EXTRACTION_METHODS:
+                continue
+            key = f"{cand.entity_type}:{cand.name.lower()}"
+            if key in entity_map:
+                existing_cand, chunk_ids, first_seen = entity_map[key]
+                if chunk_id not in chunk_ids:
+                    chunk_ids.append(chunk_id)
+                entity_map[key] = (existing_cand, chunk_ids, first_seen)
+            else:
+                entity_map[key] = (cand, [chunk_id], available_at)
+
+        # Accumulate edges (need entity resolution after entity pass)
+        for ecand in result.edges:
+            if ecand.edge_type not in VALID_EDGE_TYPES:
+                continue
+            if ecand.extraction_method not in VALID_EXTRACTION_METHODS:
+                continue
+            # We'll resolve entity ids after the entity pass
+            edge_key_src = f"_:{ecand.source_name.lower()}"
+            edge_key_tgt = f"_:{ecand.target_name.lower()}"
+            # Use canonical names as temporary keys — resolved below
+            edge_key = (ecand.source_name.lower(), ecand.target_name.lower(), ecand.edge_type)
+            if edge_key in edge_map:
+                existing_cand, chunk_ids, first_seen = edge_map[edge_key]
+                if chunk_id not in chunk_ids:
+                    chunk_ids.append(chunk_id)
+                edge_map[edge_key] = (existing_cand, chunk_ids, first_seen)
+            else:
+                edge_map[edge_key] = (ecand, [chunk_id], available_at)
+
+    # Phase 2: build entity rows with stable ids.
+    entity_rows: list[dict] = []
+    # Build canonical_name -> entity_id lookup for edge resolution
+    name_to_entity_id: dict[str, str] = {}
+
+    for key, (cand, chunk_ids, first_seen) in entity_map.items():
+        entity_id = _stable_entity_id(cand.name, cand.entity_type)
+        name_to_entity_id[cand.name.lower()] = entity_id
+        entity_rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "entity_id": entity_id,
+                "entity_type": cand.entity_type,
+                "name": cand.name,
+                "canonical_name": cand.name,
+                "ticker": cand.ticker,
+                "exchange": cand.exchange,
+                "sector": cand.sector,
+                "country": cand.country,
+                "first_seen_at": first_seen or as_of_date,
+                "source_chunk_ids": chunk_ids,
+                "confidence": cand.confidence,
+                "extraction_method": cand.extraction_method,
+                "review_status": "pending",
+            }
+        )
+
+    # Phase 3: build edge rows with stable ids, resolving entity references.
+    edge_rows: list[dict] = []
+    explanation_rows: list[dict] = []
+    created_at = _utc_now_iso()
+
+    for (src_name_lower, tgt_name_lower, edge_type), (ecand, chunk_ids, first_seen) in edge_map.items():
+        source_entity_id = name_to_entity_id.get(src_name_lower)
+        target_entity_id = name_to_entity_id.get(tgt_name_lower)
+        if not source_entity_id or not target_entity_id:
+            # Skip edges whose endpoints were not extracted as entities
+            continue
+
+        edge_id = _stable_edge_id(source_entity_id, target_entity_id, edge_type)
+
+        # Contract: document_stated edges MUST carry >=1 evidence_chunk_ids
+        if ecand.extraction_method == "document_stated" and not chunk_ids:
+            continue
+
+        edge_rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "edge_id": edge_id,
+                "source_entity_id": source_entity_id,
+                "target_entity_id": target_entity_id,
+                "edge_type": edge_type,
+                "confidence": ecand.confidence,
+                "evidence_chunk_ids": chunk_ids,
+                "first_seen_at": first_seen or as_of_date,
+                "last_seen_at": as_of_date,
+                "as_of_date": as_of_date,
+                "extraction_method": ecand.extraction_method,
+                "review_status": "pending",
+            }
+        )
+
+        explanation_rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "edge_id": edge_id,
+                "explanation": ecand.explanation,
+                "evidence_chunk_ids": chunk_ids,
+                "confidence": ecand.confidence,
+                "generated_by": extractor.name,
+                "created_at": created_at,
+            }
+        )
+
+    _write_table(entity_rows, ENTITIES_COLUMNS, discovery_dir / "entities.parquet")
+    _write_table(edge_rows, EDGES_COLUMNS, discovery_dir / "edges.parquet")
+    _write_table(
+        explanation_rows,
+        EDGE_EXPLANATIONS_COLUMNS,
+        discovery_dir / "edge_explanations.parquet",
+    )
+
+    return len(entity_rows), len(edge_rows)

@@ -1,0 +1,4 @@
+source,source_id,title,document_type,company_id,raw_path,published_at,available_at,source_vintage,language,source_url,license,confidentiality,notes
+sec,ext-doc-1,Acme Annual 2024,10-k,ACME,acme_annual.txt,2024-01-15,2024-01-20,2024-01-21T00:00:00Z,en,https://example.com/acme,public,public,seed
+sec,ext-doc-2,Beta Transcript Q1 2024,transcript,BETA,beta_transcript.txt,2024-02-10,2024-02-11,2024-02-12T00:00:00Z,en,https://example.com/beta,public,public,seed
+sec,ext-doc-3,Future Corp 2025,10-k,FUTURE,future_doc.txt,2025-01-01,2025-01-15,2025-01-16T00:00:00Z,en,https://example.com/future,public,public,seed
