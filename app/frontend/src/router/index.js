@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Home from '../views/Home.vue'
+import AdminView from '../views/AdminView.vue'
 import ImportView from '../views/ImportView.vue'
 import GraphView from '../views/GraphView.vue'
 import ThemesView from '../views/ThemesView.vue'
@@ -12,6 +13,11 @@ const routes = [
     path: '/',
     name: 'Home',
     component: Home
+  },
+  {
+    path: '/admin',
+    name: 'Admin',
+    component: AdminView
   },
   {
     path: '/runs/:runId/import',

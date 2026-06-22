@@ -4,138 +4,167 @@
     <nav class="navbar">
       <div class="nav-brand">THEME ENGINE</div>
       <div class="nav-links">
-        <span class="nav-tagline">Investment Theme Discovery</span>
+        <span class="snapshot-label" v-if="currentRun">
+          Snapshot: <strong>{{ currentRun.as_of_date }}</strong>
+          <span class="badge-frozen" v-if="currentRun.discovery_frozen">Frozen</span>
+          <span class="badge-active" v-else>Live</span>
+        </span>
+        <router-link to="/admin" class="admin-link">Admin ↗</router-link>
       </div>
     </nav>
 
-    <div class="main-content">
-      <!-- Hero Section -->
-      <section class="hero-section">
-        <div class="hero-left">
-          <div class="tag-row">
-            <span class="accent-tag">INVESTMENT RESEARCH</span>
-            <span class="version-text">v0.1.0</span>
+    <!-- Loading State -->
+    <div v-if="loading" class="loading-state">
+      <div class="loading-spinner"></div>
+      <p class="loading-text">Loading theme snapshot...</p>
+    </div>
+
+    <!-- Error State -->
+    <div v-else-if="loadError" class="error-state">
+      <div class="error-icon">⚠</div>
+      <p class="error-text">{{ loadError }}</p>
+      <button class="retry-btn" @click="bootstrap">Retry</button>
+    </div>
+
+    <!-- Empty State: no runs at all -->
+    <div v-else-if="!currentRun" class="empty-state">
+      <div class="empty-icon">◇</div>
+      <h2 class="empty-title">No Theme Snapshots Yet</h2>
+      <p class="empty-desc">
+        No pipeline runs have been completed yet. Visit the
+        <router-link to="/admin" class="admin-inline-link">Admin area</router-link>
+        to create a run and discover themes.
+      </p>
+    </div>
+
+    <!-- Main Content: Theme Radar -->
+    <div v-else class="main-content">
+      <!-- Header: title + filter bar -->
+      <div class="radar-header">
+        <div class="radar-title-group">
+          <div class="radar-eyebrow">
+            <span class="accent-tag">THEME RADAR</span>
+            <span class="snapshot-meta">as of {{ currentRun.as_of_date }}</span>
+            <span class="community-count">{{ displayedCards.length }} themes</span>
           </div>
-
-          <h1 class="main-title">
-            Investment<br>
-            <span class="gradient-text">Theme Discovery</span>
-          </h1>
-
-          <div class="hero-desc">
-            <p>
-              Evidence-backed investment theme discovery from financial filings
-              and research documents. Build knowledge graphs, detect communities,
-              and compute company-theme exposure scores.
-            </p>
-            <p class="slogan-text">
-              From documents to evidence-backed themes<span class="blinking-cursor">_</span>
-            </p>
-          </div>
-
-          <div class="decoration-square"></div>
+          <h1 class="radar-title">Emerging Themes</h1>
         </div>
 
-        <div class="hero-right">
-          <div class="steps-container">
-            <div class="steps-header">
-              <span class="diamond-icon">◇</span> PIPELINE SEQUENCE
-            </div>
-            <div class="workflow-list">
-              <div class="workflow-item" v-for="(step, i) in pipelineSteps" :key="i">
-                <span class="step-num">{{ String(i + 1).padStart(2, '0') }}</span>
-                <div class="step-info">
-                  <div class="step-title">{{ step.title }}</div>
-                  <div class="step-desc">{{ step.desc }}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Create Run Section -->
-      <section class="dashboard-section">
-        <div class="left-panel">
-          <div class="panel-header">
-            <span class="status-dot">■</span> CREATE NEW RUN
-          </div>
-
-          <h2 class="section-title">Start Discovery</h2>
-          <p class="section-desc">
-            Provide an as-of date to create a new pipeline run.
-            All data will be point-in-time gated to this date.
-          </p>
-
-          <div class="console-box">
-            <div class="console-section">
-              <div class="console-header">
-                <span class="console-label">AS-OF DATE (YYYY-MM-DD)</span>
-              </div>
-              <input
-                v-model="asOfDate"
-                class="date-input"
-                type="text"
-                placeholder="2024-06-30"
-                :disabled="creating"
-              />
-            </div>
-
-            <div class="console-section btn-section">
-              <button
-                class="start-btn"
-                @click="handleCreateRun"
-                :disabled="!canCreate || creating"
-              >
-                <span v-if="!creating">Create Run →</span>
-                <span v-else>Creating...</span>
-              </button>
-            </div>
-
-            <div v-if="createError" class="error-msg">{{ createError }}</div>
-          </div>
-        </div>
-
-        <!-- Recent Runs -->
-        <div class="right-panel">
-          <div class="panel-header">
-            <span class="status-dot">■</span> RECENT RUNS
-          </div>
-
-          <div v-if="recentRuns.length === 0" class="empty-runs">
-            No runs yet. Create your first run to get started.
-          </div>
-
-          <div v-else class="runs-list">
-            <div
-              v-for="run in recentRuns"
-              :key="run.run_id"
-              class="run-card"
-              @click="openRun(run.run_id)"
+        <div class="filter-bar">
+          <div class="filter-tabs">
+            <button
+              class="filter-tab"
+              :class="{ active: activeFilter === 'all' }"
+              @click="activeFilter = 'all'"
             >
-              <div class="run-id">{{ run.run_id }}</div>
-              <div class="run-meta">
-                <span class="meta-item">
-                  <span class="meta-label">Date</span>
-                  <span class="meta-value">{{ run.as_of_date }}</span>
-                </span>
-                <span class="meta-item">
-                  <span class="meta-label">Created</span>
-                  <span class="meta-value">{{ formatDate(run.created_at) }}</span>
-                </span>
-                <span class="meta-item">
-                  <span
-                    class="badge"
-                    :class="run.discovery_frozen ? 'badge-frozen' : 'badge-active'"
-                  >
-                    {{ run.discovery_frozen ? 'Frozen' : 'Active' }}
-                  </span>
-                </span>
-              </div>
-            </div>
+              All
+            </button>
+            <button
+              class="filter-tab"
+              :class="{ active: activeFilter === 'watched' }"
+              @click="activeFilter = 'watched'"
+            >
+              ★ Watched
+              <span class="watch-count" v-if="watchlist.size > 0">{{ watchlist.size }}</span>
+            </button>
+          </div>
+          <div class="search-wrap">
+            <input
+              v-model="searchQuery"
+              class="search-input"
+              type="text"
+              placeholder="Search themes, companies, entities..."
+            />
+            <span class="search-icon">⌕</span>
           </div>
         </div>
-      </section>
+      </div>
+
+      <!-- No results under current filter -->
+      <div v-if="displayedCards.length === 0 && !loading" class="no-results">
+        <span v-if="activeFilter === 'watched' && watchlist.size === 0">
+          No watched themes yet — click ★ on a card to add one.
+        </span>
+        <span v-else>No themes match your search.</span>
+      </div>
+
+      <!-- Theme Cards Grid -->
+      <div class="cards-grid">
+        <div
+          v-for="card in displayedCards"
+          :key="card.community_id"
+          class="theme-card"
+          :class="{ watched: watchlist.has(card.community_id) }"
+          @click="openTheme(card)"
+        >
+          <!-- Card top row -->
+          <div class="card-top">
+            <div class="card-id">{{ card.community_id }}</div>
+            <button
+              class="watch-btn"
+              :class="{ active: watchlist.has(card.community_id) }"
+              @click.stop="toggleWatch(card.community_id)"
+              :title="watchlist.has(card.community_id) ? 'Remove from watchlist' : 'Add to watchlist'"
+            >★</button>
+          </div>
+
+          <!-- Theme title -->
+          <h3 class="card-title">{{ card.displayTitle }}</h3>
+
+          <!-- Theme summary if available -->
+          <p v-if="card.theme_summary" class="card-summary">{{ card.theme_summary }}</p>
+
+          <!-- Companies chips -->
+          <div v-if="card.top_companies?.length" class="chips-section">
+            <div class="chips-label">Companies</div>
+            <div class="chips-row">
+              <span
+                v-for="co in card.top_companies.slice(0, 5)"
+                :key="co"
+                class="chip chip-company"
+              >{{ co }}</span>
+              <span v-if="card.top_companies.length > 5" class="chip chip-more">
+                +{{ card.top_companies.length - 5 }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Entities chips -->
+          <div v-if="card.top_entities?.length" class="chips-section">
+            <div class="chips-label">Entities</div>
+            <div class="chips-row">
+              <span
+                v-for="e in card.top_entities.slice(0, 4)"
+                :key="e"
+                class="chip chip-entity"
+              >{{ e }}</span>
+              <span v-if="card.top_entities.length > 4" class="chip chip-more">
+                +{{ card.top_entities.length - 4 }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Metrics badges row -->
+          <div class="card-footer">
+            <div class="size-badge">
+              <span class="size-num">{{ card.size }}</span>
+              <span class="size-label">nodes</span>
+            </div>
+            <div class="metric-badges" v-if="card.metrics">
+              <span
+                v-for="(val, key) in filteredMetrics(card.metrics)"
+                :key="key"
+                class="metric-badge"
+                :class="`metric-${key}`"
+                :title="key"
+              >
+                {{ metricShort(key) }} {{ formatPct(val) }}
+              </span>
+            </div>
+            <div class="card-arrow">→</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -143,100 +172,203 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { createRun, getRunStatus, listRuns } from '../api/runs.js'
+import { listRuns } from '../api/runs.js'
+import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
 
 const router = useRouter()
 
-const asOfDate = ref('')
-const creating = ref(false)
-const createError = ref('')
-const recentRuns = ref([])
+// ─── State ───────────────────────────────────────────────────────────────────
+const loading = ref(false)
+const loadError = ref('')
+const currentRun = ref(null)
 
-const pipelineSteps = [
-  { title: 'Data Import & Clean', desc: 'Ingest source documents and apply data quality gates.' },
-  { title: 'Extraction & Resolution', desc: 'Extract entities and edges; resolve entity aliases.' },
-  { title: 'Graph Build', desc: 'Construct the structural knowledge graph.' },
-  { title: 'Theme Discovery', desc: 'Detect communities and label investment themes.' },
-  { title: 'Validation & Report', desc: 'Compute exposure, validate, and generate the research report.' }
-]
+const communities = ref([])
+const snapshots = ref([])
+const metrics = ref([])
+const exposures = ref([])
 
-const canCreate = computed(() => {
-  return /^\d{4}-\d{2}-\d{2}$/.test(asOfDate.value.trim())
+const activeFilter = ref('all')
+const searchQuery = ref('')
+
+// ─── Watchlist (localStorage) ─────────────────────────────────────────────────
+const WATCHLIST_KEY = 'theme_engine_watchlist'
+const watchlist = ref(new Set())
+
+const loadWatchlist = () => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]')
+    watchlist.value = new Set(raw)
+  } catch {
+    watchlist.value = new Set()
+  }
+}
+
+const saveWatchlist = () => {
+  try {
+    localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...watchlist.value]))
+  } catch {}
+}
+
+const toggleWatch = (communityId) => {
+  const w = new Set(watchlist.value)
+  if (w.has(communityId)) {
+    w.delete(communityId)
+  } else {
+    w.add(communityId)
+  }
+  watchlist.value = w
+  saveWatchlist()
+}
+
+// ─── Derived cards ───────────────────────────────────────────────────────────
+/**
+ * Build a map from community_id to metrics row.
+ * theme_metrics rows are linked via snapshots: community_id -> snapshot -> metrics
+ */
+const metricsMap = computed(() => {
+  const map = new Map()
+  for (const snap of snapshots.value) {
+    const m = metrics.value.find(r => r.theme_snapshot_id === snap.theme_snapshot_id)
+    if (m) {
+      map.set(snap.community_id, m)
+    }
+  }
+  return map
 })
 
-const handleCreateRun = async () => {
-  if (!canCreate.value || creating.value) return
-  creating.value = true
-  createError.value = ''
-  try {
-    const manifest = await createRun(asOfDate.value.trim())
-    const runId = manifest.run_id
-    // Save to local history
-    saveRunToHistory(manifest)
-    router.push({ name: 'Import', params: { runId } })
-  } catch (err) {
-    createError.value = err?.response?.data?.detail || err.message || 'Failed to create run'
-  } finally {
-    creating.value = false
-  }
-}
+const allCards = computed(() => {
+  return communities.value
+    .map(c => {
+      // Build display title
+      let displayTitle = c.theme_name && c.theme_name.trim() && c.theme_name !== c.community_id
+        ? c.theme_name
+        : (c.top_entities || []).slice(0, 3).join(' · ') || c.community_id
 
-const openRun = (runId) => {
-  router.push({ name: 'Import', params: { runId } })
-}
+      // Merge top_companies from exposure data if community lacks them
+      const expRows = exposures.value
+        .filter(e => e.community_id === c.community_id)
+        .sort((a, b) => Number(b.exposure_score || 0) - Number(a.exposure_score || 0))
+        .slice(0, 10)
+        .map(e => e.company_id)
 
-const formatDate = (iso) => {
-  if (!iso) return ''
-  try {
-    return new Date(iso).toLocaleString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric',
-      hour: 'numeric', minute: '2-digit', hour12: true
+      const top_companies = c.top_companies?.length ? c.top_companies : expRows
+
+      return {
+        ...c,
+        displayTitle,
+        top_companies,
+        metrics: metricsMap.value.get(c.community_id) || null
+      }
     })
-  } catch {
-    return iso
+    .sort((a, b) => (b.size || 0) - (a.size || 0))
+})
+
+const displayedCards = computed(() => {
+  let cards = allCards.value
+
+  // Filter: watched only
+  if (activeFilter.value === 'watched') {
+    cards = cards.filter(c => watchlist.value.has(c.community_id))
   }
-}
 
-const HISTORY_KEY = 'theme_engine_runs'
-
-const saveRunToHistory = (manifest) => {
-  const existing = loadHistory()
-  const updated = [
-    { run_id: manifest.run_id, as_of_date: manifest.as_of_date, created_at: manifest.created_at, discovery_frozen: manifest.discovery_frozen },
-    ...existing.filter(r => r.run_id !== manifest.run_id)
-  ].slice(0, 20) // keep last 20
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(updated))
-  } catch {}
-  recentRuns.value = updated
-}
-
-const loadHistory = () => {
-  try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')
-  } catch {
-    return []
+  // Filter: text search
+  const q = searchQuery.value.trim().toLowerCase()
+  if (q) {
+    cards = cards.filter(c => {
+      const haystack = [
+        c.displayTitle,
+        c.theme_name,
+        c.theme_summary,
+        ...(c.top_companies || []),
+        ...(c.top_entities || [])
+      ].filter(Boolean).join(' ').toLowerCase()
+      return haystack.includes(q)
+    })
   }
+
+  // Cap only the default unfiltered landing view; watched/search show all matches.
+  if (activeFilter.value === 'all' && !q) {
+    cards = cards.slice(0, 12)
+  }
+  return cards
+})
+
+// ─── Metrics helpers ──────────────────────────────────────────────────────────
+const METRIC_KEYS = ['strength', 'cohesion', 'novelty', 'saturation']
+
+const filteredMetrics = (m) => {
+  if (!m) return {}
+  const out = {}
+  for (const k of METRIC_KEYS) {
+    if (m[k] != null) out[k] = m[k]
+  }
+  return out
 }
 
-onMounted(async () => {
-  const local = loadHistory()
-  recentRuns.value = local
+const metricShort = (key) => {
+  const shorts = { strength: 'STR', cohesion: 'COH', novelty: 'NOV', saturation: 'SAT' }
+  return shorts[key] || key.slice(0, 3).toUpperCase()
+}
+
+const formatPct = (val) => {
+  if (val == null) return ''
+  return (Number(val) * 100).toFixed(0) + '%'
+}
+
+// ─── Navigation ──────────────────────────────────────────────────────────────
+const openTheme = (card) => {
+  if (!currentRun.value) return
+  router.push({ name: 'Themes', params: { runId: currentRun.value.run_id }, query: { community: card.community_id } })
+}
+
+// ─── Data loading ─────────────────────────────────────────────────────────────
+const bootstrap = async () => {
+  loading.value = true
+  loadError.value = ''
+  currentRun.value = null
+  communities.value = []
+  snapshots.value = []
+  metrics.value = []
+  exposures.value = []
+
   try {
-    const backend = await listRuns()
-    const byId = new Map()
-    for (const r of [...local, ...(backend || [])]) {
-      byId.set(r.run_id, { ...byId.get(r.run_id), ...r })
+    const runs = await listRuns()
+    if (!runs || runs.length === 0) {
+      loading.value = false
+      return
     }
-    recentRuns.value = Array.from(byId.values())
-      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
-  } catch {
-    recentRuns.value = local
+
+    // Pick the most recent frozen run; fall back to newest
+    const frozen = runs.find(r => r.discovery_frozen)
+    currentRun.value = frozen || runs[0]
+
+    const runId = currentRun.value.run_id
+    const [commRes, snapRes, metricsRes, expRes] = await Promise.allSettled([
+      getCommunitiesJson(runId),
+      getThemeSnapshots(runId),
+      getThemeMetrics(runId),
+      getCompanyThemeExposure(runId)
+    ])
+
+    communities.value = commRes.status === 'fulfilled' ? (commRes.value?.communities || []) : []
+    snapshots.value = snapRes.status === 'fulfilled' ? (snapRes.value?.snapshots || []) : []
+    metrics.value = metricsRes.status === 'fulfilled' ? (metricsRes.value || []) : []
+    exposures.value = expRes.status === 'fulfilled' ? (expRes.value || []) : []
+  } catch (err) {
+    loadError.value = err?.response?.data?.detail || err.message || 'Failed to load snapshot'
+  } finally {
+    loading.value = false
   }
+}
+
+onMounted(() => {
+  loadWatchlist()
+  bootstrap()
 })
 </script>
 
 <style scoped>
+/* ── Layout ── */
 .home-container {
   min-height: 100vh;
   background: var(--white);
@@ -244,6 +376,7 @@ onMounted(async () => {
   color: var(--black);
 }
 
+/* ── Navbar ── */
 .navbar {
   height: 60px;
   background: var(--black);
@@ -252,6 +385,9 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   padding: 0 40px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
 .nav-brand {
@@ -261,361 +397,511 @@ onMounted(async () => {
   font-size: 1.2rem;
 }
 
-.nav-tagline {
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.snapshot-label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: #aaa;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.snapshot-label strong {
+  color: #fff;
+}
+
+.badge-frozen {
+  background: #1a7a40;
+  color: #fff;
+  padding: 2px 7px;
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  border-radius: 2px;
+  letter-spacing: 0.5px;
+}
+
+.badge-active {
+  background: #3730a3;
+  color: #fff;
+  padding: 2px 7px;
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  border-radius: 2px;
+}
+
+.admin-link {
   font-family: var(--font-mono);
   font-size: 0.8rem;
+  color: #aaa;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.admin-link:hover {
+  color: #fff;
+}
+
+/* ── Loading / Error / Empty ── */
+.loading-state,
+.error-state,
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 60px);
+  gap: 16px;
+  color: var(--gray-text);
+  text-align: center;
+  padding: 40px;
+}
+
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid #eee;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
   color: #999;
 }
 
+.error-icon {
+  font-size: 2rem;
+  color: #c0392b;
+}
+
+.error-text {
+  font-size: 0.95rem;
+  color: #c0392b;
+  max-width: 480px;
+}
+
+.retry-btn {
+  background: var(--black);
+  color: var(--white);
+  border: none;
+  padding: 10px 24px;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.retry-btn:hover {
+  background: var(--accent);
+}
+
+.empty-icon {
+  font-size: 2.5rem;
+  color: #ccc;
+}
+
+.empty-title {
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--black);
+}
+
+.empty-desc {
+  font-size: 0.95rem;
+  color: var(--gray-text);
+  max-width: 480px;
+  line-height: 1.6;
+}
+
+.admin-inline-link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* ── Main content ── */
 .main-content {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 60px 40px;
+  padding: 40px 40px 80px;
 }
 
-.hero-section {
+/* ── Radar header ── */
+.radar-header {
   display: flex;
   justify-content: space-between;
-  gap: 60px;
-  margin-bottom: 80px;
+  align-items: flex-end;
+  gap: 30px;
+  margin-bottom: 36px;
+  flex-wrap: wrap;
 }
 
-.hero-left {
-  flex: 1;
-}
-
-.tag-row {
+.radar-eyebrow {
   display: flex;
   align-items: center;
-  gap: 15px;
-  margin-bottom: 25px;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
 }
 
 .accent-tag {
   background: var(--accent);
   color: var(--white);
   padding: 4px 10px;
+  font-family: var(--font-mono);
   font-weight: 700;
   letter-spacing: 1px;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
 }
 
-.version-text {
-  color: #999;
-  font-weight: 500;
+.snapshot-meta {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: #888;
 }
 
-.main-title {
-  font-size: 4rem;
-  line-height: 1.2;
+.community-count {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: #bbb;
+}
+
+.radar-title {
+  font-size: 2.6rem;
   font-weight: 600;
-  margin: 0 0 40px 0;
-  letter-spacing: -2px;
+  letter-spacing: -1.5px;
+  line-height: 1.1;
 }
 
-.gradient-text {
-  background: linear-gradient(90deg, #1a56db 0%, #7c3aed 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  display: inline-block;
+/* ── Filter bar ── */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
-.hero-desc {
-  font-size: 1rem;
-  line-height: 1.8;
-  color: var(--gray-text);
-  max-width: 580px;
-  margin-bottom: 50px;
-}
-
-.hero-desc p {
-  margin-bottom: 1.2rem;
-}
-
-.slogan-text {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--black);
-  border-left: 3px solid var(--accent);
-  padding-left: 15px;
-  margin-top: 10px;
-}
-
-.blinking-cursor {
-  color: var(--accent);
-  animation: blink 1s step-end infinite;
-  font-weight: 700;
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
-.decoration-square {
-  width: 16px;
-  height: 16px;
-  background: var(--accent);
-  margin-top: 20px;
-}
-
-.hero-right {
-  flex: 0.9;
-}
-
-.steps-container {
+.filter-tabs {
+  display: flex;
   border: 1px solid var(--border);
-  padding: 30px;
 }
 
-.steps-header {
+.filter-tab {
+  background: transparent;
+  border: none;
+  padding: 8px 18px;
   font-family: var(--font-mono);
   font-size: 0.8rem;
-  color: #999;
-  margin-bottom: 25px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.workflow-list {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.workflow-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 20px;
-}
-
-.step-num {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  color: var(--black);
-  opacity: 0.3;
-  min-width: 28px;
-}
-
-.step-info {
-  flex: 1;
-}
-
-.step-title {
-  font-weight: 600;
-  font-size: 0.95rem;
-  margin-bottom: 4px;
-}
-
-.step-desc {
-  font-size: 0.82rem;
-  color: var(--gray-text);
-}
-
-/* Dashboard */
-.dashboard-section {
-  display: flex;
-  gap: 60px;
-  border-top: 1px solid var(--border);
-  padding-top: 60px;
-  align-items: flex-start;
-}
-
-.left-panel {
-  flex: 0.8;
-}
-
-.right-panel {
-  flex: 1.2;
-}
-
-.panel-header {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: #999;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 20px;
-}
-
-.status-dot {
-  color: var(--accent);
-  font-size: 0.8rem;
-}
-
-.section-title {
-  font-size: 1.8rem;
-  font-weight: 600;
-  margin: 0 0 15px 0;
-}
-
-.section-desc {
-  color: var(--gray-text);
-  margin-bottom: 25px;
-  line-height: 1.6;
-  font-size: 0.9rem;
-}
-
-.console-box {
-  border: 1px solid #CCC;
-  padding: 8px;
-}
-
-.console-section {
-  padding: 20px;
-}
-
-.console-section.btn-section {
-  padding-top: 0;
-}
-
-.console-header {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
+  cursor: pointer;
   color: #666;
-  margin-bottom: 12px;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.console-label {
-  font-family: var(--font-mono);
+.filter-tab:not(:last-child) {
+  border-right: 1px solid var(--border);
 }
 
-.date-input {
-  width: 100%;
-  border: 1px solid #DDD;
+.filter-tab.active {
+  background: var(--black);
+  color: var(--white);
+}
+
+.filter-tab:hover:not(.active) {
+  background: var(--gray-light);
+}
+
+.watch-count {
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.68rem;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+.search-wrap {
+  position: relative;
+}
+
+.search-input {
+  padding: 9px 14px 9px 36px;
+  border: 1px solid var(--border);
   background: #FAFAFA;
-  padding: 14px 16px;
-  font-family: var(--font-mono);
-  font-size: 1rem;
+  font-family: var(--font-sans);
+  font-size: 0.88rem;
+  width: 260px;
   outline: none;
   transition: border-color 0.2s;
 }
 
-.date-input:focus {
+.search-input:focus {
   border-color: var(--accent);
+  background: #fff;
 }
 
-.date-input:disabled {
-  opacity: 0.6;
-}
-
-.start-btn {
-  width: 100%;
-  background: var(--black);
-  color: var(--white);
-  border: none;
-  padding: 18px;
-  font-family: var(--font-mono);
-  font-weight: 700;
+.search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #aaa;
   font-size: 1rem;
-  cursor: pointer;
-  transition: all 0.2s;
-  letter-spacing: 1px;
-  text-align: left;
+  pointer-events: none;
 }
 
-.start-btn:hover:not(:disabled) {
-  background: var(--accent);
-}
-
-.start-btn:disabled {
-  background: #E5E5E5;
-  color: #999;
-  cursor: not-allowed;
-}
-
-.error-msg {
-  padding: 12px 20px;
-  color: #c0392b;
-  font-size: 0.85rem;
-  font-family: var(--font-mono);
-}
-
-.empty-runs {
-  padding: 40px 20px;
+/* ── No results ── */
+.no-results {
   text-align: center;
   color: #999;
   font-size: 0.9rem;
-  border: 1px dashed #E0E0E0;
+  padding: 60px 20px;
+  border: 1px dashed var(--border);
+  font-family: var(--font-mono);
 }
 
-.runs-list {
+/* ── Cards grid ── */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 20px;
+}
+
+/* ── Theme card ── */
+.theme-card {
+  border: 1px solid var(--border);
+  padding: 22px 22px 18px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.18s, box-shadow 0.18s, transform 0.15s;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  position: relative;
 }
 
-.run-card {
-  border: 1px solid var(--border);
-  padding: 18px 20px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.run-card:hover {
+.theme-card:hover {
   border-color: var(--accent);
-  background: var(--accent-light);
+  box-shadow: 0 4px 20px rgba(26, 86, 219, 0.08);
+  transform: translateY(-2px);
 }
 
-.run-id {
+.theme-card.watched {
+  border-color: #f59e0b;
+  background: #fffbf0;
+}
+
+.theme-card.watched:hover {
+  border-color: #d97706;
+  box-shadow: 0 4px 20px rgba(245, 158, 11, 0.12);
+}
+
+/* Card top row */
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-id {
   font-family: var(--font-mono);
-  font-size: 0.9rem;
-  font-weight: 700;
-  margin-bottom: 10px;
+  font-size: 0.72rem;
+  color: #bbb;
 }
 
-.run-meta {
+.watch-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: #ddd;
+  line-height: 1;
+  padding: 2px 4px;
+  transition: color 0.15s, transform 0.1s;
+}
+
+.watch-btn:hover {
+  color: #f59e0b;
+  transform: scale(1.2);
+}
+
+.watch-btn.active {
+  color: #f59e0b;
+}
+
+/* Card title */
+.card-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--black);
+  letter-spacing: -0.3px;
+}
+
+/* Card summary */
+.card-summary {
+  font-size: 0.82rem;
+  color: var(--gray-text);
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Chips */
+.chips-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chips-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: #bbb;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.chip {
+  padding: 3px 9px;
+  font-size: 0.75rem;
+  border-radius: 2px;
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip-company {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.chip-entity {
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+}
+
+.chip-more {
+  background: #f5f5f5;
+  color: #999;
+  border: 1px solid #e5e5e5;
+}
+
+/* Card footer */
+.card-footer {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 10px;
   flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 2px;
+  border-top: 1px solid #f0f0f0;
 }
 
-.meta-item {
+.size-badge {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  gap: 3px;
 }
 
-.meta-label {
-  font-size: 0.7rem;
-  color: #999;
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-}
-
-.meta-value {
-  font-size: 0.85rem;
-  font-weight: 500;
-}
-
-.badge {
-  display: inline-block;
-  padding: 3px 10px;
-  font-size: 0.72rem;
+.size-num {
   font-family: var(--font-mono);
   font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--black);
+}
+
+.size-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: #aaa;
+}
+
+.metric-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 1;
+}
+
+.metric-badge {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  padding: 2px 7px;
   border-radius: 2px;
+  font-weight: 700;
+  background: #f0f0f0;
+  color: #555;
 }
 
-.badge-frozen {
-  background: #E8F5E9;
-  color: #2E7D32;
+.metric-strength  { background: #e0f2fe; color: #0369a1; }
+.metric-cohesion  { background: #f0fdf4; color: #15803d; }
+.metric-novelty   { background: #fdf4ff; color: #7e22ce; }
+.metric-saturation { background: #fff7ed; color: #c2410c; }
+
+.card-arrow {
+  margin-left: auto;
+  color: #ccc;
+  font-size: 0.9rem;
+  transition: color 0.15s;
 }
 
-.badge-active {
-  background: #EEF2FF;
-  color: #3730a3;
+.theme-card:hover .card-arrow {
+  color: var(--accent);
 }
 
-@media (max-width: 1024px) {
-  .hero-section, .dashboard-section {
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .main-content {
+    padding: 24px 20px 60px;
+  }
+
+  .radar-header {
     flex-direction: column;
-    gap: 40px;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .radar-title {
+    font-size: 2rem;
+  }
+
+  .cards-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .search-input {
+    width: 200px;
+  }
+
+  .navbar {
+    padding: 0 20px;
   }
 }
 </style>

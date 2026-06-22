@@ -8,11 +8,11 @@ const messages = {
       docs: 'Docs'
     },
     home: {
-      tagline: 'INVESTMENT RESEARCH',
+      tagline: 'NARRATIVE RESEARCH',
       version: 'v0.1.0',
-      heroTitle1: 'Investment',
+      heroTitle1: 'Economic Narrative',
       heroTitle2: 'Theme Discovery',
-      heroDesc: 'Evidence-backed investment theme discovery from financial filings and research documents. Build knowledge graphs, detect communities, and compute company-theme exposure scores.',
+      heroDesc: 'Evidence-backed economic narrative and theme discovery from financial filings and research documents. Build knowledge graphs, detect communities, and compute company-theme exposure scores.',
       systemStatus: 'SYSTEM STATUS',
       systemReady: 'Engine Ready',
       systemReadyDesc: 'Create a new run with an as-of date to start the discovery pipeline.',
@@ -24,7 +24,7 @@ const messages = {
       step03Title: 'Graph Build',
       step03Desc: 'Construct the structural knowledge graph.',
       step04Title: 'Theme Discovery',
-      step04Desc: 'Detect communities and label investment themes.',
+      step04Desc: 'Detect communities and label emerging themes.',
       step05Title: 'Validation & Report',
       step05Desc: 'Compute exposure, validate, and generate the research report.',
       createRunLabel: 'AS-OF DATE',

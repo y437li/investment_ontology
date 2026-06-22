@@ -197,7 +197,7 @@
             </div>
             <div class="card-content">
               <p class="api-note">POST /api/themes/discover</p>
-              <p class="description">Detect communities in the graph and label investment themes.</p>
+              <p class="description">Detect communities in the graph and label emerging themes.</p>
               <button class="action-btn" @click="runStep('themes')" :disabled="!canRun('themes')">
                 <span v-if="steps.themes.status === 'running'" class="spinner-sm"></span>
                 {{ steps.themes.status === 'running' ? 'Running...' : 'Run Step' }}
