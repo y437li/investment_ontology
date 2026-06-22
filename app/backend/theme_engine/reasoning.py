@@ -96,6 +96,7 @@ def gather_dossier(run_id: str, community_id: str) -> dict:
             "edge_type": ed["edge_type"],
             "target": ent.get(ed["target_entity_id"], ed["target_entity_id"]),
             "target_id": ed["target_entity_id"],
+            "extraction_method": ed.get("extraction_method") or "document_stated",
             "explanation": expl.get(ed["edge_id"], ""),
             "evidence": evidence,
             "evidence_chunk_ids": ev_ids,
@@ -168,14 +169,23 @@ def synthesize_narrative(run_id: str, community_id: str, client=None, model: Opt
     reasoning_chain = m.group(1).strip() if m else ""
     narrative = args.get("narrative") or _THINK_RE.sub("", content).strip()
 
+    # Provenance: a step is document_stated only if it matches a stated relationship
+    # with evidence; otherwise it is the model's own inference (llm_inferred). Label
+    # each step clearly so the PM knows what is evidence-backed vs inferred.
+    rel_lookup = {(r["source"].lower(), r["target"].lower(), r["edge_type"]): r for r in d["relationships"]}
     steps = []
     for s in (args.get("reasoning_steps") or []):
+        match = rel_lookup.get((s.get("source", "").lower(), s.get("target", "").lower(), s.get("edge_type", "")))
+        method = (match.get("extraction_method") if match else None)
+        provenance = method if method in ("document_stated", "llm_inferred") else "llm_inferred"
         steps.append({
             "order": s.get("order"),
             "claim": s.get("claim", ""),
             "source": s.get("source", ""), "source_id": name_to_id.get(s.get("source")),
             "target": s.get("target", ""), "target_id": name_to_id.get(s.get("target")),
             "edge_type": s.get("edge_type", ""),
+            "provenance": provenance,
+            "evidence": match.get("evidence") if match else [],
         })
     steps.sort(key=lambda x: (x["order"] is None, x["order"] or 0))
 

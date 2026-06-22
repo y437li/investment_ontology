@@ -69,7 +69,8 @@ def _seed_run() -> str:
     pq.write_table(pa.table({"entity_id": ["a", "b"], "canonical_name": ["oil prices", "Suncor Energy"]}),
                    d / "entities.parquet")
     pq.write_table(pa.table({"edge_id": ["e1"], "source_entity_id": ["a"], "target_entity_id": ["b"],
-                             "edge_type": ["benefits"], "evidence_chunk_ids": [["chk1"]]}),
+                             "edge_type": ["benefits"], "evidence_chunk_ids": [["chk1"]],
+                             "extraction_method": ["document_stated"]}),
                    d / "edges.parquet")
     pq.write_table(pa.table({"edge_id": ["e1"], "explanation": ["Text states higher oil prices benefit Suncor."]}),
                    d / "edge_explanations.parquet")
@@ -125,6 +126,7 @@ def test_narrative_emits_ordered_reasoning_steps_with_ids():
     assert len(steps) == 1 and steps[0]["order"] == 1
     # step endpoints mapped to entity ids so the graph can highlight the path
     assert steps[0]["source_id"] == "a" and steps[0]["target_id"] == "b"
+    assert steps[0]["provenance"] == "document_stated"   # matched a stated edge -> labeled
     assert out["reasoning_chain"] == "trace"
 
 
