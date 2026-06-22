@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -211,6 +211,16 @@ def get_theme_narrative(run_id: str, community_id: str, refresh: bool = False):
     except KeyError:
         raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
     except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/themes/{run_id}/levels")
+def get_theme_levels(run_id: str):
+    """Per-theme factor-level composition (macro/industry/company/idiosyncratic) +
+    substantive flag, so themes can be filtered by level and 0-metric noise hidden."""
+    try:
+        return theme_levels_mod.compute_levels(run_id)
+    except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 

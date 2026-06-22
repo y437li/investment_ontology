@@ -55,6 +55,12 @@ def build_hierarchy(run_id: str, client=None, model: Optional[str] = None,
                     max_main_themes: int = 7) -> dict:
     """LLM-group communities into <= max_main_themes main themes; write artifact."""
     communities = _load_communities(run_id)
+    # Filter out non-substantive (0-metric / tiny / evidence-less) communities so the
+    # LLM groups only real narratives; fall back to all if the filter would empty it.
+    from . import theme_levels  # noqa: PLC0415 (avoid import cycle at module load)
+    keep = theme_levels.substantive_ids(run_id)
+    if keep:
+        communities = [c for c in communities if c["community_id"] in keep] or communities
     if client is None:
         client, model = _default_client_model()
 
