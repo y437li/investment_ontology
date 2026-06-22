@@ -153,7 +153,7 @@ def _synthesize_dossier(d: dict, client, model: str) -> dict:
         "evidence below, produce (1) a concise narrative (4-7 sentences) explaining the emerging economic "
         "narrative this cluster represents, and (2) an ORDERED reasoning chain (reasoning_steps) — each step "
         "is one inference hop linking a source entity to a target entity, in derivation order, so the dots "
-        "connect into a sequence. Source/target names MUST come from the relationships. The derivation MUST RESOLVE TO THE BOTTOM LINE — trace impact down to the companies' profitability / cash flow / revenue growth (terminate at financial outcomes when present). Use ONLY the provided "
+        "connect into a sequence. Source/target names MUST come from the relationships. Each step's claim must be DIRECTIONAL and MECHANISTIC (state which way each variable moves and the channel, e.g. 'rising inflation pushes the Canadian Dollar lower (depreciation)') — never a vague 'X is sensitive to Y'. The derivation MUST RESOLVE TO THE BOTTOM LINE — trace impact down to the companies' profitability / cash flow / revenue growth (terminate at financial outcomes when present). Use ONLY the provided "
         "facts; do NOT add outside knowledge; do NOT give investment advice. Always call emit_narrative."
     )
     user = (
