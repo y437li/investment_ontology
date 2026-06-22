@@ -210,6 +210,19 @@ def build_theme_hierarchy(run_id: str):
         raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
 
 
+@app.get("/api/themes/{run_id}/main-narrative")
+def get_main_narrative(run_id: str, communities: str = "", refresh: bool = False):
+    """One STORY for a whole main theme: connect-the-dots narrative + ordered 推演
+    over the union of the given communities. `communities` = comma-separated ids."""
+    ids = [c for c in communities.split(",") if c]
+    if not ids:
+        raise HTTPException(status_code=400, detail="provide ?communities=cid1,cid2,...")
+    try:
+        return reasoning_mod.synthesize_main_narrative(run_id, ids, refresh=refresh)
+    except KeyError:
+        raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
+
+
 @app.get("/api/themes/{run_id}/communities/{community_id}/narrative")
 def get_theme_narrative(run_id: str, community_id: str, refresh: bool = False):
     """Connect-the-dots narrative + captured reasoning chain for a community (cached)."""
