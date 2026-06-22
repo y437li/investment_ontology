@@ -145,36 +145,83 @@ function renderGraph() {
 
   const svg = d3.select(el)
   svg.selectAll('*').remove()
-  svg.attr('viewBox', `0 0 ${W} ${H}`)
+  svg.attr('viewBox', `0 0 ${W} ${H}`).style('background', '#fbfbfd')
   const g = svg.append('g')
   svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', (ev) => g.attr('transform', ev.transform)))
 
-  linkSel = g.append('g').attr('stroke-opacity', 0.5).selectAll('line').data(links).join('line')
-    .attr('stroke', (d) => edgeColor(d.edge_type)).attr('stroke-width', 1.4)
+  // defs: soft node shadow + one arrowhead marker per edge-type colour
+  const defs = svg.append('defs')
+  defs.append('filter').attr('id', 'nodeShadow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%')
+    .append('feDropShadow').attr('dx', 0).attr('dy', 1).attr('stdDeviation', 1.5).attr('flood-color', '#000').attr('flood-opacity', 0.18)
+  const edgeTypes = Array.from(new Set(links.map((l) => l.edge_type)))
+  edgeTypes.forEach((t) => {
+    defs.append('marker').attr('id', `arr-${t}`).attr('viewBox', '0 -5 10 10').attr('refX', 20).attr('refY', 0)
+      .attr('markerWidth', 6).attr('markerHeight', 6).attr('orient', 'auto')
+      .append('path').attr('d', 'M0,-4L9,0L0,4').attr('fill', edgeColor(t)).attr('opacity', 0.8)
+  })
+
+  // faint horizontal level bands + left labels (macro → idiosyncratic)
+  const presentLevels = LEVELS.filter((lv) => nodes.some((n) => levelOf(n) === lv))
+  const bands = g.append('g')
+  presentLevels.forEach((lv) => {
+    const y = (LEVEL_Y[lv] ?? 0.9) * H
+    bands.append('rect').attr('x', 0).attr('y', y - 36).attr('width', W).attr('height', 72)
+      .attr('fill', LEVEL_COLORS[lv]).attr('opacity', 0.04)
+    bands.append('text').attr('x', 12).attr('y', y - 20).text(lv.toUpperCase())
+      .attr('font-size', 11).attr('font-family', 'monospace').attr('font-weight', 700)
+      .attr('fill', LEVEL_COLORS[lv]).attr('opacity', 0.55)
+  })
+
+  // adjacency for hover
+  const adj = {}
+  links.forEach((l) => { (adj[l.source.id || l.source] ||= new Set()).add(l.target.id || l.target); (adj[l.target.id || l.target] ||= new Set()).add(l.source.id || l.source) })
+
+  linkSel = g.append('g').selectAll('line').data(links).join('line')
+    .attr('stroke', (d) => edgeColor(d.edge_type)).attr('stroke-width', 1.4).attr('stroke-opacity', 0.55)
+    .attr('marker-end', (d) => `url(#arr-${d.edge_type})`)
 
   const node = g.append('g').selectAll('g').data(nodes).join('g').style('cursor', 'pointer')
     .on('click', (ev, d) => openNode(d))
+    .on('mouseover', (ev, d) => { if (activeIdx.value < 0) hoverNode(d, adj) })
+    .on('mouseout', () => { if (activeIdx.value < 0) restore() })
     .call(d3.drag()
       .on('start', (ev, d) => { if (!ev.active) sim.alphaTarget(0.2).restart(); d.fx = d.x; d.fy = d.y })
       .on('drag', (ev, d) => { d.fx = ev.x; d.fy = ev.y })
       .on('end', (ev, d) => { if (!ev.active) sim.alphaTarget(0); d.fx = null; d.fy = null }))
   nodeSel = node.append('circle')
-    .attr('r', (d) => 5 + Math.min(8, d.deg))
+    .attr('r', (d) => 5 + Math.min(9, d.deg))
     .attr('fill', (d) => LEVEL_COLORS[levelOf(d)])
-    .attr('stroke', '#fff').attr('stroke-width', 1.5)
-  labelSel = node.append('text').text((d) => d.label).attr('x', 9).attr('y', 4)
-    .attr('font-size', 10).attr('fill', '#333')
+    .attr('stroke', '#fff').attr('stroke-width', 1.6)
+    .attr('filter', 'url(#nodeShadow)')
+  labelSel = node.append('text').text((d) => d.label).attr('x', (d) => 8 + Math.min(9, d.deg)).attr('y', 4)
+    .attr('font-size', 10).attr('fill', '#222')
+    .attr('stroke', '#fbfbfd').attr('stroke-width', 3).attr('paint-order', 'stroke')
+    .attr('opacity', (d) => (d.deg >= 1 ? 1 : 0.55))
 
   sim = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id((d) => d.id).distance(45).strength(0.4))
-    .force('charge', d3.forceManyBody().strength(-110))
-    .force('x', d3.forceX(W / 2).strength(0.06))
-    .force('y', d3.forceY((d) => (LEVEL_Y[levelOf(d)] ?? 0.9) * H).strength(0.85))
-    .force('collide', d3.forceCollide().radius((d) => 12 + Math.min(8, d.deg)))
+    .force('link', d3.forceLink(links).id((d) => d.id).distance(50).strength(0.35))
+    .force('charge', d3.forceManyBody().strength(-140))
+    .force('x', d3.forceX(W / 2).strength(0.05))
+    .force('y', d3.forceY((d) => (LEVEL_Y[levelOf(d)] ?? 0.9) * H).strength(0.9))
+    .force('collide', d3.forceCollide().radius((d) => 14 + Math.min(9, d.deg)))
     .on('tick', () => {
       linkSel.attr('x1', (d) => d.source.x).attr('y1', (d) => d.source.y).attr('x2', (d) => d.target.x).attr('y2', (d) => d.target.y)
       node.attr('transform', (d) => `translate(${d.x},${d.y})`)
     })
+}
+
+function hoverNode(d, adj) {
+  const hot = adj[d.id] ? new Set([...adj[d.id], d.id]) : new Set([d.id])
+  nodeSel.attr('opacity', (n) => (hot.has(n.id) ? 1 : 0.12))
+  labelSel.attr('opacity', (n) => (hot.has(n.id) ? 1 : 0.08))
+  linkSel.attr('stroke-opacity', (l) => ((l.source.id === d.id || l.target.id === d.id) ? 0.95 : 0.04))
+    .attr('stroke-width', (l) => ((l.source.id === d.id || l.target.id === d.id) ? 2.4 : 1.4))
+}
+function restore() {
+  if (!nodeSel) return
+  nodeSel.attr('opacity', 1)
+  labelSel.attr('opacity', (d) => (d.deg >= 1 ? 1 : 0.55))
+  linkSel.attr('stroke-opacity', 0.55).attr('stroke-width', 1.4)
 }
 
 async function openNode(d) {
