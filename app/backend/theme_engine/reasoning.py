@@ -116,12 +116,32 @@ def _default_client_model():
     return client, os.environ["LLM_MODEL_NAME"]
 
 
-def synthesize_narrative(run_id: str, community_id: str, client=None, model: Optional[str] = None) -> dict:
-    """Connect the dots for a community into a cited narrative + captured reasoning chain."""
-    d = gather_dossier(run_id, community_id)
-    if client is None:
-        client, model = _default_client_model()
+def gather_main_dossier(run_id: str, community_ids: list[str]) -> dict:
+    """Union the relationships across a main theme's sub-themes into one dossier."""
+    rels: list[dict] = []
+    seen: set = set()
+    ents: set = set()
+    comps: set = set()
+    for cid in community_ids:
+        try:
+            d = gather_dossier(run_id, cid)
+        except ValueError:
+            continue
+        for r in d["relationships"]:
+            key = (r.get("source_id"), r.get("target_id"), r["edge_type"])
+            if key in seen:
+                continue
+            seen.add(key)
+            rels.append(r)
+        ents.update(d.get("top_entities", []))
+        comps.update(d.get("top_companies", []))
+    return {"community_id": None, "theme_name": None,
+            "top_entities": sorted(ents)[:12], "top_companies": sorted(comps)[:12],
+            "relationships": rels}
 
+
+def _synthesize_dossier(d: dict, client, model: str) -> dict:
+    """Core connect-the-dots synthesis from a dossier: narrative + ordered, labeled steps."""
     facts = "\n".join(
         f"- {r['source']} --{r['edge_type']}--> {r['target']}. {r['explanation']} "
         f"Evidence: {' | '.join(r['evidence'])}"
@@ -188,15 +208,36 @@ def synthesize_narrative(run_id: str, community_id: str, client=None, model: Opt
             "evidence": match.get("evidence") if match else [],
         })
     steps.sort(key=lambda x: (x["order"] is None, x["order"] or 0))
+    return {"narrative": narrative, "reasoning_steps": steps, "reasoning_chain": reasoning_chain}
 
-    return {
-        "community_id": community_id,
-        "theme_name": d["theme_name"],
-        "narrative": narrative,
-        "reasoning_steps": steps,
-        "reasoning_chain": reasoning_chain,
-        "relationships": d["relationships"],
-    }
+
+def synthesize_narrative(run_id: str, community_id: str, client=None, model: Optional[str] = None) -> dict:
+    """Connect the dots for a single community into a cited narrative + reasoning chain."""
+    d = gather_dossier(run_id, community_id)
+    if client is None:
+        client, model = _default_client_model()
+    out = _synthesize_dossier(d, client, model)
+    return {"community_id": community_id, "theme_name": d["theme_name"],
+            **out, "relationships": d["relationships"]}
+
+
+def synthesize_main_narrative(run_id: str, community_ids: list[str], client=None,
+                              model: Optional[str] = None, refresh: bool = False) -> dict:
+    """One STORY for a whole main theme (union of its sub-themes), cached."""
+    import hashlib  # noqa: PLC0415
+    key = hashlib.sha256(",".join(sorted(community_ids)).encode()).hexdigest()[:16]
+    cache = runs.get_run_dir(run_id) / "discovery" / "main_narratives" / f"{key}.json"
+    if cache.exists() and not refresh:
+        return json.loads(cache.read_text())
+    d = gather_main_dossier(run_id, community_ids)
+    if client is None:
+        client, model = _default_client_model()
+    out = _synthesize_dossier(d, client, model)
+    result = {"community_ids": sorted(community_ids), "top_entities": d["top_entities"],
+              "top_companies": d["top_companies"], **out, "relationships": d["relationships"]}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(result, indent=2))
+    return result
 
 
 def get_or_synthesize(run_id: str, community_id: str, refresh: bool = False,
