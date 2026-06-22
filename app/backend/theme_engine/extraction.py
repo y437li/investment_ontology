@@ -48,30 +48,19 @@ EXTRACTION_VERSION = "extract_v1"
 # Ontology constants
 # ---------------------------------------------------------------------------
 
-VALID_ENTITY_TYPES = frozenset(
-    {
-        "Company",
-        "EconomicConcept",
-        "Commodity",
-        "MacroIndicator",
-        "Event",
-        "Geography",
-        "Document",
-    }
+# Derived from the managed ontology table (configs/ontology.yml); the hardcoded
+# sets are the fallback when the table or pyyaml is unavailable.
+from . import registry  # noqa: E402
+
+_FALLBACK_ENTITY_TYPES = frozenset(
+    {"Company", "EconomicConcept", "Commodity", "MacroIndicator", "Event", "Geography", "Document"}
+)
+_FALLBACK_EDGE_TYPES = frozenset(
+    {"mentioned_in", "co_occurs_with", "exposed_to", "sensitive_to", "causes", "benefits", "hurts", "located_in"}
 )
 
-VALID_EDGE_TYPES = frozenset(
-    {
-        "mentioned_in",
-        "co_occurs_with",
-        "exposed_to",
-        "sensitive_to",
-        "causes",
-        "benefits",
-        "hurts",
-        "located_in",
-    }
-)
+VALID_ENTITY_TYPES = frozenset(registry.entity_types()) or _FALLBACK_ENTITY_TYPES
+VALID_EDGE_TYPES = frozenset(registry.edge_types()) or _FALLBACK_EDGE_TYPES
 
 VALID_EXTRACTION_METHODS = frozenset(
     {"document_stated", "llm_inferred", "metadata_inferred"}
@@ -465,7 +454,9 @@ class OpenAIExtractor(Extractor):
         import json as _json  # noqa: PLC0415
 
         client = self._get_client()
-        system = (
+        # Prompt is maintained in the agent registry (configs/agents.yml), generated
+        # from the ontology; fall back to a built-in prompt if the table is absent.
+        system = registry.get_system_prompt("entity_extraction") or (
             "You are a financial NLP extractor. Extract ONLY economically meaningful "
             "entities and relationships explicitly present in the given text. Do NOT use "
             "outside or world knowledge and do NOT infer beyond what the text states.\n"

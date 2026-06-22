@@ -10,7 +10,7 @@ import json
 import os
 from typing import Optional
 
-from . import runs
+from . import registry, runs
 
 
 def _load_communities(run_id: str) -> list[dict]:
@@ -63,7 +63,7 @@ def build_hierarchy(run_id: str, client=None, model: Optional[str] = None,
         f"entities={(c.get('top_entities') or [])[:5]}"
         for c in communities
     )
-    system = (
+    system = registry.get_system_prompt("theme_grouping", max_main_themes=max_main_themes) or (
         f"You organize discovered sub-themes into at most {max_main_themes} higher-level MAIN themes. "
         "A main theme is a broad economic narrative (e.g. 'Oil sands operations & ESG risk'); sub-themes "
         "are its facets. Every community_id must be assigned to exactly one main theme. Names must come "

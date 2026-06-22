@@ -17,7 +17,7 @@ from typing import Optional
 
 import pyarrow.parquet as pq
 
-from . import runs
+from . import registry, runs
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
@@ -94,7 +94,7 @@ def synthesize_narrative(run_id: str, community_id: str, client=None, model: Opt
         for r in d["relationships"]
     ) or "(no relationships)"
 
-    system = (
+    system = registry.get_system_prompt("narrative_synthesis") or (
         "You are a financial research analyst. CONNECT THE DOTS: using ONLY the relationships and "
         "evidence below, write a concise narrative (4-7 sentences) explaining the emerging economic "
         "narrative this cluster represents. Trace how the entities connect across multiple hops and what "

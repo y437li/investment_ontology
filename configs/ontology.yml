@@ -1,0 +1,66 @@
+# The Investment Ontology — managed source of truth for WHAT the engine extracts
+# and keeps. Extraction prompts are generated from this table; extraction output
+# is validated against it. Edit here to change extraction behavior — not in code.
+version: 1
+
+# Entity types. `level` places the type in the factor hierarchy
+# (macro -> industry -> company -> idiosyncratic; `contextual` = supporting).
+entity_types:
+  Company:
+    level: company
+    definition: A specific operating company (ideally in the universe).
+    keep: true
+  Sector:
+    level: industry
+    definition: An industry or sector grouping (e.g. Oil & Gas, Banks).
+    keep: true
+  Commodity:
+    level: macro
+    definition: A traded commodity (oil, natural gas, uranium, gold, copper, potash).
+    keep: true
+  MacroIndicator:
+    level: macro
+    definition: A macroeconomic indicator (interest rates, inflation, FX, GDP).
+    keep: true
+  EconomicConcept:
+    level: contextual
+    definition: An economic theme, driver, or mechanism (energy transition, supply chain).
+    keep: true
+  Event:
+    level: idiosyncratic
+    definition: A material, dated corporate or market event (lawsuit, fine, M&A, incident).
+    keep: true
+  Geography:
+    level: contextual
+    definition: A place that contextualizes an asset, market, or operation.
+    keep: true
+  Document:
+    level: evidence
+    definition: A source document node (evidence traceability only; excluded from discovery).
+    keep: true
+
+# Never extract these as entities (denoise).
+exclude:
+  - dates and time expressions
+  - person names / signatories
+  - ticker symbols as standalone entities
+  - document or form metadata (Form 6-K, registrant, EDGAR/SEDAR)
+  - legal / procedural boilerplate (Foreign Private Issuer, Annual Meeting)
+
+# Edge types. `structural` edges drive community/slice discovery and exposure;
+# evidence/contextual edges are kept for traceability but excluded from discovery.
+edge_types:
+  causes:        {structural: true,  directed: true,  definition: A drives or causes B.}
+  benefits:      {structural: true,  directed: true,  definition: A benefits B.}
+  hurts:         {structural: true,  directed: true,  definition: A hurts or pressures B.}
+  exposed_to:    {structural: true,  directed: true,  definition: A is exposed to B.}
+  sensitive_to:  {structural: true,  directed: true,  definition: A is sensitive to B.}
+  located_in:    {structural: false, directed: true,  definition: A is located in B.}
+  co_occurs_with: {structural: false, directed: false, definition: A co-occurs with B in evidence.}
+  mentioned_in:  {structural: false, directed: true,  definition: A is mentioned in document B (evidence only).}
+
+# Extraction rules enforced after the LLM returns.
+rules:
+  entity_must_have_known_type: true   # drop entities whose type is not above
+  edge_must_have_known_type: true     # drop edges whose type is not above
+  document_stated_edge_requires_evidence: true
