@@ -21,6 +21,37 @@ from . import registry, runs
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
+# Tool for structured output: a narrative PLUS the ordered derivation (推演顺序).
+_NARRATIVE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "emit_narrative",
+        "description": "Emit the connected narrative and the ORDERED reasoning steps that derive it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "narrative": {"type": "string", "description": "4-7 sentence connected narrative"},
+                "reasoning_steps": {
+                    "type": "array",
+                    "description": "ordered inference hops; each links a source entity to a target entity",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "order": {"type": "integer"},
+                            "claim": {"type": "string", "description": "what this step infers"},
+                            "source": {"type": "string", "description": "source entity name (from the relationships)"},
+                            "target": {"type": "string", "description": "target entity name"},
+                            "edge_type": {"type": "string"},
+                        },
+                        "required": ["order", "claim", "source", "target"],
+                    },
+                },
+            },
+            "required": ["narrative", "reasoning_steps"],
+        },
+    },
+}
+
 
 def _parse_ids(v) -> list[str]:
     if isinstance(v, list):
@@ -98,29 +129,61 @@ def synthesize_narrative(run_id: str, community_id: str, client=None, model: Opt
 
     system = registry.get_system_prompt("narrative_synthesis") or (
         "You are a financial research analyst. CONNECT THE DOTS: using ONLY the relationships and "
-        "evidence below, write a concise narrative (4-7 sentences) explaining the emerging economic "
-        "narrative this cluster represents. Trace how the entities connect across multiple hops and what "
-        "it implies for the companies involved. Refer to the evidence. Use ONLY the provided facts; do NOT "
-        "add outside or world knowledge; do NOT give investment advice."
+        "evidence below, produce (1) a concise narrative (4-7 sentences) explaining the emerging economic "
+        "narrative this cluster represents, and (2) an ORDERED reasoning chain (reasoning_steps) — each step "
+        "is one inference hop linking a source entity to a target entity, in derivation order, so the dots "
+        "connect into a sequence. Source/target names MUST come from the relationships. Use ONLY the provided "
+        "facts; do NOT add outside knowledge; do NOT give investment advice. Always call emit_narrative."
     )
     user = (
         f"Theme entities: {d['top_entities']}\nCompanies: {d['top_companies']}\n"
         f"Relationships with evidence:\n{facts}"
     )
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.2,
-    )
-    content = resp.choices[0].message.content or ""
+    # name -> entity_id (so each reasoning step can highlight the path on the graph)
+    name_to_id: dict[str, str] = {}
+    for r in d["relationships"]:
+        name_to_id.setdefault(r["source"], r.get("source_id"))
+        name_to_id.setdefault(r["target"], r.get("target_id"))
+
+    import json as _json  # noqa: PLC0415
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    args: dict = {}
+    content = ""
+    for _ in range(3):
+        resp = client.chat.completions.create(
+            model=model, messages=messages, tools=[_NARRATIVE_TOOL], temperature=0.2,
+        )
+        msg = resp.choices[0].message
+        content = msg.content or content
+        tool_calls = getattr(msg, "tool_calls", None) or []
+        if tool_calls:
+            try:
+                args = _json.loads(tool_calls[0].function.arguments)
+                break
+            except Exception:
+                args = {}
+        messages.append({"role": "user", "content": "Call emit_narrative with valid JSON arguments only."})
+
     m = _THINK_RE.search(content)
     reasoning_chain = m.group(1).strip() if m else ""
-    narrative = _THINK_RE.sub("", content).strip()
+    narrative = args.get("narrative") or _THINK_RE.sub("", content).strip()
+
+    steps = []
+    for s in (args.get("reasoning_steps") or []):
+        steps.append({
+            "order": s.get("order"),
+            "claim": s.get("claim", ""),
+            "source": s.get("source", ""), "source_id": name_to_id.get(s.get("source")),
+            "target": s.get("target", ""), "target_id": name_to_id.get(s.get("target")),
+            "edge_type": s.get("edge_type", ""),
+        })
+    steps.sort(key=lambda x: (x["order"] is None, x["order"] or 0))
 
     return {
         "community_id": community_id,
         "theme_name": d["theme_name"],
         "narrative": narrative,
+        "reasoning_steps": steps,
         "reasoning_chain": reasoning_chain,
         "relationships": d["relationships"],
     }

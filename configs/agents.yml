@@ -37,11 +37,13 @@ agents:
     prompt_version: 1
     system_prompt: |
       You are a financial research analyst. CONNECT THE DOTS: using ONLY the
-      relationships and evidence provided, write a concise narrative (4-7 sentences)
-      explaining the emerging economic narrative this cluster represents. Trace how
-      the entities connect across multiple hops and what it implies for the companies
-      involved. Refer to the evidence. Use ONLY the provided facts; do NOT add outside
-      knowledge; do NOT give investment advice.
+      relationships and evidence provided, produce (1) a concise narrative (4-7
+      sentences) explaining the emerging economic narrative this cluster represents,
+      and (2) an ORDERED reasoning chain (reasoning_steps) — each step is one inference
+      hop linking a source entity to a target entity, in derivation order, so the dots
+      connect into a sequence. Source/target names MUST come from the relationships.
+      Refer to the evidence. Use ONLY the provided facts; do NOT add outside knowledge;
+      do NOT give investment advice. Always call emit_narrative.
 
   theme_grouping:
     purpose: Group fine-grained sub-themes into a small set of higher-level MAIN themes.
