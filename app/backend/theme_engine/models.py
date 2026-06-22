@@ -43,6 +43,8 @@ class RunManifest(BaseModel):
     discovery_frozen: bool = False
     discovery_artifact_hashes: Optional[dict[str, str]] = None
     sweep_parent_id: Optional[str] = None
+    # M5: set by freeze endpoint
+    frozen_at: Optional[str] = None
 
 
 class RunStatus(BaseModel):
@@ -181,3 +183,19 @@ class ThemeDiscoverResponse(BaseModel):
     success: bool
     artifacts: list[str]
     community_count: int
+
+
+class ExposureComputeRequest(BaseModel):
+    """Request body for POST /api/exposure/compute (io_contracts §24)."""
+
+    run_id: str
+    include_weak_signals: bool = False
+
+
+class ExposureComputeResponse(BaseModel):
+    """Response body for POST /api/exposure/compute (io_contracts §24)."""
+
+    success: bool
+    artifacts: list[str]
+    theme_count: int
+    company_theme_pair_count: int

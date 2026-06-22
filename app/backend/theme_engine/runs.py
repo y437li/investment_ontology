@@ -136,9 +136,17 @@ def _compute_required_discovery_hashes(run_id: str) -> dict[str, str]:
 
 
 def _ensure_discovery_hashes_match(manifest: RunManifest, run_id: str) -> None:
+    """Verify that all required discovery artifact hashes in the manifest match
+    the current file contents.
+
+    Optional M4/M5 artifacts (communities.json, company_theme_exposure.parquet,
+    etc.) may also appear in discovery_artifact_hashes and are verified if
+    present on disk. Extra hash entries for optional artifacts are allowed.
+    """
     expected = manifest.discovery_artifact_hashes or {}
     actual = _compute_required_discovery_hashes(run_id)
 
+    # 1. All required artifacts must have a matching hash in the manifest.
     for rel in sorted(REQUIRED_DISCOVERY_ARTIFACTS):
         prefixed = f"{DISCOVERY_DIR}/{rel}"
         if prefixed not in actual:
@@ -152,11 +160,23 @@ def _ensure_discovery_hashes_match(manifest: RunManifest, run_id: str) -> None:
                 f"frozen discovery artifact hash mismatch: {prefixed}"
             )
 
-    extra = sorted(set(expected) - set(actual))
-    if extra:
-        raise ValueError(
-            f"frozen discovery manifest has unexpected hash entries: {extra}"
-        )
+    # 2. Optional artifacts present in the manifest must match if the file exists.
+    #    Extra hash entries for artifacts that do NOT exist on disk are ignored
+    #    (they may be optional M4/M5 artifacts not yet produced on a legacy run).
+    discovery_dir = _discovery_dir(run_id)
+    for key, digest in expected.items():
+        if key in actual:
+            # Already checked above for required; double-check optional ones.
+            if actual[key] != digest:
+                raise ValueError(f"frozen discovery artifact hash mismatch: {key}")
+        else:
+            # Key not in required set — check if file exists on disk
+            name = key.split("/", 1)[-1]  # strip 'discovery/' prefix
+            p = discovery_dir / name
+            if p.exists() and p.is_file():
+                file_hash = _hash_file(p)
+                if file_hash != digest:
+                    raise ValueError(f"frozen discovery artifact hash mismatch: {key}")
 
 
 def create_run(req: RunCreateRequest) -> RunManifest:
