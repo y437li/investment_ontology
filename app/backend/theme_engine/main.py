@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, subgraph as subgraph_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -218,6 +218,19 @@ def get_theme_narrative(run_id: str, community_id: str, refresh: bool = False):
     except KeyError:
         raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
     except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/themes/{run_id}/subgraph")
+def get_subgraph(run_id: str, communities: str = ""):
+    """Union structural subgraph for a set of communities (a whole main theme).
+    `communities` is a comma-separated list of community_ids."""
+    ids = [c for c in communities.split(",") if c]
+    if not ids:
+        raise HTTPException(status_code=400, detail="provide ?communities=cid1,cid2,...")
+    try:
+        return subgraph_mod.community_subgraph(run_id, ids)
+    except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
