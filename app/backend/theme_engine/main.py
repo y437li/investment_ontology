@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import chunking, data_cleaning, data_import, extraction, entity_resolution, graph_build, runs, themes
+from . import chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, runs, themes
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -31,6 +31,8 @@ from .models import (
     GraphBuildResponse,
     ThemeDiscoverRequest,
     ThemeDiscoverResponse,
+    ExposureComputeRequest,
+    ExposureComputeResponse,
 )
 
 app = FastAPI(title="Theme Discovery Engine", version="0.1.0")
@@ -154,10 +156,47 @@ def themes_discover_endpoint(req: ThemeDiscoverRequest) -> ThemeDiscoverResponse
     )
 
 
+@app.post("/api/exposure/compute", response_model=ExposureComputeResponse)
+def exposure_compute(req: ExposureComputeRequest) -> ExposureComputeResponse:
+    """Compute company-theme exposure scores (M5, io_contracts §18)."""
+    try:
+        pair_count = exposure_mod.compute_exposure(
+            run_id=req.run_id,
+            include_weak_signals=req.include_weak_signals,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    # Count unique themes in the output artifact
+    run_dir = runs.get_run_dir(req.run_id)
+    theme_count = 0
+    exposure_path = run_dir / "discovery" / "company_theme_exposure.parquet"
+    if exposure_path.exists():
+        import pyarrow.parquet as pq  # noqa: PLC0415
+        tbl = pq.read_table(exposure_path)
+        if tbl.num_rows > 0:
+            import pyarrow.compute as pc  # noqa: PLC0415
+            community_col = tbl.column("community_id")
+            theme_count = len(pc.unique(community_col).to_pylist())
+
+    return ExposureComputeResponse(
+        success=True,
+        artifacts=["discovery/company_theme_exposure.parquet"],
+        theme_count=theme_count,
+        company_theme_pair_count=pair_count,
+    )
+
+
 @app.post("/api/discovery/freeze", response_model=FreezeResponse)
 def discovery_freeze(req: FreezeRequest) -> FreezeResponse:
+    """Freeze all discovery artifacts (M5, OI-3, io_contracts §2).
+
+    Creates validation/ directory, computes sha256 hashes of all discovery
+    artifacts, updates run_manifest.json with discovery_artifact_hashes and
+    discovery_frozen=true. Idempotent.
+    """
     try:
-        manifest = runs.freeze_discovery(req.run_id)
+        manifest = freeze_mod.freeze_discovery(req.run_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except (FileNotFoundError, ValueError, PermissionError) as exc:
