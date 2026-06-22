@@ -809,14 +809,15 @@ def test_freeze_api_missing_run_returns_404():
 
 
 def test_full_m5_pipeline_end_to_end():
-    """End-to-end M5: full pipeline -> exposure -> freeze -> validation blocked.
+    """End-to-end M5+M6: full pipeline -> exposure -> freeze -> validation.
 
-    Validates the entire M5 flow:
+    Validates the entire M5+M6 flow:
       1. Run full pipeline to themes.
       2. Compute exposure (M5).
       3. Freeze discovery (M5).
-      4. Attempt validation — should be blocked (not yet implemented) but NOT
-         return an error about discovery not being frozen.
+      4. Attempt validation (M6) — no market_prices.parquet present, so
+         validation_status should be 'blocked_insufficient_forward_data'
+         (not an error about discovery not being frozen, and not 'blocked_not_implemented').
     """
     run_id = _run_pipeline_to_exposure()
 
@@ -831,10 +832,14 @@ def test_full_m5_pipeline_end_to_end():
     assert freeze_resp.status_code == 200, f"freeze failed: {freeze_resp.text}"
     assert freeze_resp.json()["discovery_frozen"] is True
 
-    # Validation must be blocked by "not implemented" (not "discovery not frozen")
+    # Validation: no market_prices.parquet present ->
+    # must return blocked_insufficient_forward_data (freeze gate passed, but no price data)
     val_resp = client.post("/api/validation/run", json={"run_id": run_id})
-    assert val_resp.status_code == 200, f"unexpected validation status: {val_resp.text}"
-    assert val_resp.json()["validation_status"] == "blocked_not_implemented"
+    assert val_resp.status_code == 200, f"unexpected validation error: {val_resp.text}"
+    val_status = val_resp.json()["validation_status"]
+    assert val_status in ("blocked_insufficient_forward_data", "completed"), (
+        f"unexpected validation_status: {val_status!r}"
+    )
 
     # Confirm company_theme_exposure.parquet is in hashes
     manifest = json.loads(

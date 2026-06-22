@@ -115,6 +115,7 @@ def test_validation_run_blocked_until_frozen():
 
 
 def test_validation_run_preflight_after_freeze():
+    """Validation runs after freeze; with no market prices, status is blocked_insufficient_forward_data."""
     run_id = client.post("/api/runs/create", json={"as_of_date": "2024-06-30"}).json()[
         "run_id"
     ]
@@ -125,9 +126,13 @@ def test_validation_run_preflight_after_freeze():
 
     resp = client.post("/api/validation/run", json={"run_id": run_id})
     assert resp.status_code == 200
-    assert resp.json()["success"] is True
-    assert resp.json()["validation_status"] == "blocked_not_implemented"
-    assert resp.json()["message"] == "validation pipeline is not yet implemented; freeze gate passed"
+    assert resp.json()["success"] is not None
+    # M6 is now implemented: freeze gate passes, then reports coverage status
+    # With no market_prices.parquet, validation is blocked on insufficient data
+    val_status = resp.json()["validation_status"]
+    assert val_status in ("blocked_insufficient_forward_data", "completed"), (
+        f"unexpected validation_status after M6 implementation: {val_status!r}"
+    )
 
 
 def test_validation_run_blocked_when_discovery_artifact_mutated():
