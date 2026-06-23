@@ -71,6 +71,25 @@ def _load(run_id: str, name: str):
     return pq.read_table(p).to_pylist()
 
 
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _relevant_evidence(text: str, source: str, target: str, max_chars: int = 260) -> str:
+    """Return the sentence(s) in an evidence chunk that actually mention the related
+    entities, instead of a blind char-window slice — makes the cited evidence specific."""
+    if not text:
+        return ""
+    terms = [t.lower() for t in (source, target) if t and len(t) > 2]
+    sents = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
+    if not sents:
+        return text[:max_chars]
+    hits = [(sum(1 for t in terms if t in s.lower()), i, s) for i, s in enumerate(sents)]
+    hits = [h for h in hits if h[0] > 0]
+    hits.sort(key=lambda x: (-x[0], len(x[2]), x[1]))   # most entities, then shortest, then earliest
+    chosen = [s for _, _, s in hits[:2]] or [sents[0]]
+    return (" … ".join(chosen))[:max_chars]
+
+
 def gather_dossier(run_id: str, community_id: str) -> dict:
     """Collect a community's relationships + evidence into a structured dossier."""
     comm = _load(run_id, "communities.json")
@@ -89,12 +108,18 @@ def gather_dossier(run_id: str, community_id: str) -> dict:
         if ed["edge_id"] not in edge_ids:
             continue
         ev_ids = _parse_ids(ed.get("evidence_chunk_ids"))
-        evidence = [chunks.get(cid, "")[:300] for cid in ev_ids[:2] if chunks.get(cid)]
+        src = ent.get(ed["source_entity_id"], ed["source_entity_id"])
+        tgt = ent.get(ed["target_entity_id"], ed["target_entity_id"])
+        evidence = []
+        for cid in ev_ids[:2]:
+            ev = _relevant_evidence(chunks.get(cid, ""), src, tgt)
+            if ev:
+                evidence.append(ev)
         relationships.append({
-            "source": ent.get(ed["source_entity_id"], ed["source_entity_id"]),
+            "source": src,
             "source_id": ed["source_entity_id"],
             "edge_type": ed["edge_type"],
-            "target": ent.get(ed["target_entity_id"], ed["target_entity_id"]),
+            "target": tgt,
             "target_id": ed["target_entity_id"],
             "extraction_method": ed.get("extraction_method") or "llm_inferred",
             "explanation": expl.get(ed["edge_id"], ""),

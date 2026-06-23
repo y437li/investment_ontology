@@ -138,3 +138,12 @@ def test_endpoints_guard_when_llm_absent(monkeypatch):
     assert client.get(f"/api/themes/{rid}/hierarchy").status_code == 404
     # narrative with no LLM configured -> 503
     assert client.get(f"/api/themes/{rid}/communities/c1/narrative").status_code == 503
+
+
+def test_relevant_evidence_picks_the_entity_sentence():
+    from theme_engine.reasoning import _relevant_evidence
+    text = ("The board met on Tuesday to discuss governance. Higher oil prices benefit "
+            "Suncor Energy's refining margins this quarter. Unrelated filler sentence here.")
+    ev = _relevant_evidence(text, "oil prices", "Suncor Energy")
+    assert "Higher oil prices benefit Suncor Energy" in ev   # the supporting sentence
+    assert "board met" not in ev                              # irrelevant sentence excluded
