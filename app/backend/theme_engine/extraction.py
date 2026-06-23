@@ -486,7 +486,9 @@ class OpenAIExtractor(Extractor):
                 try:
                     args = _json.loads(tool_calls[0].function.arguments)
                     break
-                except Exception:
+                except Exception as exc:
+                    import logging  # noqa: PLC0415
+                    logging.getLogger(__name__).warning("emit_extraction tool-call parse failed: %s", exc)
                     args = {}
             messages.append({
                 "role": "user",
