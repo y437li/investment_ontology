@@ -181,7 +181,9 @@ def _synthesize_dossier(d: dict, client, model: str) -> dict:
             try:
                 args = _json.loads(tool_calls[0].function.arguments)
                 break
-            except Exception:
+            except Exception as exc:
+                import logging  # noqa: PLC0415
+                logging.getLogger(__name__).warning("emit_narrative tool-call parse failed: %s", exc)
                 args = {}
         messages.append({"role": "user", "content": "Call emit_narrative with valid JSON arguments only."})
 

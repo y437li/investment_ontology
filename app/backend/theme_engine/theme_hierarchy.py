@@ -86,7 +86,9 @@ def build_hierarchy(run_id: str, client=None, model: Optional[str] = None,
             try:
                 args = _json.loads(tcs[0].function.arguments)
                 break
-            except Exception:
+            except Exception as exc:
+                import logging  # noqa: PLC0415
+                logging.getLogger(__name__).warning("group_main_themes tool-call parse failed: %s", exc)
                 args = {}
         messages.append({"role": "user", "content": "Call group_main_themes with valid JSON."})
 
