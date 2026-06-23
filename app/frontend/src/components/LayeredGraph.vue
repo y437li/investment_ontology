@@ -1,9 +1,18 @@
 <template>
   <div class="lg-wrap">
-    <div class="lg-legend" v-if="presentLevels.length">
-      <span v-for="lvl in presentLevels" :key="lvl" class="lg-leg">
-        <span class="lg-dot" :style="{ background: LEVEL_COLORS[lvl] }"></span>{{ lvl }}
-      </span>
+    <div class="lg-filters" v-if="presentLevels.length || presentEdgeTypes.length">
+      <div class="lg-row" v-if="presentLevels.length">
+        <span class="lg-cap">levels</span>
+        <button v-for="lvl in presentLevels" :key="lvl" class="lg-chip" :class="{ off: hiddenLevels.has(lvl) }" @click="toggleLevel(lvl)" :title="hiddenLevels.has(lvl) ? 'show ' + lvl : 'hide ' + lvl">
+          <span class="lg-dot" :style="{ background: LEVEL_COLORS[lvl] }"></span>{{ lvl }}
+        </button>
+      </div>
+      <div class="lg-row" v-if="presentEdgeTypes.length">
+        <span class="lg-cap">edges</span>
+        <button v-for="et in presentEdgeTypes" :key="et" class="lg-chip" :class="{ off: hiddenEdgeTypes.has(et) }" @click="toggleEdge(et)" :title="hiddenEdgeTypes.has(et) ? 'show ' + et : 'hide ' + et">
+          <span class="lg-dash" :style="{ background: edgeColor(et) }"></span>{{ et }}
+        </button>
+      </div>
     </div>
     <svg ref="svgEl" class="lg-svg"></svg>
   </div>
@@ -37,17 +46,28 @@ const levelOf = (n) => {
 const svgEl = ref(null)
 let sim = null, nodeSel = null, linkSel = null, labelSel = null
 const presentLevels = computed(() => LEVELS.filter((lv) => props.nodes.some((n) => levelOf(n) === lv)))
+const presentEdgeTypes = computed(() => Array.from(new Set(props.edges.map((e) => e.edge_type))).sort())
+
+// In-graph filters (reassign the Set so Vue re-renders)
+const hiddenLevels = ref(new Set())
+const hiddenEdgeTypes = ref(new Set())
+function toggleLevel(lv) { const s = new Set(hiddenLevels.value); s.has(lv) ? s.delete(lv) : s.add(lv); hiddenLevels.value = s }
+function toggleEdge(et) { const s = new Set(hiddenEdgeTypes.value); s.has(et) ? s.delete(et) : s.add(et); hiddenEdgeTypes.value = s }
 
 function render() {
   const el = svgEl.value
   if (!el) return
   const W = el.clientWidth || 700
   const H = el.clientHeight || 520
+  // apply in-graph filters (hidden levels drop their nodes + incident edges)
+  const visNodes = props.nodes.filter((n) => !hiddenLevels.value.has(levelOf(n)))
+  const visIds = new Set(visNodes.map((n) => n.id))
+  const visEdges = props.edges.filter((e) => !hiddenEdgeTypes.value.has(e.edge_type) && visIds.has(e.source) && visIds.has(e.target))
   const degree = {}
-  props.edges.forEach((e) => { degree[e.source] = (degree[e.source] || 0) + 1; degree[e.target] = (degree[e.target] || 0) + 1 })
-  const nodes = props.nodes.map((n) => ({ ...n, deg: degree[n.id] || 0 }))
+  visEdges.forEach((e) => { degree[e.source] = (degree[e.source] || 0) + 1; degree[e.target] = (degree[e.target] || 0) + 1 })
+  const nodes = visNodes.map((n) => ({ ...n, deg: degree[n.id] || 0 }))
   const idset = new Set(nodes.map((n) => n.id))
-  const links = props.edges.filter((e) => idset.has(e.source) && idset.has(e.target)).map((e) => ({ ...e }))
+  const links = visEdges.filter((e) => idset.has(e.source) && idset.has(e.target)).map((e) => ({ ...e }))
 
   const svg = d3.select(el)
   svg.selectAll('*').remove()
@@ -65,7 +85,7 @@ function render() {
   })
 
   const bands = g.append('g')
-  presentLevels.value.forEach((lv) => {
+  presentLevels.value.filter((lv) => !hiddenLevels.value.has(lv)).forEach((lv) => {
     const y = (LEVEL_Y[lv] ?? 0.9) * H
     bands.append('rect').attr('x', 0).attr('y', y - 36).attr('width', W).attr('height', 72).attr('fill', LEVEL_COLORS[lv]).attr('opacity', 0.04)
     bands.append('text').attr('x', 12).attr('y', y - 20).text(lv.toUpperCase()).attr('font-size', 11).attr('font-family', 'monospace').attr('font-weight', 700).attr('fill', LEVEL_COLORS[lv]).attr('opacity', 0.55)
@@ -132,7 +152,7 @@ function highlight(hop) {
     .attr('stroke-width', (l) => ((l.source.id === hop.source_id && l.target.id === hop.target_id) || (l.source.id === hop.target_id && l.target.id === hop.source_id) ? 3.5 : 1.4))
 }
 
-watch(() => [props.nodes, props.edges], () => nextTick(render), { deep: false })
+watch(() => [props.nodes, props.edges, hiddenLevels.value, hiddenEdgeTypes.value], () => nextTick(render), { deep: false })
 watch(() => props.activeHop, (h) => highlight(h))
 onMounted(() => nextTick(render))
 onBeforeUnmount(() => { if (sim) sim.stop() })
@@ -141,7 +161,12 @@ onBeforeUnmount(() => { if (sim) sim.stop() })
 <style scoped>
 .lg-wrap { position: relative; width: 100%; height: 100%; }
 .lg-svg { width: 100%; height: 100%; display: block; min-height: 360px; }
-.lg-legend { position: absolute; top: 8px; left: 10px; display: flex; gap: 10px; flex-wrap: wrap; background: rgba(255,255,255,0.9); padding: 5px 9px; border: 1px solid #eee; border-radius: 4px; font-size: 0.66rem; font-family: monospace; z-index: 2; }
-.lg-leg { display: flex; align-items: center; gap: 4px; color: #666; }
+.lg-filters { position: absolute; top: 8px; left: 10px; display: flex; flex-direction: column; gap: 4px; background: rgba(255,255,255,0.92); padding: 6px 9px; border: 1px solid #eee; border-radius: 5px; font-size: 0.66rem; font-family: monospace; z-index: 2; max-width: calc(100% - 24px); }
+.lg-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.lg-cap { color: #aaa; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 2px; }
+.lg-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #e2e2e2; background: #fff; border-radius: 10px; padding: 1px 7px; font-size: 0.66rem; font-family: monospace; color: #555; cursor: pointer; transition: opacity .12s; }
+.lg-chip:hover { border-color: #bbb; }
+.lg-chip.off { opacity: 0.34; text-decoration: line-through; }
 .lg-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.lg-dash { width: 11px; height: 3px; border-radius: 2px; display: inline-block; }
 </style>
