@@ -165,6 +165,18 @@
             <!-- Open the whole main theme as one story + graph -->
             <button class="view-story-btn" @click.stop="openMainTheme(mt)">View story &amp; graph →</button>
 
+            <!-- Monthly trajectory (walk-forward) -->
+            <div v-if="mainThemeTrajMap[mt.name]" class="traj-row">
+              <svg class="spark" viewBox="0 0 92 22" preserveAspectRatio="none">
+                <path :d="sparkPath(mainThemeTrajMap[mt.name].sums)" fill="none"
+                      :stroke="mainThemeTrajMap[mt.name].momentum > 0 ? '#16a34a' : '#9ca3af'" stroke-width="1.6" />
+              </svg>
+              <span class="traj-mom" :class="mainThemeTrajMap[mt.name].momentum > 0 ? 'up' : (mainThemeTrajMap[mt.name].momentum < 0 ? 'down' : '')">
+                {{ mainThemeTrajMap[mt.name].momentum > 0 ? '▲' : (mainThemeTrajMap[mt.name].momentum < 0 ? '▼' : '–') }} {{ Math.abs(mainThemeTrajMap[mt.name].momentum) }}/mo
+              </span>
+              <span v-if="mainThemeTrajMap[mt.name].emerged" class="traj-emerged">since {{ fmtMonth(mainThemeTrajMap[mt.name].emerged) }}</span>
+            </div>
+
             <!-- Summary -->
             <p v-if="mt.summary" class="card-summary">{{ mt.summary }}</p>
 
@@ -411,7 +423,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listRuns } from '../api/runs.js'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
-import { getThemeHierarchy, buildThemeHierarchy, getThemeRelevance, getThemeLevels } from '../api/themes.js'
+import { getThemeHierarchy, buildThemeHierarchy, getThemeRelevance, getThemeLevels, getThemeTrajectories } from '../api/themes.js'
 
 const router = useRouter()
 
@@ -436,6 +448,7 @@ const relevanceLoaded = ref(false)
 
 // Factor levels
 const levelsData = ref(null)      // full levels response
+const trajectoriesData = ref(null) // monthly walk-forward response
 const activeLevelFilters = ref(new Set(['macro', 'industry', 'company', 'idiosyncratic']))
 
 // Expand/drill-in state
@@ -742,6 +755,39 @@ const themesByTier = computed(() => {
   return buckets
 })
 
+// ── Monthly walk-forward (trajectories / momentum / emergence) ──
+const trajectoryByCommunity = computed(() => {
+  const m = new Map()
+  for (const t of (trajectoriesData.value?.themes || [])) { if (t.community_id) m.set(t.community_id, t) }
+  return m
+})
+const mainThemeTrajMap = computed(() => {
+  const months = trajectoriesData.value?.months || []
+  const out = {}
+  if (!months.length) return out
+  for (const mt of displayedMainThemes.value) {
+    const sums = months.map(() => 0)
+    let momentum = 0, emerged = null, any = false
+    for (const sid of (mt.sub_theme_ids || [])) {
+      const tr = trajectoryByCommunity.value.get(sid)
+      if (!tr) continue
+      any = true
+      tr.trajectory.forEach((p, i) => { sums[i] += (p.size || 0) })
+      momentum += (tr.momentum || 0)
+      if (tr.emerged_month && (!emerged || tr.emerged_month < emerged)) emerged = tr.emerged_month
+    }
+    out[mt.name] = any ? { sums, momentum, emerged } : null
+  }
+  return out
+})
+const sparkPath = (sums, w = 92, h = 22) => {
+  if (!sums || sums.length < 2) return ''
+  const max = Math.max(1, ...sums)
+  const step = w / (sums.length - 1)
+  return sums.map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(h - (v / max) * (h - 3) - 1).toFixed(1)}`).join(' ')
+}
+const fmtMonth = (iso) => (iso ? iso.slice(0, 7) : '')
+
 // ─── Build hierarchy action ───────────────────────────────────────────────────
 const triggerBuildHierarchy = async () => {
   if (!currentRun.value || buildingHierarchy.value) return
@@ -891,14 +937,15 @@ const bootstrap = async () => {
     const runId = currentRun.value.run_id
 
     // Load communities in parallel with trying to get the hierarchy + relevance + levels
-    const [commRes, snapRes, metricsRes, expRes, hierarchyRes, relevanceRes, levelsRes] = await Promise.allSettled([
+    const [commRes, snapRes, metricsRes, expRes, hierarchyRes, relevanceRes, levelsRes, trajRes] = await Promise.allSettled([
       getCommunitiesJson(runId),
       getThemeSnapshots(runId),
       getThemeMetrics(runId),
       getCompanyThemeExposure(runId),
       getThemeHierarchy(runId),
       getThemeRelevance(runId),
-      getThemeLevels(runId)
+      getThemeLevels(runId),
+      getThemeTrajectories(runId)
     ])
 
     communities.value = commRes.status === 'fulfilled' ? (commRes.value?.communities || []) : []
@@ -922,6 +969,11 @@ const bootstrap = async () => {
     // Levels is optional — gracefully skip if unavailable
     if (levelsRes.status === 'fulfilled' && levelsRes.value) {
       levelsData.value = levelsRes.value
+    }
+
+    // Trajectories (monthly walk-forward) — optional
+    if (trajRes.status === 'fulfilled' && trajRes.value) {
+      trajectoriesData.value = trajRes.value
     }
   } catch (err) {
     loadError.value = err?.response?.data?.detail || err.message || 'Failed to load snapshot'
@@ -1358,6 +1410,12 @@ onMounted(() => {
   transition: all 0.15s;
 }
 .view-story-btn:hover { background: var(--accent, #1a56db); color: #fff; }
+.traj-row { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; }
+.spark { width: 92px; height: 22px; flex-shrink: 0; }
+.traj-mom { font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700; color: #888; }
+.traj-mom.up { color: #16a34a; }
+.traj-mom.down { color: #dc2626; }
+.traj-emerged { font-family: var(--font-mono); font-size: 0.68rem; color: #aaa; }
 
 .level-chip:hover:not(.active) {
   border-color: #999;

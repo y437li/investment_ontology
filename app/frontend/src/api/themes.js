@@ -77,3 +77,12 @@ export function getSubgraph(runId, communityIds) {
 export function getMainNarrative(runId, communityIds) {
   return service.get(`/api/themes/${runId}/main-narrative?communities=${communityIds.join(',')}`)
 }
+
+/**
+ * Monthly walk-forward trajectories for a run.
+ * Returns { months:[ISO...], themes:[{community_id, theme_name, size, emerged_month, momentum, trajectory:[{month,size,overlap}]}] }
+ * Gracefully fails: callers should catch and treat as unavailable.
+ */
+export function getThemeTrajectories(runId) {
+  return service.get(`/api/themes/${runId}/trajectories`)
+}
