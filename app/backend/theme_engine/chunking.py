@@ -16,6 +16,7 @@ constants below. Same cleaned text + same config => identical chunks and ids.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import pyarrow as pa
@@ -31,7 +32,11 @@ CLEANING_VERSION = "clean_v1"
 # Deterministic chunking config (constants -> stable chunk ids).
 CHUNK_SIZE_CHARS = 800
 CHUNK_OVERLAP_CHARS = 100
-CHUNK_CONFIG_ID = f"chunk_v1_size{CHUNK_SIZE_CHARS}_ov{CHUNK_OVERLAP_CHARS}"
+# v2: sentence/paragraph-aware packing (never cut mid-sentence) -> cleaner evidence.
+CHUNK_CONFIG_ID = f"chunk_v2_sent_size{CHUNK_SIZE_CHARS}_ov{CHUNK_OVERLAP_CHARS}"
+
+# Sentence/paragraph boundary: end punctuation followed by whitespace, or a blank line.
+_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+|\n{2,}")
 
 # io_contracts.md section 8: chunks.parquet
 CHUNKS_COLUMNS: list[str] = [
@@ -64,23 +69,47 @@ def _stable_chunk_id(content_hash: str, chunk_index: int) -> str:
     return f"chunk_{hashlib.sha256(basis.encode('utf-8')).hexdigest()[:16]}"
 
 
+def _sentence_spans(text: str) -> list[tuple[int, int]]:
+    """(start, end) char spans for each sentence/paragraph, covering the whole text."""
+    bounds = [0]
+    for m in _BOUNDARY_RE.finditer(text):
+        bounds.append(m.end())
+    if bounds[-1] != len(text):
+        bounds.append(len(text))
+    spans = [(bounds[k], bounds[k + 1]) for k in range(len(bounds) - 1)]
+    return [(s, e) for (s, e) in spans if text[s:e].strip()] or [(0, len(text))]
+
+
 def _split_text(text: str) -> list[tuple[int, int, str]]:
-    """Fixed-size sliding window with overlap. Returns (start, end, text)."""
-    spans: list[tuple[int, int, str]] = []
+    """Sentence/paragraph-aware chunking: greedily pack WHOLE sentences up to
+    CHUNK_SIZE_CHARS (never cutting mid-sentence) with sentence-granular overlap.
+    A single sentence longer than the window is taken whole. Returns (start, end, text).
+    Deterministic: same text + config => identical spans and ids."""
     n = len(text)
     if n == 0:
-        return spans
-    step = CHUNK_SIZE_CHARS - CHUNK_OVERLAP_CHARS
-    if step <= 0:
-        step = CHUNK_SIZE_CHARS
-    start = 0
-    while start < n:
-        end = min(start + CHUNK_SIZE_CHARS, n)
-        spans.append((start, end, text[start:end]))
-        if end >= n:
+        return []
+    sentences = _sentence_spans(text)
+    chunks: list[tuple[int, int, str]] = []
+    i = 0
+    while i < len(sentences):
+        start = sentences[i][0]
+        end = start
+        j = i
+        while j < len(sentences) and (sentences[j][1] - start) <= CHUNK_SIZE_CHARS:
+            end = sentences[j][1]
+            j += 1
+        if j == i:  # lone sentence longer than the window -> take it whole
+            end = sentences[i][1]
+            j = i + 1
+        chunks.append((start, end, text[start:end]))
+        if j >= len(sentences):
             break
-        start += step
-    return spans
+        # overlap: step back whole sentences until ~CHUNK_OVERLAP_CHARS are re-included
+        k = j
+        while k > i + 1 and (end - sentences[k - 1][0]) < CHUNK_OVERLAP_CHARS:
+            k -= 1
+        i = max(k, i + 1)  # always make progress
+    return chunks
 
 
 def _read_documents(run_id: str) -> list[dict]:
