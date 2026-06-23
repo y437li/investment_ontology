@@ -21,7 +21,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from . import runs
+from . import graph_build, runs
 
 _DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
@@ -139,6 +139,12 @@ def integrate_macro(run_id: str, universe_path: str | None = None) -> dict:
             existing_ids.add(mid)
         val_txt = f"{snap['value']:g}{unit if unit != 'index' else ''}"
         for sens in spec.get("sensitivities", []):
+            # Validate edge_type against the ontology-derived structural set (audit medium):
+            # a bad config edge_type would silently drop the macro edge out of discovery.
+            if sens["edge_type"] not in graph_build.STRUCTURAL_EDGE_TYPES:
+                raise ValueError(
+                    f"macro.yml series '{spec['id']}': edge_type '{sens['edge_type']}' is not a "
+                    f"structural edge type {list(graph_build.STRUCTURAL_EDGE_TYPES)}")
             for cname in sector_companies.get(sens["sector"], set()):
                 tid = company_id.get(cname)
                 if not tid:

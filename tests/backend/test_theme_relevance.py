@@ -53,3 +53,16 @@ def test_relevance_artifact_written():
     art = Path(settings.run_output_dir) / rid / "discovery" / "theme_relevance.json"
     assert art.exists()
     assert "as_of_date" in json.loads(art.read_text())
+
+
+def test_score_excludes_future_dated_evidence():
+    """Audit medium: future-dated evidence (not knowable at as_of) is dropped, not
+    scored as maximally recent."""
+    from datetime import date
+    from theme_engine import theme_relevance as tr
+    as_of = date(2024, 6, 30)
+    r = tr._score(["2024-12-31", "2024-06-20"], as_of, 90)   # one future, one recent
+    assert r["evidence_count"] == 1                          # future dropped
+    assert r["last_evidence_at"] == "2024-06-20"
+    r2 = tr._score(["2025-01-01"], as_of, 90)                # all future
+    assert r2["state"] == "dormant" and r2["evidence_count"] == 0
