@@ -101,10 +101,11 @@ def _community_strength(
     community_edge_ids: set[str],
     edge_lookup: dict[str, dict],
 ) -> float:
-    """Strength = sum of edge confidences (weights) within the community.
+    """Strength = AVERAGE edge confidence (weight) over the community's structural edges.
 
-    Spec §20: weighted evidence and edge count.
-    Normalized to [0, 1] by dividing by max possible weight assuming all edges weight 1.0.
+    Mean of the edge weights (confidences in [0, 1]), so strength is in [0, 1]. This is
+    intentionally size-independent — it does not scale with edge or node count (a
+    size-aware strength is tracked as a future enhancement, audit medium).
     """
     if not community_edge_ids:
         return 0.0
@@ -113,7 +114,6 @@ def _community_strength(
         for eid in community_edge_ids
         if eid in edge_lookup
     )
-    # Normalize by number of edges (average weight)
     return total_weight / max(1, len(community_edge_ids))
 
 

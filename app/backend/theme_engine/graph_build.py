@@ -14,10 +14,10 @@ OI-5 Entity-only projection:
   - ``community_input_edges`` contains only edges with structural edge_types
     and non-Document endpoints.
 
-Structural edge types (spec §7, io_contracts §13):
-  causes, benefits, hurts, exposed_to, sensitive_to, co_occurs_with
+Structural edge types (derived from configs/ontology.yml, structural: true):
+  causes, benefits, hurts, exposed_to, sensitive_to
 
-Evidence edge types:
+Evidence edge types (excluded from community discovery):
   mentioned_in, co_occurs_with
 
 Point-in-time:

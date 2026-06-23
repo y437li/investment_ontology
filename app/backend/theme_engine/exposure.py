@@ -127,10 +127,11 @@ def _to_date_str(val: Any) -> str:
 
 
 def _days_before(date_str: str, reference_str: str) -> float:
-    """Number of days between date_str and reference_str (reference - date).
+    """Days between (reference - date), clamped to [0, _RECENCY_WINDOW_DAYS].
 
-    Returns 0.0 if date_str >= reference_str (equal or future edge is treated as maximally recent).
-    Returns _RECENCY_WINDOW_DAYS if the gap exceeds the cap.
+    A future-dated edge (date > reference) is treated as LEAST recent (window cap),
+    NOT maximally recent (audit medium): it should not have passed the PIT gate, and
+    must never be scored as fresh evidence. Missing/unparseable dates -> window cap.
     """
     if not date_str or not reference_str:
         return _RECENCY_WINDOW_DAYS
@@ -138,7 +139,9 @@ def _days_before(date_str: str, reference_str: str) -> float:
         d1 = datetime.strptime(date_str[:10], "%Y-%m-%d")
         d2 = datetime.strptime(reference_str[:10], "%Y-%m-%d")
         delta = (d2 - d1).days
-        return max(0.0, min(float(delta), _RECENCY_WINDOW_DAYS))
+        if delta < 0:  # future-dated -> not knowable -> least recent
+            return _RECENCY_WINDOW_DAYS
+        return min(float(delta), _RECENCY_WINDOW_DAYS)
     except ValueError:
         return _RECENCY_WINDOW_DAYS
 
