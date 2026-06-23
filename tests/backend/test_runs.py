@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from fastapi.testclient import TestClient
 
 from theme_engine.config import settings
@@ -52,21 +54,24 @@ def test_missing_run_returns_404():
 def _seed_discovery_artifacts(run_id: str) -> None:
     run_dir = Path(settings.run_output_dir) / run_id / "discovery"
     run_dir.mkdir(parents=True, exist_ok=True)
+    # Freeze only HASHES these (content irrelevant) -> cheap seed bytes.
     for name in [
         "raw_documents.parquet",
         "documents.parquet",
         "document_cleaning_log.parquet",
         "chunks.parquet",
-        "entities.parquet",
         "entity_aliases.parquet",
         "edges.parquet",
         "graph.json",
-        "communities.json",
-        "theme_snapshots.json",
         "theme_metrics.parquet",
-        "company_theme_exposure.parquet",
     ]:
         (run_dir / name).write_text("seed", encoding="utf-8")
+    # Validation PARSES these -> write valid-but-empty so the fail-loud loaders accept them.
+    (run_dir / "communities.json").write_text('{"communities": []}', encoding="utf-8")
+    (run_dir / "theme_snapshots.json").write_text('{"snapshots": []}', encoding="utf-8")
+    _empty = pa.table({"x": pa.array([], type=pa.string())})
+    pq.write_table(_empty, run_dir / "entities.parquet")
+    pq.write_table(_empty, run_dir / "company_theme_exposure.parquet")
 
 
 def test_discovery_freeze_blocks_without_complete_artifacts():

@@ -432,8 +432,8 @@ def _load_exposure(run_id: str) -> list[dict]:
         return []
     try:
         return pq.read_table(path).to_pylist()
-    except Exception:
-        return []
+    except Exception as exc:  # present but unparseable -> integrity failure, not empty
+        raise ValueError(f"corrupt frozen artifact {path.name}: {exc}")
 
 
 def _load_theme_snapshots(run_id: str) -> dict[str, dict]:
@@ -444,8 +444,8 @@ def _load_theme_snapshots(run_id: str) -> dict[str, dict]:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
         return {s["theme_snapshot_id"]: s for s in doc.get("snapshots", [])}
-    except Exception:
-        return {}
+    except Exception as exc:  # present but unparseable -> integrity failure
+        raise ValueError(f"corrupt frozen artifact {path.name}: {exc}")
 
 
 def _load_communities(run_id: str) -> dict[str, dict]:
@@ -456,8 +456,8 @@ def _load_communities(run_id: str) -> dict[str, dict]:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
         return {c["community_id"]: c for c in doc.get("communities", [])}
-    except Exception:
-        return {}
+    except Exception as exc:  # present but unparseable -> integrity failure
+        raise ValueError(f"corrupt frozen artifact {path.name}: {exc}")
 
 
 def _load_entities(run_id: str) -> list[dict]:
@@ -466,8 +466,8 @@ def _load_entities(run_id: str) -> list[dict]:
         return []
     try:
         return pq.read_table(path).to_pylist()
-    except Exception:
-        return []
+    except Exception as exc:  # present but unparseable -> integrity failure, not empty
+        raise ValueError(f"corrupt frozen artifact {path.name}: {exc}")
 
 
 # ---------------------------------------------------------------------------
