@@ -27,7 +27,7 @@ from . import runs
 from .macro_adapter import _config_dir, _to_date, _norm, _append  # reuse, single source of truth
 from .graph_build import STRUCTURAL_EDGE_TYPES
 
-_STRUCTURAL = set(STRUCTURAL_EDGE_TYPES)  # {exposed_to, sensitive_to, causes, benefits, hurts, located_in}
+_STRUCTURAL = set(STRUCTURAL_EDGE_TYPES)  # ontology-derived: {exposed_to, sensitive_to, causes, benefits, hurts}
 
 
 # ---------- config ----------
