@@ -42,19 +42,18 @@ _REQUIRED_DISCOVERY_ARTIFACTS: list[str] = [
     "entity_aliases.parquet",
     "edges.parquet",
     "graph.json",
-]
-
-# Additional M4/M5 discovery artifacts included in hashes when present.
-# Not required to be present (run may not have reached M4/M5 yet), but
-# if present they must be hashed for integrity.
-_OPTIONAL_DISCOVERY_ARTIFACTS: list[str] = [
+    # Validation-consumed artifacts MUST be present + hashed at freeze, else a
+    # post-freeze regeneration is silently accepted (audit CRITICAL).
     "communities.json",
     "theme_snapshots.json",
-    "theme_lineage.json",
     "theme_metrics.parquet",
     "company_theme_exposure.parquet",
+]
+
+# Additional discovery artifacts included in hashes when present.
+_OPTIONAL_DISCOVERY_ARTIFACTS: list[str] = [
+    "theme_lineage.json",
     "edge_explanations.parquet",
-    "entities.parquet",        # also in required, deduped below
     "entity_aliases_global.parquet",
 ]
 

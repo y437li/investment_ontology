@@ -1,0 +1,40 @@
+# Generalizes macro.yml. Each `sources` row -> one typed NODE carrying a PIT
+# value + trend (+ optional regime) at the run as_of (release lag respected ->
+# zero leakage), with structural metadata_inferred edges to companies in
+# sensitive sectors. The series VALUE + vintage is the evidence. Add a source =
+# add a row here, not code. macro.yml rows are a strict subset of this schema.
+version: 1
+release_lag_days: 35              # global default publication lag; per-source override
+
+sources:
+  # 1) Power demand (MacroIndicator, wide_table, zscore regime, trend-guarded edge)
+  - id: us_power_demand
+    label: US Electricity Demand
+    node_type: MacroIndicator
+    source_class: power
+    unit: "GWh"
+    reader: wide_table
+    csv: data/inputs/market/altdata/power_demand.csv
+    date_col: date
+    series_col: US_TOTAL
+    lag_days: 30
+    regime: {mode: zscore, window_days: 365}
+    sensitivities:
+      - {sector: Utilities, edge_type: benefits, rationale: rising electricity demand lifts utility throughput and load growth}
+      - {sector: Energy, edge_type: benefits, when_trend: rising, rationale: higher power demand pulls natural-gas burn}
+
+  # 2) Datacenter capacity buildout (EconomicConcept, fred_csv, threshold regime, explicit companies override)
+  - id: datacenter_capacity
+    label: Datacenter Capacity Buildout
+    node_type: EconomicConcept
+    source_class: datacenter
+    unit: "GW"
+    reader: fred_csv
+    csv: data/inputs/market/altdata/datacenter_capacity.csv
+    date_col: observation_date
+    value_col: CAP_GW
+    lag_days: 45
+    regime: {mode: threshold, thresholds: [10, 25], labels: [early, scaling, hyperscale]}
+    sensitivities:
+      - {sector: Utilities, edge_type: causes, rationale: datacenter buildout drives baseload power demand}
+      - {sector: Technology, edge_type: benefits, rationale: capacity expansion benefits chip and hardware suppliers}

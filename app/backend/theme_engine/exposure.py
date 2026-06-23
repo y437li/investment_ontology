@@ -74,7 +74,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fastapi import HTTPException
 
-from . import runs
+from . import graph_build, runs
 
 SCHEMA_VERSION = "1.0"
 
@@ -255,11 +255,10 @@ def compute_exposure(run_id: str, include_weak_signals: bool = False) -> int:
         # DEFAULT POLICY: only document_stated (OI-2)
         allowed_methods = frozenset({"document_stated"})
 
-    # Filter edges to point-in-time + allowed extraction methods
-    # Structural edge types (from graph_build) used for exposure computation
-    _STRUCTURAL_EDGE_TYPES = frozenset(
-        {"exposed_to", "sensitive_to", "causes", "benefits", "hurts", "located_in"}
-    )
+    # Filter edges to point-in-time + allowed extraction methods.
+    # Structural edge types come from the shared graph_build set (ontology-derived,
+    # excludes located_in) so exposure and community discovery stay consistent.
+    _STRUCTURAL_EDGE_TYPES = frozenset(graph_build.STRUCTURAL_EDGE_TYPES)
 
     contributing_edges: list[dict] = []
     for edge in edges_raw:

@@ -231,6 +231,14 @@ def _seed_minimal_discovery(run_id: str, as_of_date: str = AS_OF_DATE) -> None:
     }
     pq.write_table(pa.Table.from_pylist([exposure_row]), ddir / "company_theme_exposure.parquet")
 
+    # theme_metrics.parquet (now a required, frozen+hashed artifact)
+    metrics_row = {
+        "schema_version": "1.0", "theme_snapshot_id": theme_snapshot_id,
+        "community_id": community_id, "as_of_date": as_of_date,
+        "strength": 0.8, "cohesion": 0.5, "saturation": 0.01,
+    }
+    pq.write_table(pa.Table.from_pylist([metrics_row]), ddir / "theme_metrics.parquet")
+
     return company_id, concept_id, community_id, theme_snapshot_id
 
 
