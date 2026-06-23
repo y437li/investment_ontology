@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -297,6 +297,15 @@ def get_slice(run_id: str, anchor: str = "", depth: int = 2, direction: str = "b
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/themes/{run_id}/chunks/{chunk_id}")
+def get_chunk_source(run_id: str, chunk_id: str):
+    """Full-text source for an evidence chunk: full chunk + whole source document + attribution."""
+    try:
+        return source_mod.chunk_source(run_id, chunk_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/api/themes/{run_id}/subgraph")
