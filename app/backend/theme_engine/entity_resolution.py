@@ -199,16 +199,22 @@ def resolve_entities(run_id: str) -> int:
             }
         )
 
-        # Rule 2: known abbreviation expansions
+        # Rule 2: known abbreviation expansions. DIRECTION-AGNOSTIC (audit HIGH #75):
+        # the entity's canonical_name may be EITHER the long form (extraction
+        # canonicalizes RBC -> "Royal Bank of Canada") OR the short key, so match
+        # against the whole group (key + aliases) and emit every OTHER member as an
+        # alias. This guarantees the alias rows are emitted regardless of which form
+        # the extractor chose as canonical.
+        cn_lower = canonical_name.lower()
         for full_name, abbrevs in _KNOWN_ABBREVIATIONS.items():
-            if full_name.lower() == canonical_name.lower():
-                for abbr in abbrevs:
-                    # Don't duplicate the canonical_name self-alias
-                    if abbr.lower() != canonical_name.lower():
+            group = [full_name, *abbrevs]
+            if any(member.lower() == cn_lower for member in group):
+                for member in group:
+                    if member.lower() != cn_lower:
                         alias_rows.append(
                             {
                                 "schema_version": SCHEMA_VERSION,
-                                "alias": abbr,
+                                "alias": member,
                                 "canonical_entity_id": canonical_entity_id,
                                 "canonical_name": canonical_name,
                                 "as_of_date": as_of_date,
@@ -220,6 +226,7 @@ def resolve_entities(run_id: str) -> int:
                                 "created_at": created_at,
                             }
                         )
+                break  # one abbreviation group per entity
 
         # Rule 3: ticker alias for Company entities
         if etype == "Company":
