@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -181,6 +181,14 @@ def macro_integrate(req: GraphBuildRequest):
     edges to sensitive-sector companies. Run after extraction/resolve, before graph/build."""
     _guard_not_frozen(req.run_id)
     return macro_adapter.integrate_macro(req.run_id)
+
+
+@app.post("/api/altdata/integrate")
+def altdata_integrate(req: GraphBuildRequest):
+    """Integrate alt/structured-data series (configs/altdata.yml) as PIT nodes +
+    structural edges to sensitive-sector companies. After extraction, before graph/build."""
+    _guard_not_frozen(req.run_id)
+    return altdata_adapter.integrate_altdata(req.run_id)
 
 
 @app.post("/api/graph/build", response_model=GraphBuildResponse)
