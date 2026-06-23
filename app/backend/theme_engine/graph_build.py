@@ -38,15 +38,13 @@ from . import runs
 
 SCHEMA_VERSION = "1.0"
 
-# OI-5: structural edges used for community discovery
-STRUCTURAL_EDGE_TYPES: list[str] = [
-    "exposed_to",
-    "sensitive_to",
-    "causes",
-    "benefits",
-    "hurts",
-    "located_in",
-]
+# OI-5: structural edges used for community discovery. Derived from the ontology
+# (configs/ontology.yml structural:true) so the config is the single source of
+# truth; located_in is structural:false there, so geography no longer drives themes.
+from . import registry  # noqa: E402
+
+_FALLBACK_STRUCTURAL = ["exposed_to", "sensitive_to", "causes", "benefits", "hurts"]
+STRUCTURAL_EDGE_TYPES: list[str] = registry.structural_edge_types() or _FALLBACK_STRUCTURAL
 
 # Evidence edges (not used for structural clustering)
 EVIDENCE_EDGE_TYPES: list[str] = ["mentioned_in", "co_occurs_with"]

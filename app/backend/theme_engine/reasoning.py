@@ -96,7 +96,7 @@ def gather_dossier(run_id: str, community_id: str) -> dict:
             "edge_type": ed["edge_type"],
             "target": ent.get(ed["target_entity_id"], ed["target_entity_id"]),
             "target_id": ed["target_entity_id"],
-            "extraction_method": ed.get("extraction_method") or "document_stated",
+            "extraction_method": ed.get("extraction_method") or "llm_inferred",
             "explanation": expl.get(ed["edge_id"], ""),
             "evidence": evidence,
             "evidence_chunk_ids": ev_ids,
