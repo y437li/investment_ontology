@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, subgraph as subgraph_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, concept_resolution, subgraph as subgraph_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -38,6 +38,14 @@ from .models import (
 )
 
 app = FastAPI(title="Theme Discovery Engine", version="0.1.0")
+
+
+def _guard_not_frozen(run_id: str) -> None:
+    """Reject mutating a run's discovery artifacts after freeze (audit HIGH)."""
+    m = runs.load_manifest(run_id)
+    if m is not None and getattr(m, "discovery_frozen", False):
+        raise HTTPException(status_code=409,
+            detail=f"discovery is frozen for {run_id}; cannot regenerate discovery artifacts")
 
 
 @app.get("/api/health")
@@ -159,10 +167,19 @@ def extraction_resolve(req: ExtractionResolveRequest) -> ExtractionResolveRespon
     )
 
 
+@app.post("/api/extraction/canonicalize-concepts")
+def canonicalize_concepts_endpoint(req: GraphBuildRequest):
+    """Merge synonym concept/event nodes (run after extraction, before graph/build).
+    No-op without an LLM configured. Blocked once discovery is frozen."""
+    _guard_not_frozen(req.run_id)
+    return concept_resolution.canonicalize_concepts(req.run_id)
+
+
 @app.post("/api/macro/integrate")
 def macro_integrate(req: GraphBuildRequest):
     """Integrate point-in-time macro series as MacroIndicator nodes + structural
     edges to sensitive-sector companies. Run after extraction/resolve, before graph/build."""
+    _guard_not_frozen(req.run_id)
     return macro_adapter.integrate_macro(req.run_id)
 
 
@@ -179,6 +196,7 @@ def graph_build_endpoint(req: GraphBuildRequest) -> GraphBuildResponse:
 
 @app.post("/api/themes/discover", response_model=ThemeDiscoverResponse)
 def themes_discover_endpoint(req: ThemeDiscoverRequest) -> ThemeDiscoverResponse:
+    _guard_not_frozen(req.run_id)
     community_count = themes.discover_themes(run_id=req.run_id)
     return ThemeDiscoverResponse(
         success=True,
@@ -299,6 +317,7 @@ def explain_node_endpoint(run_id: str, entity_id: str, refresh: bool = False):
 @app.post("/api/exposure/compute", response_model=ExposureComputeResponse)
 def exposure_compute(req: ExposureComputeRequest) -> ExposureComputeResponse:
     """Compute company-theme exposure scores (M5, io_contracts §18)."""
+    _guard_not_frozen(req.run_id)
     try:
         pair_count = exposure_mod.compute_exposure(
             run_id=req.run_id,

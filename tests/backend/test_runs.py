@@ -61,6 +61,10 @@ def _seed_discovery_artifacts(run_id: str) -> None:
         "entity_aliases.parquet",
         "edges.parquet",
         "graph.json",
+        "communities.json",
+        "theme_snapshots.json",
+        "theme_metrics.parquet",
+        "company_theme_exposure.parquet",
     ]:
         (run_dir / name).write_text("seed", encoding="utf-8")
 
@@ -150,3 +154,17 @@ def test_validation_run_blocked_when_discovery_artifact_mutated():
     validation_resp = client.post("/api/validation/run", json={"run_id": run_id})
     assert validation_resp.status_code == 409
     assert "hash mismatch" in validation_resp.text
+
+
+def test_discovery_writers_blocked_after_freeze():
+    """Mutating discovery endpoints (themes/exposure/macro/concepts) are rejected
+    with 409 once the run is frozen (audit HIGH: no freeze guard)."""
+    run = client.post("/api/runs/create", json={"as_of_date": "2024-06-30"}).json()
+    run_id = run["run_id"]
+    _seed_discovery_artifacts(run_id)
+    assert client.post("/api/discovery/freeze", json={"run_id": run_id}).status_code == 200
+    for route in ["/api/themes/discover", "/api/exposure/compute",
+                  "/api/macro/integrate", "/api/extraction/canonicalize-concepts"]:
+        resp = client.post(route, json={"run_id": run_id})
+        assert resp.status_code == 409, f"{route} should be 409 when frozen, got {resp.status_code}"
+        assert "frozen" in resp.text.lower()

@@ -601,6 +601,10 @@ def test_freeze_hashes_are_deterministic():
         "entity_aliases.parquet",
         "edges.parquet",
         "graph.json",
+        "communities.json",
+        "theme_snapshots.json",
+        "theme_metrics.parquet",
+        "company_theme_exposure.parquet",
     ]:
         (discovery_dir / name).write_bytes(b"stable_content_" + name.encode())
 

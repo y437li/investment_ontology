@@ -29,6 +29,12 @@ REQUIRED_DISCOVERY_ARTIFACTS = {
     "entity_aliases.parquet",
     "edges.parquet",
     "graph.json",
+    # Validation consumes these — they MUST be frozen+hashed, else a post-freeze
+    # regeneration would be silently accepted (audit CRITICAL).
+    "communities.json",
+    "theme_snapshots.json",
+    "theme_metrics.parquet",
+    "company_theme_exposure.parquet",
 }
 
 
