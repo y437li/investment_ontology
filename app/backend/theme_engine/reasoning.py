@@ -98,7 +98,9 @@ def gather_dossier(run_id: str, community_id: str) -> dict:
     if c is None:
         raise ValueError(f"community not found: {community_id}")
 
-    ent = {e["entity_id"]: (e.get("canonical_name") or e.get("name")) for e in _load(run_id, "entities.parquet")}
+    _entities = _load(run_id, "entities.parquet")
+    ent = {e["entity_id"]: (e.get("canonical_name") or e.get("name")) for e in _entities}
+    ent_type = {e["entity_id"]: e.get("entity_type") for e in _entities}
     expl = {e["edge_id"]: e.get("explanation", "") for e in _load(run_id, "edge_explanations.parquet")}
     chunks = {ch["chunk_id"]: ch.get("text", "") for ch in _load(run_id, "chunks.parquet")}
     edge_ids = set(c.get("edge_ids", []))
@@ -118,9 +120,11 @@ def gather_dossier(run_id: str, community_id: str) -> dict:
         relationships.append({
             "source": src,
             "source_id": ed["source_entity_id"],
+            "source_type": ent_type.get(ed["source_entity_id"]),
             "edge_type": ed["edge_type"],
             "target": tgt,
             "target_id": ed["target_entity_id"],
+            "target_type": ent_type.get(ed["target_entity_id"]),
             "extraction_method": ed.get("extraction_method") or "llm_inferred",
             "explanation": expl.get(ed["edge_id"], ""),
             "evidence": evidence,
@@ -255,7 +259,9 @@ def synthesize_main_narrative(run_id: str, community_ids: list[str], client=None
     key = hashlib.sha256(",".join(sorted(community_ids)).encode()).hexdigest()[:16]
     cache = runs.get_run_dir(run_id) / "discovery" / "main_narratives" / f"{key}.json"
     if cache.exists() and not refresh:
-        return json.loads(cache.read_text())
+        cached = json.loads(cache.read_text())
+        cached["relationships"] = gather_main_dossier(run_id, community_ids)["relationships"]
+        return cached
     d = gather_main_dossier(run_id, community_ids)
     if client is None:
         client, model = _default_client_model()
@@ -272,7 +278,11 @@ def get_or_synthesize(run_id: str, community_id: str, refresh: bool = False,
     """Return a cached community narrative, synthesizing (and caching) on first request."""
     cache = runs.get_run_dir(run_id) / "discovery" / "narratives" / f"{community_id}.json"
     if cache.exists() and not refresh:
-        return json.loads(cache.read_text())
+        cached = json.loads(cache.read_text())
+        # relationships + evidence are DETERMINISTIC; recompute them on every read so code
+        # changes (node types, specific-sentence evidence) surface without an LLM re-run.
+        cached["relationships"] = gather_dossier(run_id, community_id)["relationships"]
+        return cached
     result = synthesize_narrative(run_id, community_id, client=client, model=model)
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(result, indent=2))

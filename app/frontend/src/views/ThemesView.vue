@@ -294,7 +294,7 @@
                   <span class="subgraph-hint">Click a node to view its profile</span>
                 </div>
                 <div class="subgraph-container" ref="subgraphContainer">
-                  <svg ref="subgraphSvg" class="subgraph-svg"></svg>
+                  <LayeredGraph :nodes="sgNodes" :edges="sgEdges" :active-hop="hopHighlight" @node-click="(d) => fetchNodeProfile(d.id)" />
                 </div>
               </div>
               <!-- ── END SUBGRAPH ─────────────────────────────────────────── -->
@@ -424,6 +424,7 @@ import * as d3 from 'd3'
 import RunNav from '../components/RunNav.vue'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
 import { getCommunityNarrative, getNodeProfile, getChunkSource } from '../api/themes.js'
+import LayeredGraph from '../components/LayeredGraph.vue'
 
 const props = defineProps({ runId: String })
 const route = useRoute()
@@ -476,6 +477,7 @@ const sortedReasoningSteps = computed(() => {
 const subgraphContainer = ref(null)
 const subgraphSvg = ref(null)
 let subgraphSimulation = null
+const hopHighlight = ref(null)   // {source_id,target_id} driving the shared LayeredGraph
 
 // ─── Node profile state ───────────────────────────────────────────────────────
 const nodeProfileOpen = ref(false)
@@ -558,6 +560,9 @@ const loadNarrative = async () => {
  * @param {object|null} step - reasoning step or null to restore
  */
 const highlightDerivationOnGraph = (step) => {
+  // Drive the shared LayeredGraph via its activeHop prop. The legacy d3 below is dead
+  // (subgraphSvg stays null now that the inline <svg> is the LayeredGraph component).
+  hopHighlight.value = step ? { source_id: String(step.source_id ?? step.source), target_id: String(step.target_id ?? step.target) } : null
   if (!subgraphSvg.value) return
   const svg = d3.select(subgraphSvg.value)
 
@@ -707,6 +712,7 @@ const walkReset = () => {
 
 // ─── Subgraph helpers ─────────────────────────────────────────────────────────
 const clearSubgraph = () => {
+  hopHighlight.value = null
   if (subgraphSimulation) {
     subgraphSimulation.stop()
     subgraphSimulation = null
@@ -721,10 +727,10 @@ const buildSubgraphData = (relationships) => {
   const nodeMap = new Map()
   for (const rel of relationships) {
     if (rel.source_id != null && !nodeMap.has(String(rel.source_id))) {
-      nodeMap.set(String(rel.source_id), { id: String(rel.source_id), label: rel.source || String(rel.source_id) })
+      nodeMap.set(String(rel.source_id), { id: String(rel.source_id), label: rel.source || String(rel.source_id), entity_type: rel.source_type })
     }
     if (rel.target_id != null && !nodeMap.has(String(rel.target_id))) {
-      nodeMap.set(String(rel.target_id), { id: String(rel.target_id), label: rel.target || String(rel.target_id) })
+      nodeMap.set(String(rel.target_id), { id: String(rel.target_id), label: rel.target || String(rel.target_id), entity_type: rel.target_type })
     }
     // Fallback: if ids missing, use names as ids
     if (rel.source_id == null && rel.source && !nodeMap.has(rel.source)) {
@@ -749,6 +755,12 @@ const buildSubgraphData = (relationships) => {
 
   return { nodes, edges }
 }
+
+// LayeredGraph props for the community subgraph (level inferred from entity_type)
+const sgNodes = computed(() => (narrative.value?.relationships?.length ? buildSubgraphData(narrative.value.relationships).nodes : []))
+const sgEdges = computed(() => (narrative.value?.relationships?.length
+  ? buildSubgraphData(narrative.value.relationships).edges.map((e) => ({ source: e.source, target: e.target, edge_type: e.label }))
+  : []))
 
 const SUBGRAPH_COLORS = [
   '#1a56db', '#7c3aed', '#059669', '#dc2626', '#d97706',

@@ -3,11 +3,9 @@
     <RunNav :runId="runId" />
     <div class="content-area">
       <div class="graph-wrapper">
-        <GraphPanel
-          :graphData="graphData"
-          :loading="loading"
-          @refresh="loadGraph"
-        />
+        <div v-if="loading" class="empty-msg">Loading graph…</div>
+        <div v-else-if="!graphData" class="empty-msg">Run the Graph Build step to generate graph data.</div>
+        <LayeredGraph v-else :nodes="lgNodes" :edges="lgEdges" @node-click="onNodeClick" />
       </div>
       <div class="sidebar">
         <div class="sidebar-header">
@@ -41,6 +39,10 @@
             <span class="meta-value">{{ graphData.schema_version }}</span>
           </div>
         </div>
+        <div v-if="selectedNode" class="meta-block">
+          <div class="meta-row"><span class="meta-label">Node</span><span class="meta-value">{{ selectedNode.label }}</span></div>
+          <div class="meta-row"><span class="meta-label">Type</span><span class="meta-value">{{ selectedNode.entity_type }}</span></div>
+        </div>
         <div v-if="error" class="error-msg">{{ error }}</div>
         <div v-if="!graphData && !loading && !error" class="empty-msg">
           Run the Graph Build step in the pipeline to generate graph data.
@@ -51,9 +53,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import RunNav from '../components/RunNav.vue'
-import GraphPanel from '../components/GraphPanel.vue'
+import LayeredGraph from '../components/LayeredGraph.vue'
 import { getGraphJson } from '../api/artifacts.js'
 
 const props = defineProps({ runId: String })
@@ -61,6 +63,14 @@ const props = defineProps({ runId: String })
 const graphData = ref(null)
 const loading = ref(false)
 const error = ref('')
+const selectedNode = ref(null)
+
+// Map raw graph.json -> LayeredGraph format (excludes Document-only evidence edges)
+const lgNodes = computed(() => (graphData.value?.nodes || []).map((n) => ({ id: n.entity_id, label: n.label, entity_type: n.entity_type })))
+const lgEdges = computed(() => (graphData.value?.edges || [])
+  .filter((e) => !['mentioned_in', 'co_occurs_with'].includes(e.edge_type))
+  .map((e) => ({ source: e.source_entity_id, target: e.target_entity_id, edge_type: e.edge_type })))
+const onNodeClick = (d) => { selectedNode.value = d }
 
 const loadGraph = async () => {
   loading.value = true

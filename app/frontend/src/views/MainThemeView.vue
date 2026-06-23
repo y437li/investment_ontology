@@ -30,12 +30,7 @@
     <div v-else class="mtv-body">
       <!-- LEFT: layered graph -->
       <div class="graph-pane">
-        <div class="legend">
-          <span v-for="lvl in LEVELS" :key="lvl" class="legend-item">
-            <span class="legend-dot" :style="{ background: LEVEL_COLORS[lvl] }"></span>{{ lvl }}
-          </span>
-        </div>
-        <svg ref="svgEl" class="graph-svg"></svg>
+        <LayeredGraph :nodes="subgraph.nodes" :edges="subgraph.edges" :active-hop="activeHop" @node-click="openNode" />
         <div v-if="selectedNode" class="node-profile">
           <button class="np-close" @click="selectedNode = null">×</button>
           <div class="np-name">{{ selectedNode.name }}</div>
@@ -93,6 +88,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import * as d3 from 'd3'
 import { getSubgraph, getMainNarrative, getNodeProfile, getThemeHierarchy } from '../api/themes.js'
+import LayeredGraph from '../components/LayeredGraph.vue'
 
 const route = useRoute()
 const runId = route.params.runId
@@ -140,6 +136,11 @@ const story = ref({ narrative: '', reasoning_steps: [] })
 const steps = computed(() => (story.value.reasoning_steps || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0)))
 const selectedNode = ref(null)
 const activeIdx = ref(-1)
+// Walk → drive the shared LayeredGraph (replaces the inline highlight(idx) d3)
+const activeHop = computed(() => {
+  const s = steps.value[activeIdx.value]
+  return (activeIdx.value >= 0 && s) ? { source_id: s.source_id, target_id: s.target_id } : null
+})
 const playing = ref(false)
 let playTimer = null
 
