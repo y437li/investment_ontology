@@ -35,3 +35,10 @@ def test_validation_loader_fails_loud_on_corrupt_but_empty_on_absent():
     (d / "communities.json").write_text("not json {", encoding="utf-8")
     with pytest.raises(ValueError):                                # corrupt -> raises
         validation._load_communities(run.run_id)
+
+
+def test_exposure_days_before_future_is_least_recent():
+    """Audit medium: a future-dated edge is least-recent (window cap), not max-recent."""
+    from theme_engine import exposure
+    assert exposure._days_before("2025-01-01", "2024-06-30") == exposure._RECENCY_WINDOW_DAYS
+    assert exposure._days_before("2024-06-20", "2024-06-30") == 10.0   # past = real gap

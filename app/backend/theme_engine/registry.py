@@ -25,7 +25,9 @@ def _load_yaml(name: str) -> dict:
     try:
         import yaml  # noqa: PLC0415
         return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    except Exception:
+    except Exception as exc:  # malformed config: warn loudly instead of silently disabling it
+        import logging  # noqa: PLC0415
+        logging.getLogger(__name__).warning("failed to parse config %s: %s — falling back to defaults", p, exc)
         return {}
 
 

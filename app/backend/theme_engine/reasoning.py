@@ -197,7 +197,7 @@ def _synthesize_dossier(d: dict, client, model: str) -> dict:
     for s in (args.get("reasoning_steps") or []):
         match = rel_lookup.get((s.get("source", "").lower(), s.get("target", "").lower(), s.get("edge_type", "")))
         method = (match.get("extraction_method") if match else None)
-        provenance = method if method in ("document_stated", "llm_inferred") else "llm_inferred"
+        provenance = method if method in ("document_stated", "metadata_inferred", "llm_inferred") else "llm_inferred"
         steps.append({
             "order": s.get("order"),
             "claim": s.get("claim", ""),
