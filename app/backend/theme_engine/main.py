@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, concept_resolution, subgraph as subgraph_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -250,6 +250,30 @@ def get_theme_narrative(run_id: str, community_id: str, refresh: bool = False):
         raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/themes/{run_id}/slice")
+def get_slice(run_id: str, anchor: str = "", depth: int = 2, direction: str = "both",
+              edge_types: str = "", levels: str = "", methods: str = "",
+              min_weight: float = 0.0, max_nodes: int = 200):
+    """Anchored slice: the connected structural subgraph reachable from an anchor node
+    (entity_id or name) within `depth` hops along selected edge types/levels."""
+    if not anchor or not anchor.strip():
+        raise HTTPException(status_code=400, detail="provide ?anchor=<entity_id or name>")
+    et = [c for c in edge_types.split(",") if c.strip()] or None
+    lv = [c for c in levels.split(",") if c.strip()] or None
+    mth = [c for c in methods.split(",") if c.strip()] or None
+    try:
+        return slice_engine.extract_slice(run_id, anchor.strip(), depth=depth, direction=direction,
+            edge_types=et, levels=lv, extraction_methods=mth, min_weight=min_weight, max_nodes=max_nodes)
+    except slice_engine.AnchorAmbiguous as exc:
+        raise HTTPException(status_code=409, detail={"message": str(exc), "candidates": getattr(exc, "candidates", [])})
+    except slice_engine.AnchorNotFound as exc:
+        raise HTTPException(status_code=404, detail={"message": str(exc), "candidates": getattr(exc, "candidates", [])})
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/themes/{run_id}/subgraph")
