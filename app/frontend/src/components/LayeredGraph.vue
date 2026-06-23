@@ -13,6 +13,13 @@
           <span class="lg-dash" :style="{ background: edgeColor(et) }"></span>{{ et }}
         </button>
       </div>
+      <div class="lg-row" v-if="maxDegree > 1">
+        <span class="lg-cap">min links</span>
+        <input type="range" class="lg-slider" min="0" :max="maxDegree" v-model.number="minDegree" />
+        <span class="lg-val">{{ minDegree }}</span>
+        <span class="lg-count">· {{ shownCount }}/{{ props.nodes.length }} nodes</span>
+        <button class="lg-reset" v-if="hiddenLevels.size || hiddenEdgeTypes.size || minDegree" @click="resetFilters">reset</button>
+      </div>
     </div>
     <svg ref="svgEl" class="lg-svg"></svg>
   </div>
@@ -51,8 +58,16 @@ const presentEdgeTypes = computed(() => Array.from(new Set(props.edges.map((e) =
 // In-graph filters (reassign the Set so Vue re-renders)
 const hiddenLevels = ref(new Set())
 const hiddenEdgeTypes = ref(new Set())
+const minDegree = ref(0)
+const shownCount = ref(0)
+const maxDegree = computed(() => {
+  const deg = {}
+  props.edges.forEach((e) => { deg[e.source] = (deg[e.source] || 0) + 1; deg[e.target] = (deg[e.target] || 0) + 1 })
+  return Math.max(1, ...Object.values(deg))
+})
 function toggleLevel(lv) { const s = new Set(hiddenLevels.value); s.has(lv) ? s.delete(lv) : s.add(lv); hiddenLevels.value = s }
 function toggleEdge(et) { const s = new Set(hiddenEdgeTypes.value); s.has(et) ? s.delete(et) : s.add(et); hiddenEdgeTypes.value = s }
+function resetFilters() { hiddenLevels.value = new Set(); hiddenEdgeTypes.value = new Set(); minDegree.value = 0 }
 
 function render() {
   const el = svgEl.value
@@ -65,7 +80,9 @@ function render() {
   const visEdges = props.edges.filter((e) => !hiddenEdgeTypes.value.has(e.edge_type) && visIds.has(e.source) && visIds.has(e.target))
   const degree = {}
   visEdges.forEach((e) => { degree[e.source] = (degree[e.source] || 0) + 1; degree[e.target] = (degree[e.target] || 0) + 1 })
-  const nodes = visNodes.map((n) => ({ ...n, deg: degree[n.id] || 0 }))
+  const nodesAll = visNodes.map((n) => ({ ...n, deg: degree[n.id] || 0 }))
+  const nodes = minDegree.value > 0 ? nodesAll.filter((n) => n.deg >= minDegree.value) : nodesAll
+  shownCount.value = nodes.length
   const idset = new Set(nodes.map((n) => n.id))
   const links = visEdges.filter((e) => idset.has(e.source) && idset.has(e.target)).map((e) => ({ ...e }))
 
@@ -152,7 +169,7 @@ function highlight(hop) {
     .attr('stroke-width', (l) => ((l.source.id === hop.source_id && l.target.id === hop.target_id) || (l.source.id === hop.target_id && l.target.id === hop.source_id) ? 3.5 : 1.4))
 }
 
-watch(() => [props.nodes, props.edges, hiddenLevels.value, hiddenEdgeTypes.value], () => nextTick(render), { deep: false })
+watch(() => [props.nodes, props.edges, hiddenLevels.value, hiddenEdgeTypes.value, minDegree.value], () => nextTick(render), { deep: false })
 watch(() => props.activeHop, (h) => highlight(h))
 onMounted(() => nextTick(render))
 onBeforeUnmount(() => { if (sim) sim.stop() })
@@ -169,4 +186,9 @@ onBeforeUnmount(() => { if (sim) sim.stop() })
 .lg-chip.off { opacity: 0.34; text-decoration: line-through; }
 .lg-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .lg-dash { width: 11px; height: 3px; border-radius: 2px; display: inline-block; }
+.lg-slider { width: 90px; accent-color: #2563eb; cursor: pointer; }
+.lg-val { color: #333; font-weight: 700; min-width: 10px; }
+.lg-count { color: #aaa; }
+.lg-reset { margin-left: 4px; border: 1px solid #e2e2e2; background: #fff; border-radius: 10px; padding: 1px 8px; font-size: 0.66rem; font-family: monospace; color: #2563eb; cursor: pointer; }
+.lg-reset:hover { border-color: #2563eb; }
 </style>
