@@ -277,6 +277,11 @@
                         class="evidence-snippet"
                       >"{{ typeof ev === 'string' ? ev : (ev.text || ev.snippet || JSON.stringify(ev)) }}"</span>
                       <span v-if="rel.evidence.length > 2" class="evidence-more">+{{ rel.evidence.length - 2 }} more</span>
+                      <a
+                        v-if="rel.evidence_chunk_ids?.length"
+                        class="read-source-link"
+                        @click="openSource(rel.evidence_chunk_ids[0])"
+                      >read full source →</a>
                     </div>
                   </div>
                 </div>
@@ -393,7 +398,24 @@
       <!-- ── END NODE PROFILE PANEL ──────────────────────────────────── -->
     </div>
   </div>
-</template>
+    <!-- Full-text source viewer -->
+    <div v-if="sourceDoc || sourceLoading" class="source-modal" @click.self="closeSource">
+      <div class="source-card">
+        <button class="source-close" @click="closeSource">×</button>
+        <div v-if="sourceLoading" class="source-loading">Loading source…</div>
+        <template v-else-if="sourceDoc">
+          <div class="source-title">{{ sourceDoc.document?.title || 'Source document' }}</div>
+          <div class="source-meta">
+            <span v-if="sourceDoc.document?.source">{{ sourceDoc.document.source }}</span>
+            <span v-if="sourceDoc.document?.published_at"> · {{ sourceDoc.document.published_at }}</span>
+            <span v-if="sourceDoc.document?.document_type"> · {{ sourceDoc.document.document_type }}</span>
+            <a v-if="sourceDoc.document?.source_url" :href="sourceDoc.document.source_url" target="_blank" rel="noopener" class="source-orig">open original ↗</a>
+          </div>
+          <div class="source-text">{{ sourceDoc.document_text }}</div>
+        </template>
+      </div>
+    </div>
+  </template>
 
 <script setup>
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
@@ -401,7 +423,7 @@ import { useRoute } from 'vue-router'
 import * as d3 from 'd3'
 import RunNav from '../components/RunNav.vue'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
-import { getCommunityNarrative, getNodeProfile } from '../api/themes.js'
+import { getCommunityNarrative, getNodeProfile, getChunkSource } from '../api/themes.js'
 
 const props = defineProps({ runId: String })
 const route = useRoute()
@@ -414,6 +436,23 @@ const snapshots = ref([])
 const metrics = ref([])
 const exposures = ref([])
 const selectedCommunity = ref(null)
+
+// Full-text source viewer
+const sourceDoc = ref(null)
+const sourceLoading = ref(false)
+async function openSource(chunkId) {
+  if (!chunkId) return
+  sourceLoading.value = true
+  sourceDoc.value = null
+  try {
+    sourceDoc.value = await getChunkSource(props.runId, chunkId)
+  } catch (e) {
+    sourceDoc.value = { document: { title: 'Source unavailable' }, document_text: e?.response?.data?.detail || 'Failed to load source.' }
+  } finally {
+    sourceLoading.value = false
+  }
+}
+function closeSource() { sourceDoc.value = null; sourceLoading.value = false }
 
 // ─── Narrative state ──────────────────────────────────────────────────────────
 const narrative = ref(null)
@@ -1842,6 +1881,16 @@ onMounted(loadData)
   flex-shrink: 0;
 }
 
+.read-source-link { font-size: 11px; color: #2563eb; cursor: pointer; margin-left: 6px; white-space: nowrap; }
+.read-source-link:hover { text-decoration: underline; }
+.source-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.source-card { background: #fff; width: min(760px, 92vw); max-height: 82vh; overflow: auto; border-radius: 8px; padding: 22px 26px; position: relative; box-shadow: 0 10px 40px rgba(0,0,0,0.25); }
+.source-close { position: absolute; top: 10px; right: 14px; border: none; background: none; font-size: 1.4rem; cursor: pointer; color: #999; }
+.source-loading { color: #888; padding: 24px 0; }
+.source-title { font-weight: 700; font-size: 1.05rem; padding-right: 24px; }
+.source-meta { font-family: monospace; font-size: 0.74rem; color: #888; margin: 6px 0 14px; }
+.source-orig { color: #2563eb; margin-left: 8px; }
+.source-text { font-size: 0.9rem; line-height: 1.65; color: #1a1a1a; white-space: pre-wrap; }
 .evidence-snippet {
   font-size: 11px;
   color: #777;

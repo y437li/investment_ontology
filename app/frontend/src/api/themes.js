@@ -86,3 +86,12 @@ export function getMainNarrative(runId, communityIds) {
 export function getThemeTrajectories(runId) {
   return service.get(`/api/themes/${runId}/trajectories`)
 }
+
+/**
+ * Full-text source behind an evidence chunk.
+ * Returns { chunk_id, chunk_text, document_id, available_at, section_title,
+ *           document:{title,source,source_url,published_at,document_type}, document_text }
+ */
+export function getChunkSource(runId, chunkId) {
+  return service.get(`/api/themes/${runId}/chunks/${chunkId}`)
+}
