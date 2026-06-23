@@ -172,7 +172,12 @@ def canonicalize_concepts_endpoint(req: GraphBuildRequest):
     """Merge synonym concept/event nodes (run after extraction, before graph/build).
     No-op without an LLM configured. Blocked once discovery is frozen."""
     _guard_not_frozen(req.run_id)
-    return concept_resolution.canonicalize_concepts(req.run_id)
+    try:
+        return concept_resolution.canonicalize_concepts(req.run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.post("/api/macro/integrate")
@@ -180,7 +185,12 @@ def macro_integrate(req: GraphBuildRequest):
     """Integrate point-in-time macro series as MacroIndicator nodes + structural
     edges to sensitive-sector companies. Run after extraction/resolve, before graph/build."""
     _guard_not_frozen(req.run_id)
-    return macro_adapter.integrate_macro(req.run_id)
+    try:
+        return macro_adapter.integrate_macro(req.run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.post("/api/altdata/integrate")
@@ -188,7 +198,12 @@ def altdata_integrate(req: GraphBuildRequest):
     """Integrate alt/structured-data series (configs/altdata.yml) as PIT nodes +
     structural edges to sensitive-sector companies. After extraction, before graph/build."""
     _guard_not_frozen(req.run_id)
-    return altdata_adapter.integrate_altdata(req.run_id)
+    try:
+        return altdata_adapter.integrate_altdata(req.run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.post("/api/graph/build", response_model=GraphBuildResponse)
