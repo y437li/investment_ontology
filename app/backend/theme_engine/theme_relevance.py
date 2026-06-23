@@ -38,10 +38,13 @@ def _parse_ids(v) -> list[str]:
 
 def _score(dates: list[str], as_of: date, window_days: int) -> dict:
     """Recency score + lifecycle state from a theme's evidence dates."""
+    # PIT: drop future-dated evidence (not knowable at as_of) so it cannot be scored
+    # as maximally recent (audit medium: future evidence clamped to max-recency).
+    dates = [d for d in dates if _to_date(d) <= as_of]
     if not dates:
         return {"relevance_score": 0.0, "state": "dormant", "recent_share": 0.0,
                 "last_evidence_at": None, "evidence_count": 0}
-    days = [max(0, (as_of - _to_date(d)).days) for d in dates]
+    days = [(as_of - _to_date(d)).days for d in dates]
     recent_share = sum(1 for x in days if x <= window_days) / len(days)
     recency_score = sum(max(0.0, 1.0 - x / 365.0) for x in days) / len(days)
     if recent_share >= 0.5:

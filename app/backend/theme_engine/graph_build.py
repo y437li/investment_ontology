@@ -57,6 +57,7 @@ COMMUNITY_INPUT_METHODS: frozenset = frozenset({"document_stated", "metadata_inf
 # Node types included in the entity-only structural graph (excludes Document)
 STRUCTURAL_NODE_TYPES: list[str] = [
     "Company",
+    "Sector",          # industry-level node type (ontology); was missing from the whitelist
     "MacroIndicator",
     "EconomicConcept",
     "Commodity",
@@ -130,7 +131,8 @@ def build_graph(run_id: str) -> tuple[int, int]:
     for ent in raw_entities:
         # Point-in-time gate
         first_seen = _to_date_str(ent.get("first_seen_at", ""))
-        if first_seen and first_seen > as_of_date:
+        # PIT fail-CLOSED: exclude undated items too (cannot prove availability at as_of)
+        if (not first_seen) or first_seen > as_of_date:
             continue
         entity_type = ent.get("entity_type", "")
         # OI-5: exclude Document nodes from structural graph
@@ -158,7 +160,8 @@ def build_graph(run_id: str) -> tuple[int, int]:
     for edge in raw_edges:
         # Point-in-time gate
         first_seen = _to_date_str(edge.get("first_seen_at", ""))
-        if first_seen and first_seen > as_of_date:
+        # PIT fail-CLOSED: exclude undated items too (cannot prove availability at as_of)
+        if (not first_seen) or first_seen > as_of_date:
             continue
         edge_id: str = edge.get("edge_id", "")
         if not edge_id:

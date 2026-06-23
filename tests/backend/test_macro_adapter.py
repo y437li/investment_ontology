@@ -80,3 +80,26 @@ def test_integrate_macro_links_rate_to_bank(tmp_path, monkeypatch):
     assert e["extraction_method"] == "metadata_inferred"      # labeled, not document_stated
     ents = pq.read_table(d / "entities.parquet").to_pylist()
     assert any(x["entity_type"] == "MacroIndicator" and x["name"] == "Test Policy Rate" for x in ents)
+
+
+def test_macro_rejects_non_structural_edge_type(tmp_path, monkeypatch):
+    """Audit medium: a macro.yml edge_type that is not structural raises (would
+    otherwise be silently dropped out of community discovery)."""
+    import pytest
+    cfg = tmp_path / "configs"; cfg.mkdir()
+    csv = tmp_path / "rate.csv"; _write_csv(csv)
+    (cfg / "macro.yml").write_text(
+        "version: 1\nrelease_lag_days: 35\nseries:\n"
+        f"  - id: rate\n    label: Test Rate\n    csv: {csv}\n"
+        "    date_col: observation_date\n    value_col: RATE\n    unit: \"%\"\n"
+        "    sensitivities:\n      - {sector: Financials, edge_type: mentioned_in, rationale: bad}\n")
+    (cfg / "uni.yml").write_text("companies:\n  - name: Royal Bank of Canada\n    sector: Financials\n")
+    monkeypatch.setenv("CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("UNIVERSE_CONFIG", str(cfg / "uni.yml"))
+    run = runs.create_run(RunCreateRequest(as_of_date="2024-06-30"))
+    d = Path(settings.run_output_dir) / run.run_id / "discovery"; d.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.table({"schema_version": [1], "entity_id": ["rbc"], "entity_type": ["Company"],
+                             "name": ["Royal Bank of Canada"], "canonical_name": ["Royal Bank of Canada"],
+                             "ticker": [None]}), d / "entities.parquet")
+    with pytest.raises(ValueError):
+        macro_adapter.integrate_macro(run.run_id)
