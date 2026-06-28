@@ -58,6 +58,15 @@ entity_types:
     level: evidence
     definition: A source document node (evidence traceability only; excluded from discovery).
     keep: true
+  FinancialMetric:
+    level: company
+    definition: >
+      A quantified financial metric claim (reported actual or guidance/forward-looking),
+      extracted from narrative text (MD&A, earnings transcripts, news). Carries
+      metric_name (from fundamentals.yml vocabulary), value, unit, period, direction,
+      is_guidance flag, and the source evidence chunk. Attached to its Company via
+      reports (as-reported) or guides_to (guidance) edges.
+    keep: true
 
 # Never extract these as entities (denoise).
 exclude:
@@ -78,6 +87,8 @@ edge_types:
   located_in:    {structural: false, directed: true,  definition: A is located in B.}
   co_occurs_with: {structural: false, directed: false, definition: A co-occurs with B in evidence.}
   mentioned_in:  {structural: false, directed: true,  definition: A is mentioned in document B (evidence only).}
+  reports:       {structural: true,  directed: true,  definition: Company A reports a FinancialMetric B (as-reported actual; XBRL wins on overlap).}
+  guides_to:     {structural: true,  directed: true,  definition: Company A provides guidance toward a FinancialMetric B (forward-looking / narrative).}
 
 # Extraction rules enforced after the LLM returns.
 rules:

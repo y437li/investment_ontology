@@ -856,3 +856,841 @@ def run_extraction(
     )
 
     return len(entity_rows), len(edge_rows)
+
+
+# ===========================================================================
+# PASS 2 — Quantified-claim / FinancialMetric extraction (EG-B2)
+# ===========================================================================
+#
+# Separate tool schema and separate output artifacts from the entity/edge pass.
+# Emits FinancialMetric nodes + reports / guides_to edges.
+# PIT discipline: only chunks with available_at <= run.as_of are processed.
+# Reconciliation: XBRL (B1 fundamentals) wins for as-reported overlaps;
+#                 LLM owns guidance / forward-looking claims.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Column lists for new artifacts
+# ---------------------------------------------------------------------------
+
+# discovery/financial_metrics.parquet
+FINANCIAL_METRICS_COLUMNS: list[str] = [
+    "schema_version",
+    "metric_id",
+    "company_id",
+    "metric_name",
+    "value",
+    "unit",
+    "period",
+    "direction",
+    "is_guidance",
+    "confidence",
+    "evidence_chunk_id",
+    "source",
+    "created_at",
+]
+
+# discovery/financial_metric_edges.parquet
+FINANCIAL_METRIC_EDGES_COLUMNS: list[str] = [
+    "schema_version",
+    "edge_id",
+    "company_entity_id",
+    "metric_id",
+    "edge_type",
+    "evidence_chunk_ids",
+    "confidence",
+    "created_at",
+]
+
+# ---------------------------------------------------------------------------
+# Metric vocabulary helpers
+# ---------------------------------------------------------------------------
+
+_FUNDAMENTALS_YML = Path("configs") / "fundamentals.yml"
+
+# Fallback in case configs/fundamentals.yml is absent (B1 not yet merged)
+_FALLBACK_METRIC_NAMES = frozenset(
+    {"revenue", "net_income", "eps", "gross_margin", "operating_margin",
+     "ebitda_margin", "operating_cash_flow", "total_debt"}
+)
+
+
+def load_metric_vocabulary() -> frozenset[str]:
+    """Return the canonical metric_name whitelist from configs/fundamentals.yml.
+
+    Falls back to the built-in set when the file or pyyaml is absent so that
+    tests and CI stay hermetic regardless of B1 merge status.
+    """
+    config_dir = Path("configs")
+    # Honour CONFIG_DIR env var the same way registry.py does.
+    import os as _os  # noqa: PLC0415
+    config_dir = Path(_os.environ.get("CONFIG_DIR", "configs"))
+    p = config_dir / "fundamentals.yml"
+    if not p.exists():
+        return _FALLBACK_METRIC_NAMES
+    try:
+        import yaml as _yaml  # noqa: PLC0415
+        data = _yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        names = data.get("metrics") or []
+        if names:
+            return frozenset(str(n) for n in names)
+    except Exception:
+        pass
+    return _FALLBACK_METRIC_NAMES
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class QuantifiedClaim:
+    """A single quantified financial claim extracted from a text chunk."""
+
+    company_id: str          # canonical company name (used as PK alongside metric_name)
+    metric_name: str         # must be in metric vocabulary
+    value: float
+    unit: str                # e.g. "USD_millions", "percent", "USD_per_share"
+    period: str              # e.g. "Q2 2024", "FY 2024"
+    direction: str           # "rose" | "fell" | "stable" | "beat" | "missed" | ""
+    is_guidance: bool
+    evidence_chunk_id: str   # REQUIRED — the chunk this claim came from
+    confidence: float        # 0–1
+    source: str = "llm"
+
+
+@dataclass
+class QuantifiedClaimResult:
+    """Bundle returned by a FactExtractor for one chunk."""
+
+    claims: list[QuantifiedClaim] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# FactExtractor protocol
+# ---------------------------------------------------------------------------
+
+
+class FactExtractor(ABC):
+    """Protocol for quantified-claim extractors.
+
+    Like Extractor, implementations must be stateless across calls.
+    A RuleBasedFactExtractor is provided for tests/CI (no network).
+    A real OpenAIFactExtractor exists but must be explicitly constructed and
+    injected — it is never instantiated automatically.
+    """
+
+    @abstractmethod
+    def extract_facts(
+        self, chunk_id: str, chunk_text: str
+    ) -> QuantifiedClaimResult:
+        """Extract quantified financial claims from a single chunk.
+
+        Args:
+            chunk_id: Stable identifier for this chunk (recorded in evidence).
+            chunk_text: Cleaned text from chunks.parquet.
+
+        Returns:
+            QuantifiedClaimResult with QuantifiedClaim instances.
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Human-readable name of this extractor (recorded in source field)."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Rule-based fact extractor (deterministic, no network — default for tests/CI)
+# ---------------------------------------------------------------------------
+
+# Regex patterns for common numeric claim forms in financial text.
+# Each pattern yields: (metric_name, value_str, unit_hint, period_str, direction, is_guidance)
+_BILLION_RE = re.compile(
+    r"(revenue|net income|eps|operating margin|ebitda margin|gross margin|"
+    r"operating cash flow|total debt)"
+    r"[^.]*?"
+    r"(?:(rose|grew|increased|fell|declined|decreased|was|came in at|reached|stood at|of)"
+    r"[^$\d]*?)?"
+    r"\$\s*(\d+(?:\.\d+)?)\s*(billion|million|bn|m\b)",
+    re.IGNORECASE,
+)
+_PERCENT_RE = re.compile(
+    r"(gross margin|operating margin|ebitda margin)"
+    r"[^.]*?"
+    r"(?:(was|of|is expected to be approximately)\s*)?"
+    r"(\d+(?:\.\d+)?)%"
+    r"[^.]*?"
+    r"(?:for|in)\s+([A-Z][A-Z0-9 ]+\d{4})",
+    re.IGNORECASE,
+)
+_EPS_RE = re.compile(
+    r"eps"
+    r"[^.]*?"
+    r"(?:(came in at|of|to|was)\s*)?"
+    r"\$\s*(\d+(?:\.\d+)?)"
+    r"[^.]*?"
+    r"(?:for|in)\s+([A-Z][A-Z0-9 ]+\d{4})",
+    re.IGNORECASE,
+)
+_PERIOD_RE = re.compile(
+    r"\b(Q[1-4]\s+\d{4}|FY\s+\d{4}|H[12]\s+\d{4})\b",
+    re.IGNORECASE,
+)
+_GUIDANCE_SIGNALS = frozenset({
+    "guidance", "guide", "guides", "expect", "expects", "expected",
+    "raise", "raises", "raised", "now expect", "raising", "outlook",
+    "forecast", "projected",
+})
+
+_METRIC_ALIASES: dict[str, str] = {
+    "revenue": "revenue",
+    "net income": "net_income",
+    "eps": "eps",
+    "gross margin": "gross_margin",
+    "operating margin": "operating_margin",
+    "ebitda margin": "ebitda_margin",
+    "operating cash flow": "operating_cash_flow",
+    "total debt": "total_debt",
+}
+
+_DIRECTION_MAP: dict[str, str] = {
+    "rose": "rose", "grew": "rose", "increased": "rose",
+    "fell": "fell", "declined": "fell", "decreased": "fell",
+    "was": "", "came in at": "", "reached": "", "stood at": "", "of": "",
+    "is expected to be approximately": "",
+}
+
+
+def _normalise_metric(raw: str) -> Optional[str]:
+    return _METRIC_ALIASES.get(raw.strip().lower())
+
+
+def _unit_from_suffix(suffix: str) -> str:
+    s = suffix.lower()
+    if s in ("billion", "bn"):
+        return "USD_billions"
+    if s in ("million", "m"):
+        return "USD_millions"
+    return "USD"
+
+
+def _is_guidance_sentence(sentence: str) -> bool:
+    low = sentence.lower()
+    return any(sig in low for sig in _GUIDANCE_SIGNALS)
+
+
+def _find_period_in_text(text: str) -> str:
+    m = _PERIOD_RE.search(text)
+    return m.group(1).upper().replace("  ", " ") if m else ""
+
+
+class RuleBasedFactExtractor(FactExtractor):
+    """Deterministic pattern-matching extractor for quantified claims.
+
+    Produces stable output for the same input — no network calls.
+    Used in tests and CI.
+    """
+
+    @property
+    def name(self) -> str:
+        return "rule_based_fact_extractor_v1"
+
+    def extract_facts(
+        self, chunk_id: str, chunk_text: str
+    ) -> QuantifiedClaimResult:
+        """Extract quantified claims using simple regex patterns.
+
+        Only produces claims for sentences with explicit dollar amounts or
+        percentages paired with a known metric name.
+        """
+        metric_vocab = load_metric_vocabulary()
+        claims: list[QuantifiedClaim] = []
+        seen: set[tuple] = set()  # deduplicate
+
+        # Split into sentences for sentence-level guidance detection.
+        sentences = re.split(r"(?<=[.!?])\s+", chunk_text)
+
+        for sentence in sentences:
+            is_guidance = _is_guidance_sentence(sentence)
+            period_in_sentence = _find_period_in_text(sentence)
+
+            # Match "$X billion/million" patterns alongside a metric name
+            for m in _BILLION_RE.finditer(sentence):
+                raw_metric = m.group(1)
+                direction_raw = (m.group(2) or "").lower()
+                value_str = m.group(3)
+                unit_suffix = m.group(4)
+
+                metric = _normalise_metric(raw_metric)
+                if not metric or metric not in metric_vocab:
+                    continue
+
+                try:
+                    value = float(value_str)
+                except ValueError:
+                    continue
+
+                unit = _unit_from_suffix(unit_suffix)
+                direction = _DIRECTION_MAP.get(direction_raw, "")
+                period = period_in_sentence
+
+                dedup_key = (metric, value, unit, period, is_guidance)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+
+                # Company id: derived from containing text — caller supplies it
+                # separately, so we use a sentinel; the run-level function fills it.
+                claims.append(QuantifiedClaim(
+                    company_id="",  # filled in run_fact_extraction
+                    metric_name=metric,
+                    value=value,
+                    unit=unit,
+                    period=period,
+                    direction=direction,
+                    is_guidance=is_guidance,
+                    evidence_chunk_id=chunk_id,
+                    confidence=0.75,
+                    source=self.name,
+                ))
+
+            # Match standalone percent metrics
+            for m in _PERCENT_RE.finditer(sentence):
+                raw_metric = m.group(1)
+                value_str = m.group(3)
+                period_str = m.group(4).strip().upper() if m.group(4) else period_in_sentence
+
+                metric = _normalise_metric(raw_metric)
+                if not metric or metric not in metric_vocab:
+                    continue
+                try:
+                    value = float(value_str)
+                except ValueError:
+                    continue
+
+                dedup_key = (metric, value, "percent", period_str, is_guidance)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+
+                claims.append(QuantifiedClaim(
+                    company_id="",
+                    metric_name=metric,
+                    value=value,
+                    unit="percent",
+                    period=period_str,
+                    direction="",
+                    is_guidance=is_guidance,
+                    evidence_chunk_id=chunk_id,
+                    confidence=0.70,
+                    source=self.name,
+                ))
+
+            # Match EPS per-share patterns
+            for m in _EPS_RE.finditer(sentence):
+                value_str = m.group(2)
+                period_str = m.group(3).strip().upper() if m.group(3) else period_in_sentence
+
+                if "eps" not in metric_vocab:
+                    continue
+                try:
+                    value = float(value_str)
+                except ValueError:
+                    continue
+
+                dedup_key = ("eps", value, "USD_per_share", period_str, is_guidance)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+
+                claims.append(QuantifiedClaim(
+                    company_id="",
+                    metric_name="eps",
+                    value=value,
+                    unit="USD_per_share",
+                    period=period_str,
+                    direction="",
+                    is_guidance=is_guidance,
+                    evidence_chunk_id=chunk_id,
+                    confidence=0.75,
+                    source=self.name,
+                ))
+
+        return QuantifiedClaimResult(claims=claims)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible fact extractor (real LLM — NOT used in tests/CI)
+# ---------------------------------------------------------------------------
+
+
+class OpenAIFactExtractor(FactExtractor):
+    """LLM-backed extractor for quantified claims using an OpenAI-compatible API.
+
+    Must be explicitly instantiated and injected — NEVER constructed automatically.
+    No network call occurs unless an instance of this class is explicitly used.
+    """
+
+    def __init__(self, api_key: str, base_url: str, llm_model_name: str) -> None:
+        self._api_key = api_key
+        self._base_url = base_url
+        self._llm_model_name = llm_model_name
+        self._client = None
+
+    @property
+    def name(self) -> str:
+        return f"openai_fact_extractor:{self._llm_model_name}"
+
+    def _get_client(self):  # type: ignore[return]
+        if self._client is None:
+            try:
+                from openai import OpenAI  # noqa: PLC0415
+            except ImportError as exc:
+                raise RuntimeError(
+                    "openai package required for OpenAIFactExtractor; "
+                    "install it with: pip install openai"
+                ) from exc
+            self._client = OpenAI(api_key=self._api_key, base_url=self._base_url)
+        return self._client
+
+    @property
+    def _tool(self) -> dict:
+        metric_vocab = sorted(load_metric_vocabulary())
+        return {
+            "type": "function",
+            "function": {
+                "name": "emit_quantified_claims",
+                "description": "Emit all quantified financial claims found in the text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "claims": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "company_id": {"type": "string"},
+                                    "metric_name": {"type": "string", "enum": metric_vocab},
+                                    "value": {"type": "number"},
+                                    "unit": {"type": "string"},
+                                    "period": {"type": "string"},
+                                    "direction": {"type": "string"},
+                                    "is_guidance": {"type": "boolean"},
+                                    "confidence": {"type": "number"},
+                                },
+                                "required": ["company_id", "metric_name", "value",
+                                             "unit", "period", "is_guidance"],
+                            },
+                        }
+                    },
+                    "required": ["claims"],
+                },
+            },
+        }
+
+    def extract_facts(
+        self, chunk_id: str, chunk_text: str
+    ) -> QuantifiedClaimResult:
+        import json as _json  # noqa: PLC0415
+
+        client = self._get_client()
+        system = registry.get_system_prompt("quantified_claim_extraction") or (
+            "You are a financial NLP extractor. Extract ONLY explicit, numerical "
+            "financial claims from the text. Always call emit_quantified_claims."
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": chunk_text},
+        ]
+        args: dict = {}
+        for _attempt in range(3):
+            response = client.chat.completions.create(
+                model=self._llm_model_name,
+                messages=messages,
+                tools=[self._tool],
+                temperature=0,
+            )
+            tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
+            if tool_calls:
+                try:
+                    args = _json.loads(tool_calls[0].function.arguments)
+                    break
+                except Exception as exc:
+                    import logging  # noqa: PLC0415
+                    logging.getLogger(__name__).warning(
+                        "emit_quantified_claims parse failed: %s", exc
+                    )
+                    args = {}
+            messages.append({
+                "role": "user",
+                "content": "Call emit_quantified_claims with valid JSON arguments only.",
+            })
+        return self._claims_from_args(args, chunk_id)
+
+    def _claims_from_args(
+        self, args: dict, chunk_id: str
+    ) -> QuantifiedClaimResult:
+        metric_vocab = load_metric_vocabulary()
+        claims: list[QuantifiedClaim] = []
+        for c in (args.get("claims") or []):
+            metric = (c.get("metric_name") or "").strip()
+            company = (c.get("company_id") or "").strip()
+            if not metric or metric not in metric_vocab or not company:
+                continue
+            try:
+                value = float(c.get("value") or 0)
+            except (TypeError, ValueError):
+                continue
+            claims.append(QuantifiedClaim(
+                company_id=company,
+                metric_name=metric,
+                value=value,
+                unit=(c.get("unit") or "").strip(),
+                period=(c.get("period") or "").strip(),
+                direction=(c.get("direction") or "").strip(),
+                is_guidance=bool(c.get("is_guidance", False)),
+                evidence_chunk_id=chunk_id,
+                confidence=float(c.get("confidence", 0.7) or 0.7),
+                source=self.name,
+            ))
+        return QuantifiedClaimResult(claims=claims)
+
+
+# ---------------------------------------------------------------------------
+# B1 fundamentals reader (reconciliation)
+# ---------------------------------------------------------------------------
+
+# Column names for the B1 discovery fundamentals artifact (shared contract).
+B1_FUNDAMENTALS_COLUMNS = (
+    "company_id", "period_end", "metric_name", "metric_value",
+    "unit", "currency", "filing_date", "available_at", "source", "source_id",
+)
+_B1_ARTIFACT_NAME = "financial_fundamentals_xbrl.parquet"
+
+
+def _load_b1_fundamentals(run_id: str) -> dict[tuple[str, str, str], dict]:
+    """Load B1 XBRL discovery fundamentals keyed by (company_id, period_end, metric_name).
+
+    Returns an empty dict if the B1 artifact does not exist yet (B1 runs in parallel).
+    """
+    artifact = runs.get_run_dir(run_id) / "discovery" / _B1_ARTIFACT_NAME
+    if not artifact.exists():
+        return {}
+    try:
+        rows = pq.read_table(artifact).to_pylist()
+    except Exception:
+        return {}
+    return {
+        (
+            str(r.get("company_id") or ""),
+            str(r.get("period_end") or ""),
+            str(r.get("metric_name") or ""),
+        ): r
+        for r in rows
+        if r.get("company_id") and r.get("period_end") and r.get("metric_name")
+    }
+
+
+# ---------------------------------------------------------------------------
+# Deterministic id helpers for FinancialMetric nodes
+# ---------------------------------------------------------------------------
+
+
+def _stable_metric_id(company_id: str, metric_name: str, period: str, is_guidance: bool) -> str:
+    """Stable id for a FinancialMetric node.
+
+    Different ids for reported vs guidance even on the same (company, metric, period).
+    """
+    basis = f"metric:{company_id.lower()}:{metric_name}:{period.lower()}:{'g' if is_guidance else 'r'}"
+    return f"fm_{_sha256_hex(basis)[:16]}"
+
+
+def _stable_fm_edge_id(company_entity_id: str, metric_id: str, edge_type: str) -> str:
+    basis = f"fm_edge:{company_entity_id}:{metric_id}:{edge_type}"
+    return f"fme_{_sha256_hex(basis)[:16]}"
+
+
+# ---------------------------------------------------------------------------
+# Company-id extraction helper
+# ---------------------------------------------------------------------------
+
+# Map company names from chunk source metadata to canonical company_ids.
+# The chunk's `company_id` field (from source manifest) is the authoritative source.
+_COMPANY_ID_FALLBACK: dict[str, str] = {
+    "acme": "ACME",
+    "acme corp": "ACME",
+    "beta": "BETA",
+    "beta industries": "BETA",
+}
+
+
+def _company_entity_id_from_name(company_id: str) -> str:
+    """Look up or derive the entity_id for a company by company_id / name."""
+    return _stable_entity_id(company_id, "Company")
+
+
+# ---------------------------------------------------------------------------
+# Core: second extraction pass
+# ---------------------------------------------------------------------------
+
+
+def _read_doc_company_index(run_id: str) -> dict[str, str]:
+    """Return {document_id: company_id} from documents.parquet, or empty dict."""
+    artifact = runs.get_run_dir(run_id) / "discovery" / "documents.parquet"
+    if not artifact.exists():
+        return {}
+    try:
+        rows = pq.read_table(artifact).to_pylist()
+    except Exception:
+        return {}
+    return {
+        str(r.get("document_id") or ""): str(r.get("company_id") or "")
+        for r in rows
+        if r.get("document_id")
+    }
+
+
+def run_fact_extraction(
+    run_id: str,
+    fact_extractor: Optional[FactExtractor] = None,
+) -> int:
+    """Extract quantified claims from chunks; write FinancialMetric parquet artifacts.
+
+    Args:
+        run_id: The run to process.  chunks.parquet must already exist.
+        fact_extractor: FactExtractor to use.  Defaults to the env-selected extractor
+            (build_default_fact_extractor).
+
+    Returns:
+        Number of FinancialMetric rows written.
+
+    PIT discipline: only chunks with available_at <= run.as_of are processed.
+
+    Reconciliation: B1 XBRL rows win for as-reported (is_guidance=False) on
+    (company_id, period_end, metric_name).  LLM claims are still kept when
+    is_guidance=True regardless of overlap.
+
+    Contract: every emitted claim MUST carry a non-empty evidence_chunk_id.
+    """
+    if fact_extractor is None:
+        fact_extractor = build_default_fact_extractor()
+
+    manifest = runs.load_manifest(run_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+    as_of_date: str = manifest.as_of_date
+
+    chunks = _read_chunks(run_id)
+    b1_index = _load_b1_fundamentals(run_id)
+
+    # Build document_id -> company_id lookup from documents.parquet (if available).
+    doc_company_index = _read_doc_company_index(run_id)
+
+    created_at = _utc_now_iso()
+    run_dir = runs.get_run_dir(run_id)
+    discovery_dir = run_dir / "discovery"
+
+    # Accumulate claims; key = (company_id, metric_name, period, is_guidance).
+    # Multiple chunks can contribute evidence for the same claim — keep the
+    # highest-confidence one and accumulate chunk_ids.
+    claim_map: dict[
+        tuple[str, str, str, bool],
+        tuple[QuantifiedClaim, list[str]],
+    ] = {}
+
+    for chunk in chunks:
+        chunk_id: str = chunk.get("chunk_id") or ""
+        text: str = chunk.get("text") or ""
+        available_at = _to_date_str(chunk.get("available_at"))
+        # company_id: prefer document-level company_id (via documents.parquet join),
+        # then fall back to chunk-level field if present (for backward compatibility).
+        doc_id: str = str(chunk.get("document_id") or "")
+        chunk_company_id: str = (
+            doc_company_index.get(doc_id)
+            or str(chunk.get("company_id") or "")
+        )
+
+        if not chunk_id or not text:
+            continue
+
+        # PIT filter: skip chunks not yet available as of run date.
+        if available_at and available_at > as_of_date:
+            continue
+
+        result = fact_extractor.extract_facts(chunk_id=chunk_id, chunk_text=text)
+
+        for claim in result.claims:
+            # Safety: every claim must have an evidence chunk id.
+            if not claim.evidence_chunk_id:
+                continue
+
+            # Fill company_id from document metadata when the extractor left it empty.
+            if not claim.company_id:
+                claim = QuantifiedClaim(
+                    company_id=chunk_company_id or claim.company_id,
+                    metric_name=claim.metric_name,
+                    value=claim.value,
+                    unit=claim.unit,
+                    period=claim.period,
+                    direction=claim.direction,
+                    is_guidance=claim.is_guidance,
+                    evidence_chunk_id=claim.evidence_chunk_id,
+                    confidence=claim.confidence,
+                    source=claim.source,
+                )
+
+            if not claim.company_id or not claim.metric_name:
+                continue
+
+            # Validate metric name against vocabulary.
+            if claim.metric_name not in load_metric_vocabulary():
+                continue
+
+            key = (claim.company_id, claim.metric_name, claim.period, claim.is_guidance)
+            if key in claim_map:
+                existing, chunk_ids = claim_map[key]
+                if chunk_id not in chunk_ids:
+                    chunk_ids.append(chunk_id)
+                # Keep highest-confidence claim.
+                if claim.confidence > existing.confidence:
+                    claim_map[key] = (claim, chunk_ids)
+                else:
+                    claim_map[key] = (existing, chunk_ids)
+            else:
+                claim_map[key] = (claim, [chunk_id])
+
+    # Reconciliation: drop as-reported claims when a B1 XBRL row covers the
+    # same (company_id, period_end, metric_name).
+    # `period` from LLM is free-text; we match case-insensitively to period_end.
+    # We keep guidance claims even when XBRL covers the same (company, metric).
+    filtered_claims: list[tuple[QuantifiedClaim, list[str]]] = []
+    for (company_id, metric_name, period, is_guidance), (claim, chunk_ids) in claim_map.items():
+        if not is_guidance:
+            # Check for an XBRL row that covers this (company, period, metric).
+            # period_end in B1 is YYYY-MM-DD; period from LLM is free-text like "Q2 2024".
+            # We do a best-effort match: skip if any B1 row matches on company+metric
+            # and the period string appears in either side.
+            xbrl_key = (company_id, period, metric_name)
+            if xbrl_key in b1_index:
+                # XBRL wins — drop the LLM as-reported claim.
+                continue
+        filtered_claims.append((claim, chunk_ids))
+
+    # Build output rows.
+    metric_rows: list[dict] = []
+    edge_rows: list[dict] = []
+
+    for claim, chunk_ids in filtered_claims:
+        metric_id = _stable_metric_id(
+            claim.company_id, claim.metric_name, claim.period, claim.is_guidance
+        )
+        edge_type = "guides_to" if claim.is_guidance else "reports"
+        company_entity_id = _company_entity_id_from_name(claim.company_id)
+        edge_id = _stable_fm_edge_id(company_entity_id, metric_id, edge_type)
+
+        metric_rows.append({
+            "schema_version": SCHEMA_VERSION,
+            "metric_id": metric_id,
+            "company_id": claim.company_id,
+            "metric_name": claim.metric_name,
+            "value": claim.value,
+            "unit": claim.unit,
+            "period": claim.period,
+            "direction": claim.direction,
+            "is_guidance": claim.is_guidance,
+            "confidence": claim.confidence,
+            "evidence_chunk_id": claim.evidence_chunk_id,
+            "source": claim.source,
+            "created_at": created_at,
+        })
+
+        edge_rows.append({
+            "schema_version": SCHEMA_VERSION,
+            "edge_id": edge_id,
+            "company_entity_id": company_entity_id,
+            "metric_id": metric_id,
+            "edge_type": edge_type,
+            "evidence_chunk_ids": chunk_ids,
+            "confidence": claim.confidence,
+            "created_at": created_at,
+        })
+
+    _write_financial_metrics(metric_rows, discovery_dir / "financial_metrics.parquet")
+    _write_fm_edges(edge_rows, discovery_dir / "financial_metric_edges.parquet")
+
+    return len(metric_rows)
+
+
+def _write_financial_metrics(rows: list[dict], out_path: Path) -> None:
+    """Write financial_metrics.parquet with correct schema."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        field_map: dict[str, pa.DataType] = {
+            "schema_version": pa.string(),
+            "metric_id": pa.string(),
+            "company_id": pa.string(),
+            "metric_name": pa.string(),
+            "value": pa.float64(),
+            "unit": pa.string(),
+            "period": pa.string(),
+            "direction": pa.string(),
+            "is_guidance": pa.bool_(),
+            "confidence": pa.float64(),
+            "evidence_chunk_id": pa.string(),
+            "source": pa.string(),
+            "created_at": pa.string(),
+        }
+        schema = pa.schema([(c, field_map[c]) for c in FINANCIAL_METRICS_COLUMNS])
+        pq.write_table(
+            pa.table({c: pa.array([], type=field_map[c]) for c in FINANCIAL_METRICS_COLUMNS}, schema=schema),
+            out_path,
+        )
+        return
+    pydict: dict[str, list] = {col: [r.get(col) for r in rows] for col in FINANCIAL_METRICS_COLUMNS}
+    pq.write_table(pa.Table.from_pydict(pydict), out_path)
+
+
+def _write_fm_edges(rows: list[dict], out_path: Path) -> None:
+    """Write financial_metric_edges.parquet with correct schema."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        field_map: dict[str, pa.DataType] = {
+            "schema_version": pa.string(),
+            "edge_id": pa.string(),
+            "company_entity_id": pa.string(),
+            "metric_id": pa.string(),
+            "edge_type": pa.string(),
+            "evidence_chunk_ids": pa.list_(pa.string()),
+            "confidence": pa.float64(),
+            "created_at": pa.string(),
+        }
+        schema = pa.schema([(c, field_map[c]) for c in FINANCIAL_METRIC_EDGES_COLUMNS])
+        pq.write_table(
+            pa.table({c: pa.array([], type=field_map[c]) for c in FINANCIAL_METRIC_EDGES_COLUMNS}, schema=schema),
+            out_path,
+        )
+        return
+    pydict: dict[str, list] = {col: [r.get(col) for r in rows] for col in FINANCIAL_METRIC_EDGES_COLUMNS}
+    pq.write_table(pa.Table.from_pydict(pydict), out_path)
+
+
+def build_default_fact_extractor() -> FactExtractor:
+    """Select the fact extractor from environment.
+
+    Uses the LLM extractor when LLM_API_KEY + LLM_BASE_URL + LLM_MODEL_NAME are
+    set and FACT_EXTRACTOR != 'rule_based'; otherwise RuleBasedFactExtractor.
+    """
+    import os as _os  # noqa: PLC0415
+
+    if _os.environ.get("FACT_EXTRACTOR", "").lower() == "rule_based":
+        return RuleBasedFactExtractor()
+    key = _os.environ.get("LLM_API_KEY")
+    base = _os.environ.get("LLM_BASE_URL")
+    model = _os.environ.get("LLM_MODEL_NAME")
+    if key and base and model:
+        return OpenAIFactExtractor(api_key=key, base_url=base, llm_model_name=model)
+    return RuleBasedFactExtractor()

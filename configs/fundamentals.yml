@@ -1,0 +1,15 @@
+# Metric vocabulary — shared contract between B1 (XBRL discovery) and B2 (LLM extraction).
+# metric_name strings here are canonical and must match exactly in both workstreams.
+# Reconciliation key: (company_id, period_end, metric_name).
+# XBRL (B1) values win for as-reported overlaps; LLM (B2) owns guidance / forward-looking.
+version: 1
+
+metrics:
+  - revenue
+  - net_income
+  - eps
+  - gross_margin
+  - operating_margin
+  - ebitda_margin
+  - operating_cash_flow
+  - total_debt
