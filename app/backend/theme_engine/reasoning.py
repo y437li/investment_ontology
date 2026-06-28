@@ -74,20 +74,92 @@ def _load(run_id: str, name: str):
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
-def _relevant_evidence(text: str, source: str, target: str, max_chars: int = 260) -> str:
+def _relevant_evidence(
+    text: str,
+    source: str,
+    target: str,
+    max_chars: int = 260,
+    financial_fact: Optional[dict] = None,
+) -> str:
     """Return the sentence(s) in an evidence chunk that actually mention the related
-    entities, instead of a blind char-window slice — makes the cited evidence specific."""
+    entities, instead of a blind char-window slice — makes the cited evidence specific.
+
+    EG-D: when ``financial_fact`` is provided (a FinancialMetric row from B2),
+    prepend a concise quantified claim so the evidence is never just a vague
+    sentence.  Falls back to the sentence-level snippet when no fact is present
+    (no regression).
+    """
+    # EG-D: build a quantified prefix when we have an extracted fact
+    fact_prefix = ""
+    if financial_fact:
+        parts: list[str] = []
+        metric = financial_fact.get("metric_name") or ""
+        period = financial_fact.get("period") or ""
+        val = financial_fact.get("value")
+        unit = financial_fact.get("unit") or ""
+        direction = financial_fact.get("direction") or ""
+        is_guidance = financial_fact.get("is_guidance") or False
+        if metric:
+            parts.append(metric)
+        if period:
+            parts.append(period)
+        if val is not None:
+            try:
+                fval = float(val)
+                val_str = f"{fval:,.2f}".rstrip("0").rstrip(".")
+            except (TypeError, ValueError):
+                val_str = str(val)
+            if unit:
+                parts.append(f"{val_str} {unit}")
+            else:
+                parts.append(val_str)
+        label = ": ".join(parts[:2]) + (f": {parts[2]}" if len(parts) > 2 else "")
+        qualifiers: list[str] = []
+        if direction:
+            qualifiers.append(direction)
+        qualifiers.append("guidance" if is_guidance else "actual")
+        if qualifiers:
+            label += f" ({', '.join(qualifiers)})"
+        if label:
+            fact_prefix = f"[{label}] "
+
     if not text:
-        return ""
+        return fact_prefix.strip() if fact_prefix else ""
     terms = [t.lower() for t in (source, target) if t and len(t) > 2]
     sents = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
     if not sents:
-        return text[:max_chars]
+        snippet = text[:max_chars]
+        return (fact_prefix + snippet)[:max_chars] if fact_prefix else snippet
     hits = [(sum(1 for t in terms if t in s.lower()), i, s) for i, s in enumerate(sents)]
     hits = [h for h in hits if h[0] > 0]
     hits.sort(key=lambda x: (-x[0], len(x[2]), x[1]))   # most entities, then shortest, then earliest
     chosen = [s for _, _, s in hits[:2]] or [sents[0]]
-    return (" … ".join(chosen))[:max_chars]
+    snippet = (" … ".join(chosen))[:max_chars]
+    if fact_prefix:
+        # Allow a little extra room for the prefix; still cap total length
+        return (fact_prefix + snippet)[: max_chars + len(fact_prefix)]
+    return snippet
+
+
+def _load_fm_by_chunk(run_id: str) -> dict[str, dict]:
+    """Load financial_metrics.parquet and build chunk_id -> best fact index.
+
+    Returns {} if the artifact is not yet present (graceful fallback).
+    When multiple facts share a chunk_id, the highest-confidence one wins.
+    """
+    p = runs.get_run_dir(run_id) / "discovery" / "financial_metrics.parquet"
+    if not p.exists():
+        return {}
+    rows = pq.read_table(p).to_pylist()
+    index: dict[str, dict] = {}
+    for fm in rows:
+        cid = fm.get("evidence_chunk_id") or ""
+        if not cid:
+            continue
+        existing = index.get(cid)
+        if existing is None or float(fm.get("confidence") or 0) > float(existing.get("confidence") or 0):
+            index[cid] = fm
+    return index
 
 
 def gather_dossier(run_id: str, community_id: str) -> dict:
@@ -105,6 +177,9 @@ def gather_dossier(run_id: str, community_id: str) -> dict:
     chunks = {ch["chunk_id"]: ch.get("text", "") for ch in _load(run_id, "chunks.parquet")}
     edge_ids = set(c.get("edge_ids", []))
 
+    # EG-D: load extracted financial facts indexed by chunk_id (graceful — {} if absent)
+    fm_by_chunk = _load_fm_by_chunk(run_id)
+
     relationships: list[dict] = []
     for ed in _load(run_id, "edges.parquet"):
         if ed["edge_id"] not in edge_ids:
@@ -114,7 +189,9 @@ def gather_dossier(run_id: str, community_id: str) -> dict:
         tgt = ent.get(ed["target_entity_id"], ed["target_entity_id"])
         evidence = []
         for cid in ev_ids[:2]:
-            ev = _relevant_evidence(chunks.get(cid, ""), src, tgt)
+            # EG-D: pass extracted fact to _relevant_evidence when available
+            financial_fact = fm_by_chunk.get(cid)
+            ev = _relevant_evidence(chunks.get(cid, ""), src, tgt, financial_fact=financial_fact)
             if ev:
                 evidence.append(ev)
         relationships.append({

@@ -8,6 +8,7 @@ import ThemesView from '../views/ThemesView.vue'
 import ValidationView from '../views/ValidationView.vue'
 import ReportView from '../views/ReportView.vue'
 import InteractionView from '../views/InteractionView.vue'
+import CompanyView from '../views/CompanyView.vue'
 
 const routes = [
   {
@@ -60,6 +61,14 @@ const routes = [
     path: '/runs/:runId/interaction',
     name: 'Interaction',
     component: InteractionView,
+    props: true
+  },
+  {
+    // EG-C: per-company detail page
+    // company_id is the entity id (ent_...) — passed as a route param
+    path: '/runs/:runId/companies/:companyId',
+    name: 'Company',
+    component: CompanyView,
     props: true
   }
 ]

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
+from . import artifacts as artifacts_mod, chunking, company_profile as company_profile_mod, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -521,6 +521,49 @@ def get_company_theme_documents(run_id: str, company_id: str):
     except HTTPException:
         raise
     except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/themes/{run_id}/companies/{company_id}")
+def get_company_detail(run_id: str, company_id: str):
+    """EG-C: Per-company detail page data.
+
+    Returns company profile + B1 as-reported fundamentals (PIT-clean) +
+    B2 LLM financial facts + per-theme exposure list.
+
+    The ``fundamentals`` key always carries an ``available`` boolean so the UI
+    can render an explicit empty state rather than silently blank.
+
+    company_id must be a Company ENTITY id (ent_...) — NOT document.company_id.
+    """
+    try:
+        return company_profile_mod.get_company_profile(run_id, company_id)
+    except HTTPException:
+        raise
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/themes/{run_id}/companies/{company_id}/evidence")
+def get_company_evidence(run_id: str, company_id: str):
+    """EG-C/D: Company-level evidence grouped by theme (E3 grain).
+
+    Returns a list of theme groups — each with the chunk_ids specific to
+    THAT company's exposure to THAT theme.  Evidence from different themes
+    is strictly isolated (no cross-theme bleed).
+
+    EG-D: each chunk carries its extracted FinancialMetric fact (from B2)
+    when one exists, formatted as a concise quantified claim string.
+    When no fact was extracted, the raw text snippet is the fallback.
+
+    Requires company_theme_document_evidence.parquet to exist;
+    call POST /api/provenance/materialize first.
+    """
+    try:
+        return company_profile_mod.get_company_evidence_by_theme(run_id, company_id)
+    except HTTPException:
+        raise
+    except (FileNotFoundError, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
