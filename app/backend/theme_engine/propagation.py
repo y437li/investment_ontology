@@ -47,17 +47,17 @@ field and ``as_of_date`` is known (from the graph dict's top-level field or the
 ``as_of_date`` kwarg), edges with available_at > as_of_date are excluded.  This
 makes the PIT contract testable without double-filtering production graphs.
 
-Known limitation — #110 sign-blind causal / exposure edges
------------------------------------------------------------
-``causes``, ``exposed_to``, and ``sensitive_to`` edges currently have
-base_polarity = +1 unconditionally (ontology.yml has no per-instance direction
-field yet).  FI-B uses whatever polarity is on the edge, so it will auto-improve
-when issue #110 lands and per-instance direction is added.
+#110 (landed) — evidence-backed direction for causal / exposure edges
+----------------------------------------------------------------------
+``causes``, ``exposed_to``, and ``sensitive_to`` edges now carry a per-instance
+``direction`` field in edges.parquet (+1/-1/0) derived from text evidence.
+graph_build.py sets graph-edge ``polarity`` = that direction (0 if unknown).
 
-UNTIL THEN: the sign of causal and exposure paths is provisional (+1 regardless
-of the underlying economic direction).  Only ``hurts`` (-1) and ``benefits``
-(+1) carry meaningful signs today.  Consumers should treat impacts derived
-solely from causes / exposed_to / sensitive_to edges as directionally uncertain.
+Locked design decision: unknown direction -> polarity=0 -> edge is excluded
+from signed propagation.  This replaces the old unconditional +1 and makes
+the propagation honest: only explicitly-evidenced signs reach companies.
+
+FI-B reads whatever polarity is present on the edge and needs no code change.
 """
 
 from __future__ import annotations

@@ -18,14 +18,17 @@ Acceptance criteria (per spec / GitHub #105):
         Same input produces identical output across repeated calls.
   (6) Hermetic — no network, no disk I/O, fixture graphs only.
 
-Known limitation (#110)
------------------------
-``causes``, ``exposed_to``, and ``sensitive_to`` currently have base_polarity
-= +1 unconditionally (no per-instance direction field exists yet).  FI-B uses
-whatever polarity is on the edge and will auto-improve when #110 lands.
-Until then, causal/exposure edge signs are provisional and consumers should
-treat impacts derived solely from those edge types as directionally uncertain.
-See propagation.py module docstring for the full caveat.
+#110 (landed): causes/exposed_to/sensitive_to carry evidence-backed direction
+-------------------------------------------------------------------------------------
+``causes``, ``exposed_to``, and ``sensitive_to`` now carry a per-instance
+``direction`` field extracted from text evidence (+1/-1/0).  graph_build.py
+sets the graph-edge ``polarity`` = that direction (0 if unknown/absent).
+
+Locked design decision: unknown direction -> polarity=0 -> excluded from
+signed propagation.  This replaces the old unconditional +1.
+
+FI-B (propagation.py) reads polarity from graph.json and needs no change.
+TestIssue110SignBlindCaveat is updated to exercise real signed causes edges.
 """
 
 from __future__ import annotations
@@ -640,57 +643,118 @@ class TestEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# #110 sign-blind documentation test
+# #110 signed causal / exposure edges — de-tautologized
 # ---------------------------------------------------------------------------
 
 class TestIssue110SignBlindCaveat:
-    """Document the #110 limitation: causes/exposed_to/sensitive_to are sign-blind.
+    """#110 landed: causes/exposed_to/sensitive_to carry evidence-backed direction.
 
-    These edge types have base_polarity = +1 unconditionally (no per-instance
-    direction field exists yet in edges.parquet / ontology.yml).  FI-B uses
-    whatever polarity is on the edge, so the sign is correct for hurts (-1)
-    and benefits (+1), but provisional for causal/exposure edges.
+    graph_build.py now sets graph-edge polarity = extracted direction field:
+      direction=+1  -> polarity=+1 -> positive propagation signal
+      direction=-1  -> polarity=-1 -> negative propagation signal
+      direction=0   -> polarity=0  -> EXCLUDED from signed propagation (locked design decision)
 
-    This test class serves as living documentation; it asserts observable
-    behaviour today and will need updating when #110 lands.
+    FI-B reads polarity from graph.json and needs no change; these tests
+    verify the post-#110 propagation semantics using realistic polarity values.
+
+    The old tautological tests (bare +1 edges asserting +1 direction) are
+    replaced with tests that exercise ADVERSE and UNKNOWN direction cases.
     """
 
-    def test_causes_edge_treated_as_positive_until_110_lands(self):
-        """causes edge with polarity=+1 propagates as positive (FI-A substrate).
+    def test_causes_adverse_direction_yields_negative_impact(self):
+        """causes edge with direction=-1 (adverse) -> polarity=-1 -> negative company impact.
 
-        NOTE (#110): this polarity is unconditional today.  The economic
-        relationship could be negative (e.g. 'rising rates causes bond pain'),
-        but until per-instance direction is added to the edge, FI-B cannot
-        distinguish.  Callers should document this uncertainty.
+        Scenario: rising interest rates adversely cause credit stress for a bank.
+        graph_build sets polarity=-1 from direction=-1 in edges.parquet.
         """
         g = _graph(
             nodes=[_node("F", "MacroIndicator"), _node("C", "Company")],
             edges=[
-                # polarity=+1 is what graph_build.py will assign for causes today
-                _edge("e_causes", "F", "C", polarity=+1),
+                # polarity=-1 is what graph_build now sets for direction=-1 causes edge
+                _edge("e_causes_adverse", "F", "C", polarity=-1),
             ],
         )
         results = propagate(g, trigger_id="F", shock=+1.0)
-        # Today: direction is +1 (provisional — depends on #110)
-        assert results[0]["direction"] == +1, (
-            "Expected +1 for causes until #110 adds per-instance direction. "
-            "If this assertion fails, #110 may have landed — update this test."
+        assert len(results) == 1
+        assert results[0]["company_id"] == "C"
+        assert results[0]["direction"] == -1, (
+            "An adverse causes edge (direction=-1) must yield negative company impact."
         )
 
-    def test_exposed_to_edge_treated_as_positive_until_110_lands(self):
-        """exposed_to with polarity=+1 propagates as positive (provisional)."""
-        g = _graph(
-            nodes=[_node("F", "MacroIndicator"), _node("C", "Company")],
-            edges=[_edge("e_exposed", "F", "C", polarity=+1)],
-        )
-        results = propagate(g, trigger_id="F", shock=+1.0)
-        assert results[0]["direction"] == +1  # provisional until #110
+    def test_causes_beneficial_direction_yields_positive_impact(self):
+        """causes edge with direction=+1 (beneficial) -> polarity=+1 -> positive impact.
 
-    def test_sensitive_to_edge_treated_as_positive_until_110_lands(self):
-        """sensitive_to with polarity=+1 propagates as positive (provisional)."""
+        Scenario: datacenter buildout causes capex increase which benefits suppliers.
+        """
         g = _graph(
-            nodes=[_node("F", "MacroIndicator"), _node("C", "Company")],
-            edges=[_edge("e_sensitive", "F", "C", polarity=+1)],
+            nodes=[_node("F", "EconomicConcept"), _node("C", "Company")],
+            edges=[
+                _edge("e_causes_beneficial", "F", "C", polarity=+1),
+            ],
         )
         results = propagate(g, trigger_id="F", shock=+1.0)
-        assert results[0]["direction"] == +1  # provisional until #110
+        assert len(results) == 1
+        assert results[0]["direction"] == +1
+
+    def test_causes_unknown_direction_no_propagation(self):
+        """causes edge with direction=0 (unknown) -> polarity=0 -> NO contribution.
+
+        Locked design decision: unknown direction must NOT propagate.
+        An edge with no determinable sign is excluded rather than arbitrarily
+        counted as +1 (which was the pre-#110 sign-blind behaviour).
+        """
+        g = _graph(
+            nodes=[_node("F", "MacroIndicator"), _node("C", "Company")],
+            edges=[
+                # polarity=0 is what graph_build sets for a direction=0/absent causes edge
+                _edge("e_causes_unknown", "F", "C", polarity=0),
+            ],
+        )
+        results = propagate(g, trigger_id="F", shock=+1.0)
+        assert results == [], (
+            "causes edge with unknown direction (polarity=0) must NOT contribute to propagation. "
+            "This is the key locked design decision for #110: unknown -> 0, not +1."
+        )
+
+    def test_exposed_to_adverse_direction_yields_negative(self):
+        """exposed_to edge with direction=-1 -> negative impact on company."""
+        g = _graph(
+            nodes=[_node("F", "Commodity"), _node("C", "Company")],
+            edges=[_edge("e_exposed_adverse", "F", "C", polarity=-1)],
+        )
+        results = propagate(g, trigger_id="F", shock=+1.0)
+        assert len(results) == 1
+        assert results[0]["direction"] == -1
+
+    def test_exposed_to_unknown_direction_no_propagation(self):
+        """exposed_to edge with direction=0 -> polarity=0 -> excluded from signed propagation."""
+        g = _graph(
+            nodes=[_node("F", "Commodity"), _node("C", "Company")],
+            edges=[_edge("e_exposed_unknown", "F", "C", polarity=0)],
+        )
+        results = propagate(g, trigger_id="F", shock=+1.0)
+        assert results == []
+
+    def test_sensitive_to_adverse_direction_yields_negative(self):
+        """sensitive_to edge with direction=-1 -> negative company impact."""
+        g = _graph(
+            nodes=[_node("F", "MacroIndicator"), _node("C", "Company")],
+            edges=[_edge("e_sensitive_adverse", "F", "C", polarity=-1)],
+        )
+        results = propagate(g, trigger_id="F", shock=+1.0)
+        assert len(results) == 1
+        assert results[0]["direction"] == -1
+
+    def test_causes_negative_shock_adverse_edge_yields_positive(self):
+        """negative shock + adverse edge = positive impact (double negative).
+
+        A -1 shock (the factor worsens) via a -1 adversely-causes edge means
+        the adverse pressure lessens -> net positive for the company.
+        """
+        g = _graph(
+            nodes=[_node("F", "MacroIndicator"), _node("C", "Company")],
+            edges=[_edge("e_causes_adverse", "F", "C", polarity=-1)],
+        )
+        results = propagate(g, trigger_id="F", shock=-1.0)
+        assert len(results) == 1
+        assert results[0]["direction"] == +1  # (-1 shock) * (-1 polarity) = +1

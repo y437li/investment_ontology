@@ -75,10 +75,47 @@ STRUCTURAL_EDGE_TYPES: list[str] = registry.structural_edge_types() or _FALLBACK
 
 _MIN_PROPAGATION_WEIGHT: float = 0.01  # clamp floor so weight is always in (0, 1]
 
+# FI-#110: edge types where effective polarity = the extracted per-instance direction field.
+# For these types, base_polarity from ontology is NO LONGER the effective polarity.
+# Locked design decision: unknown direction -> 0 (excluded from signed propagation), NOT +1.
+_DIRECTION_TYPED_EDGES: frozenset = frozenset({"causes", "exposed_to", "sensitive_to"})
+
 
 def _propagation_weight(confidence: float) -> float:
     """Return propagation weight clamped to (0, 1]."""
     return max(float(confidence), _MIN_PROPAGATION_WEIGHT)
+
+
+def _effective_polarity(edge_type: str, raw_direction) -> int:
+    """Return effective graph polarity for an edge.
+
+    FI-A + #110 rule:
+    - causes / exposed_to / sensitive_to: use the extracted per-instance direction
+      field from edges.parquet.  0 if absent/unknown/invalid — these edges are
+      EXCLUDED from signed propagation when direction is unknown (locked design
+      decision: unknown -> 0, NOT +1).
+    - benefits / hurts and other types: use base_polarity from ontology.yml
+      (unchanged behaviour).
+
+    Args:
+        edge_type: The edge's type string.
+        raw_direction: The raw value from edge.get("direction") — may be None,
+            "", int, or string-encoded int.
+
+    Returns:
+        int in {-1, 0, +1}
+    """
+    if edge_type in _DIRECTION_TYPED_EDGES:
+        # Backward compatible: old edges without the column have raw_direction = None / ""
+        if raw_direction is None or raw_direction == "":
+            return 0
+        try:
+            val = int(raw_direction)
+            return val if val in (-1, 0, 1) else 0
+        except (TypeError, ValueError):
+            return 0
+    # benefits / hurts / co_occurs_with / mentioned_in / located_in / …
+    return registry.edge_base_polarity(edge_type)
 
 # Evidence edges (not used for structural clustering)
 EVIDENCE_EDGE_TYPES: list[str] = ["mentioned_in", "co_occurs_with"]
@@ -211,9 +248,12 @@ def build_graph(run_id: str) -> tuple[int, int]:
         # For evidence edges (mentioned_in, co_occurs_with) where one endpoint
         # might be a Document, we still store in graph.json but NOT in community_input.
         #
-        # FI-A: polarity from config (ontology.yml base_polarity); propagation_weight
-        # from confidence.  Neither field touches community_input_edges.
-        polarity: int = registry.edge_base_polarity(edge_type)
+        # FI-A + #110: effective polarity via _effective_polarity():
+        #   causes/exposed_to/sensitive_to -> extracted direction (0 if unknown)
+        #   benefits/hurts -> base_polarity from ontology.yml (unchanged)
+        # Neither field touches community_input_edges.
+        raw_direction = edge.get("direction")
+        polarity: int = _effective_polarity(edge_type, raw_direction)
         prop_weight: float = _propagation_weight(confidence)
 
         all_edges.append(

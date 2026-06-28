@@ -102,7 +102,16 @@ EDGES_COLUMNS: list[str] = [
     "as_of_date",
     "extraction_method",
     "review_status",
+    # #110: evidence-backed direction for causes/exposed_to/sensitive_to.
+    # +1 beneficial/tailwind, -1 adverse/headwind, 0 unknown (default; excluded from signed propagation).
+    # Additive column — backward compatible (old parquet without this column defaults to 0).
+    "direction",
 ]
+
+# Edge types that carry a per-instance direction field (#110).
+# benefits/hurts encode their sign via base_polarity (ontology); these do not.
+# co_occurs_with/mentioned_in/located_in always have polarity 0 and no direction.
+DIRECTION_EDGE_TYPES: frozenset = frozenset({"causes", "exposed_to", "sensitive_to"})
 
 # Section 12 — edge_explanations.parquet
 EDGE_EXPLANATIONS_COLUMNS: list[str] = [
@@ -148,6 +157,49 @@ class EntityCandidate:
     country: Optional[str] = None
 
 
+# ---------------------------------------------------------------------------
+# #110: Direction inference for causes/exposed_to/sensitive_to
+# ---------------------------------------------------------------------------
+
+# Beneficial-relationship signals: language that suggests the relationship
+# is positive / a tailwind for the target entity.
+_DIR_BENEFICIAL_RE: re.Pattern = re.compile(
+    r"\b(positively|beneficial|beneficially|tailwinds?|favorabl(?:e|y)|favourabl(?:e|y)|"
+    r"boost(?:s|ing)?|support(?:s|ing)?|help(?:s|ing)?|upside|strengthen(?:s|ing)?|advantageous)\b",
+    re.IGNORECASE,
+)
+
+# Adverse-relationship signals: language that suggests the relationship
+# is negative / a headwind for the target entity.
+_DIR_ADVERSE_RE: re.Pattern = re.compile(
+    r"\b(adversely|adverse|headwinds?|unfavorabl(?:e|y)|unfavourable|harm(?:s|ful|ing)?|"
+    r"pressure(?:s|d|ing)?|downside|negatively|negative|risk(?:s)?|"
+    r"damage(?:s|d|ing)?|detrimental|hurt(?:s|ing)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _infer_direction(text: str) -> int:
+    """Infer edge direction from text context signals.
+
+    Returns:
+        +1  beneficial / tailwind relationship
+        -1  adverse / headwind relationship
+         0  unknown / ambiguous (default — locked design decision: unknown -> 0, NOT +1)
+
+    Evidence-backed: only returns non-zero when exactly one class of
+    directional signal is unambiguously present.  Both classes present =>
+    ambiguous => 0.  Neither class present => unknown => 0.
+    """
+    has_beneficial = bool(_DIR_BENEFICIAL_RE.search(text))
+    has_adverse = bool(_DIR_ADVERSE_RE.search(text))
+    if has_beneficial and not has_adverse:
+        return 1
+    if has_adverse and not has_beneficial:
+        return -1
+    return 0  # ambiguous or no signal — unknown defaults to 0 per locked design decision
+
+
 @dataclass
 class EdgeCandidate:
     """A candidate relationship extracted from a chunk."""
@@ -158,6 +210,7 @@ class EdgeCandidate:
     confidence: float
     extraction_method: str
     explanation: str
+    direction: int = 0  # #110: +1 beneficial, -1 adverse, 0 unknown. For causes/exposed_to/sensitive_to only.
 
 
 @dataclass
@@ -327,6 +380,8 @@ class RuleBasedExtractor(Extractor):
         if "exposed to" in text_lower or "exposure" in text_lower or "exposed" in text_lower:
             companies = [c for c, et, _ in entities_found if et == "Company"]
             commodities = [c for c, et, _ in entities_found if et in ("Commodity", "EconomicConcept", "MacroIndicator")]
+            # #110: derive direction from text evidence; 0 if ambiguous/absent
+            exposure_direction = _infer_direction(chunk_text)
             for comp in companies:
                 for tgt in commodities:
                     edge_candidates.append(
@@ -337,12 +392,15 @@ class RuleBasedExtractor(Extractor):
                             confidence=0.80,
                             extraction_method="document_stated",
                             explanation=f"Text indicates {comp} is exposed to {tgt}.",
+                            direction=exposure_direction,
                         )
                     )
 
         if "sensitive" in text_lower or "sensitivity" in text_lower:
             companies = [c for c, et, _ in entities_found if et == "Company"]
             macro = [c for c, et, _ in entities_found if et == "MacroIndicator"]
+            # #110: derive direction from text evidence; 0 if ambiguous/absent
+            sensitive_direction = _infer_direction(chunk_text)
             for comp in companies:
                 for tgt in macro:
                     edge_candidates.append(
@@ -353,6 +411,26 @@ class RuleBasedExtractor(Extractor):
                             confidence=0.80,
                             extraction_method="document_stated",
                             explanation=f"Text indicates {comp} is sensitive to {tgt}.",
+                            direction=sensitive_direction,
+                        )
+                    )
+
+        # #110: causes edges from EconomicConcept → Event with evidence-backed direction
+        if "causes" in text_lower or "cause" in text_lower:
+            concepts = [c for c, et, _ in entities_found if et == "EconomicConcept"]
+            events = [c for c, et, _ in entities_found if et == "Event"]
+            causes_direction = _infer_direction(chunk_text)
+            for concept in concepts:
+                for event in events:
+                    edge_candidates.append(
+                        EdgeCandidate(
+                            source_name=concept,
+                            target_name=event,
+                            edge_type="causes",
+                            confidence=0.75,
+                            extraction_method="document_stated",
+                            explanation=f"Text indicates {concept} causes {event}.",
+                            direction=causes_direction,
                         )
                     )
 
@@ -450,6 +528,18 @@ class OpenAIExtractor(Extractor):
                             "confidence": {"type": "number"},
                             "explanation": {"type": "string"},
                             "stated_in_text": {"type": "boolean", "description": "true ONLY if the relationship is explicitly stated in the text; false if inferred"},
+                            "direction": {
+                                "type": "integer",
+                                "enum": [-1, 0, 1],
+                                "description": (
+                                    "#110: evidence-backed direction for causes/exposed_to/sensitive_to. "
+                                    "+1 = beneficial/tailwind (source positively drives target), "
+                                    "-1 = adverse/headwind (source negatively impacts target), "
+                                    "0 = unknown/ambiguous (default; excluded from signed propagation). "
+                                    "Use 0 for benefits/hurts/other types (they carry sign via edge_type). "
+                                    "ONLY assert non-zero when the text explicitly states the direction."
+                                ),
+                            },
                         }, "required": ["source_name", "target_name", "edge_type", "stated_in_text"]}},
                     },
                     "required": ["entities", "edges"],
@@ -531,11 +621,19 @@ class OpenAIExtractor(Extractor):
             if not src or not tgt or etype not in VALID_EDGE_TYPES:
                 continue
             method = "document_stated" if ed.get("stated_in_text") else "llm_inferred"
+            # #110: parse evidence-backed direction; default 0 (unknown) if absent or invalid
+            raw_dir = ed.get("direction", 0)
+            try:
+                dir_val = int(raw_dir) if raw_dir is not None else 0
+                direction = dir_val if dir_val in (-1, 0, 1) else 0
+            except (TypeError, ValueError):
+                direction = 0
             edges.append(EdgeCandidate(
                 source_name=src, target_name=tgt, edge_type=etype,
                 confidence=float(ed.get("confidence", 0.7) or 0.7),
                 extraction_method=method,
                 explanation=ed.get("explanation", ""),
+                direction=direction,
             ))
         return ExtractionResult(entities=entities, edges=edges)
 
@@ -586,14 +684,17 @@ def _write_table(rows: list[dict], columns: list[str], out_path: Path) -> None:
     """Write a contract-conformant parquet file."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
-        # Build typed empty table for list columns
+        # Build typed empty table for list columns and special-typed columns
         field_map: dict[str, pa.DataType] = {}
         list_cols = {"source_chunk_ids", "evidence_chunk_ids"}
+        int_cols = {"direction"}  # #110: direction is an integer (-1, 0, +1)
         for col in columns:
             if col in list_cols:
                 field_map[col] = pa.list_(pa.string())
             elif col == "confidence":
                 field_map[col] = pa.float64()
+            elif col in int_cols:
+                field_map[col] = pa.int8()
             else:
                 field_map[col] = pa.string()
         schema = pa.schema([(c, field_map[c]) for c in columns])
@@ -757,7 +858,7 @@ def _clean_result(result: ExtractionResult) -> ExtractionResult:
         t = canon.get(ed.target_name.strip().lower()) or _COMPANY_ALIASES.get(ed.target_name.strip().lower())
         if not s or not t or s == t:
             continue
-        edges.append(EdgeCandidate(source_name=s, target_name=t, edge_type=ed.edge_type, confidence=ed.confidence, extraction_method=ed.extraction_method, explanation=ed.explanation))
+        edges.append(EdgeCandidate(source_name=s, target_name=t, edge_type=ed.edge_type, confidence=ed.confidence, extraction_method=ed.extraction_method, explanation=ed.explanation, direction=ed.direction))
     return ExtractionResult(entities=ents, edges=edges)
 
 
@@ -945,6 +1046,8 @@ def run_extraction(
                 "as_of_date": as_of_date,
                 "extraction_method": ecand.extraction_method,
                 "review_status": "pending",
+                # #110: evidence-backed direction; 0 = unknown (excluded from signed propagation)
+                "direction": ecand.direction,
             }
         )
 
