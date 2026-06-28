@@ -250,6 +250,67 @@ negative category (proving LM, not Harvard-IV GI).
 
 See `docs/io_contracts.md §S-A` for the full field contract.
 
+## 4d. Management-Sentiment Extraction (Discovery-time, SENT-B, GitHub #100)
+
+**New in SENT-B.** The LLM sentiment pass reads `chunks.parquet` (gating on
+`speaker_role == "management"`) and writes:
+
+```text
+discovery/management_sentiment.parquet  — Sentiment nodes per company/chunk
+discovery/sentiment_edges.parquet       — Company -> Sentiment edges
+```
+
+**management_sentiment.parquet schema:**
+`(schema_version, sentiment_id, company_id, speaker_role, direction,
+confidence_tone, hedging, forward_stance, confidence, evidence_chunk_id,
+lexicon_hits, created_at)`
+
+**sentiment_edges.parquet schema:**
+`(schema_version, edge_id, company_entity_id, sentiment_id, edge_type,
+speaker_role, evidence_chunk_ids, confidence, created_at)`
+
+**Discovery-evidence only.** Sentiment is NOT scored into exposure.
+
+See `docs/io_contracts.md §SENT-B` for the full field contract.
+
+## 4e. Sentiment Fusion (Discovery-time, SENT-C, GitHub #101)
+
+**New in SENT-C.** The fusion layer reconciles SENT-A (lexicon tone vector) with
+SENT-B (LLM judgment) per `(company_id, evidence_chunk_id)` and writes:
+
+```text
+discovery/management_sentiment_fused.parquet  — fused record per company/chunk
+```
+
+**management_sentiment_fused.parquet schema:**
+`(schema_version, fusion_id, sentiment_id, company_id, speaker_role,
+direction, confidence_tone, hedging, forward_stance, evidence_chunk_id,
+lexicon_hits, tone_positive, tone_negative, tone_uncertainty, tone_litigious,
+tone_strong_modal, tone_weak_modal, lm_direction, fused_tone, agreement,
+fused_confidence, available_at, created_at)`
+
+**Fusion key columns:**
+
+```text
+lm_direction:      string  — positive | negative | uncertainty | neutral
+                             (derived from SENT-A tone vector)
+fused_tone:        string  — positive | neutral | negative | hedged
+                             (headline reconciled signal)
+agreement:         string  — agree | hedged | conflict
+                             (first-class management-hedging signal)
+fused_confidence:  float   — original confidence × discount factor:
+                             agree=1.0, hedged=0.75, conflict=0.50
+```
+
+**Management-hedging pattern:** When the LLM says "positive" but the text is
+uncertainty-dense (uncertainty LM score dominates), `agreement=hedged` is set and
+confidence is reduced.  Disagreement is a first-class signal, not noise.
+
+**Discovery-evidence only.** This artifact MUST NOT be read by exposure.py.
+It is a one-way input to forward-inference stages.
+
+See `docs/io_contracts.md §SENT-C` for the full field contract and fusion rules.
+
 ## 4b. LLM Quantified-Fact Extraction (Discovery-time, EG-B2)
 
 The LLM fact-extraction pass (`run_fact_extraction`) reads `chunks.parquet` and

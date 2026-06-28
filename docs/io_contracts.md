@@ -1461,6 +1461,136 @@ Acceptance criteria (all covered by tests):
 
 ---
 
+## SENT-C: Sentiment Fusion Artifact (Workstream S-C, GitHub #101)
+
+### S-C.1 `management_sentiment_fused.parquet`
+
+**New in SENT-C.** One fused record per `(company_id, evidence_chunk_id)` that
+reconciles the SENT-A lexicon tone vector with the SENT-B LLM judgment.  The
+result is a headline `fused_tone` and an `agreement` flag that surface the
+"management hedging" signal directly.
+
+**Decision:** sibling artifact (not an augmentation of management_sentiment.parquet).
+This avoids mutating SENT-B's output and keeps the two upstream artifacts independent.
+
+**Discovery-evidence only:** This artifact MUST NOT be read by exposure.py or any
+scoring stage.  It is a one-way input to forward-inference stages only.
+
+Path: `data/runs/<run_id>/discovery/management_sentiment_fused.parquet`
+
+Required columns:
+
+```text
+schema_version:    string  — "1.0"
+fusion_id:         string  — stable id: fusion_<sha256[:16]> of (company_id, evidence_chunk_id)
+sentiment_id:      string  — references management_sentiment.parquet
+company_id:        string  — canonical company identifier
+speaker_role:      string  — always "management" for SENT-C input
+direction:         string  — LLM direction from SENT-B: positive | negative | neutral | mixed
+confidence_tone:   string  — LLM assertiveness: high | moderate | low
+hedging:           bool    — LLM hedge flag from SENT-B
+forward_stance:    string  — LLM stance: optimistic | cautious | neutral | negative
+evidence_chunk_id: string  — REQUIRED: source chunk_id (resolves via source.py chain)
+lexicon_hits:      string  — JSON: matched words per LM category (from SENT-B)
+tone_positive:     float   — SENT-A token-normalised positive score
+tone_negative:     float   — SENT-A token-normalised negative score
+tone_uncertainty:  float   — SENT-A token-normalised uncertainty score
+tone_litigious:    float   — SENT-A token-normalised litigious score
+tone_strong_modal: float   — SENT-A token-normalised strong_modal score
+tone_weak_modal:   float   — SENT-A token-normalised weak_modal score
+lm_direction:      string  — derived LM direction: positive | negative | uncertainty | neutral
+fused_tone:        string  — reconciled: positive | neutral | negative | hedged
+agreement:         string  — agree | hedged | conflict
+fused_confidence:  float   — LLM confidence after downgrade (×0.75 hedged, ×0.50 conflict)
+available_at:      string  — YYYY-MM-DD from chunk_tone PIT gate (empty if SENT-A absent)
+created_at:        string  — ISO UTC timestamp
+```
+
+Rules:
+
+- `fusion_id` is stable: same `(company_id, evidence_chunk_id)` always yields the same id.
+- `evidence_chunk_id` MUST be non-empty (same discipline as SENT-B).
+- PIT gate: only rows whose chunk_tone `available_at <= run.as_of_date` are emitted.
+- Fusion degrades gracefully when SENT-A is absent: tone scores default to 0.0,
+  `lm_direction = "neutral"`, `available_at = ""`.
+
+### S-C.2 Fusion Rules
+
+**LM direction derivation:**
+
+```text
+if tone_uncertainty > max(tone_positive, tone_negative) and > TONE_MIN_THRESHOLD (0.005):
+    lm_direction = "uncertainty"
+elif tone_positive > tone_negative and > TONE_MIN_THRESHOLD:
+    lm_direction = "positive"
+elif tone_negative > 0 and > TONE_MIN_THRESHOLD:
+    lm_direction = "negative"
+else:
+    lm_direction = "neutral"
+```
+
+**Agreement classification:**
+
+```text
+llm_direction=positive + lm_direction=positive          → agree,   fused_tone=positive
+llm_direction=positive + lm_direction=uncertainty       → hedged,  fused_tone=hedged
+llm_direction=positive + lm_direction=neutral           → hedged,  fused_tone=hedged
+llm_direction=positive + lm_direction=negative          → conflict, fused_tone=negative
+llm_direction=negative + lm_direction=negative          → agree,   fused_tone=negative
+llm_direction=negative + lm_direction=uncertainty       → agree,   fused_tone=negative
+llm_direction=negative + lm_direction=neutral           → hedged,  fused_tone=hedged
+llm_direction=negative + lm_direction=positive          → conflict, fused_tone=negative
+llm_direction=neutral  + lm_direction=neutral           → agree,   fused_tone=neutral
+llm_direction=neutral  + lm_direction=anything_else     → hedged,  fused_tone=hedged
+llm_direction=mixed    (any lm_direction)               → hedged,  fused_tone=hedged
+```
+
+Disagreement is a first-class signal (management hedging), not noise to average away.
+
+**Confidence downgrade:**
+
+```text
+agree:   fused_confidence = original_confidence  (no discount)
+hedged:  fused_confidence = original_confidence × 0.75
+conflict: fused_confidence = original_confidence × 0.50
+```
+
+### S-C.3 Fusion Module
+
+Python module: `app/backend/theme_engine/sentiment_fusion.py`
+
+Public API:
+
+```python
+# Constants
+MANAGEMENT_SENTIMENT_FUSED_COLUMNS   — list[str] column contract
+HEDGED_DISCOUNT    = 0.75
+CONFLICT_DISCOUNT  = 0.50
+TONE_MIN_THRESHOLD = 0.005
+
+# Pure functions (no I/O — useful for unit tests)
+derive_lm_direction(tone_positive, tone_negative, tone_uncertainty) -> str
+classify_agreement(llm_direction, lm_direction, tone_uncertainty) -> str
+derive_fused_tone(agreement, llm_direction) -> str
+apply_confidence_discount(confidence, agreement) -> float
+fuse_records(sentiment_row, tone_row, as_of_date) -> dict | None
+
+# Pipeline entry point (reads artifacts, writes fused artifact)
+run_sentiment_fusion(run_id) -> int   # returns number of fused rows written
+```
+
+Acceptance criteria (covered by tests in `tests/test_sentiment_fusion.py`):
+
+- LLM positive + LM uncertainty-dense → agreement=hedged, confidence reduced by ×0.75.
+- LLM positive + LM positive-dense → agreement=agree, no confidence discount.
+- LLM positive + LM negative-dense → agreement=conflict, fused_tone=negative, confidence ×0.50.
+- PIT gate: chunk with available_at > as_of_date is dropped from output.
+- Evidence discipline: row with empty evidence_chunk_id is dropped.
+- Column contract: output matches MANAGEMENT_SENTIMENT_FUSED_COLUMNS exactly.
+- NOT in exposure.py: grep-proven (test_fused_artifact_not_in_exposure).
+
+---
+
 ## EG-E Provenance Artifacts (Workstream E)
 
 These three artifacts eliminate multi-hop graph walks for provenance questions.
