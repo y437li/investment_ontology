@@ -130,11 +130,12 @@ Each child run remains a single-as_of run and may reuse run-level frozen artifac
 | Import Raw Documents | raw files, `source_manifest.csv` | `discovery/raw_documents.parquet` |
 | Clean Documents | `discovery/raw_documents.parquet` | `discovery/documents.parquet`, `discovery/document_cleaning_log.parquet` |
 | Chunk Documents | `discovery/documents.parquet` | `discovery/chunks.parquet` |
-| Extract Entities | `discovery/chunks.parquet` | `discovery/entities.parquet`, `discovery/entity_aliases.parquet`, `discovery/entity_aliases_global.parquet` (optional) |
+| Extract Entities | `discovery/chunks.parquet` | `discovery/entities.parquet`, `discovery/entity_aliases.parquet`, `discovery/entity_aliases_global.parquet` (optional), `discovery/entity_chunk_provenance.parquet` (E1) |
 | Extract Edges | `discovery/chunks.parquet`, `discovery/entities.parquet` | `discovery/edges.parquet`, `discovery/edge_explanations.parquet` |
 | Build Graph | `discovery/entities.parquet`, `discovery/edges.parquet` | `discovery/graph.json` |
 | Discover Themes | `discovery/graph.json` | `discovery/communities.json`, `discovery/theme_snapshots.json`, `discovery/theme_lineage.json`, `discovery/theme_metrics.parquet` |
 | Compute Exposure | `discovery/communities.json`, `discovery/graph.json`, `discovery/entities.parquet`, `discovery/edges.parquet` | `discovery/company_theme_exposure.parquet` |
+| Materialize Provenance (EG-E) | `discovery/communities.json`, `discovery/theme_snapshots.json`, `discovery/edges.parquet`, `discovery/chunks.parquet`, `discovery/company_theme_exposure.parquet` | `discovery/theme_document_evidence.parquet` (E2), `discovery/company_theme_document_evidence.parquet` (E3) |
 | Freeze Discovery | all discovery artifacts | updated `run_manifest.json` |
 | Load Market Data | market files or adapter output | `validation/market_prices.parquet` |
 | Load Fundamentals | fundamentals files or adapter output | `validation/fundamentals.parquet` |
@@ -1069,3 +1070,166 @@ Config values used:
 Tests or checks run:
 Known caveats:
 ```
+
+---
+
+## EG-E Provenance Artifacts (Workstream E)
+
+These three artifacts eliminate multi-hop graph walks for provenance questions.
+They are written by the Extract Entities stage (E1) and the Materialize Provenance
+stage (E2, E3).
+
+### E1. `entity_chunk_provenance.parquet`
+
+One row per (entity_id, chunk_id) occurrence, preserving the originating document
+and its subject company.
+
+Required columns:
+
+```text
+schema_version: string
+entity_id: string        — references entities.parquet
+chunk_id: string         — references chunks.parquet
+document_id: string      — originating document (references documents.parquet)
+company_id: string | null — document.company_id (subject of the document), NOT the
+                            extracted entity's own id. Nullable when document has no
+                            company_id (e.g. macro/news articles).
+available_at: string     — inherited from chunk (YYYY-MM-DD); always <= as_of_date
+```
+
+Rules:
+
+- Written by `extraction.run_extraction` alongside entities.parquet.
+- One row per entity per chunk (already deduplicated against entity_map).
+- `company_id` is the DOCUMENT's subject company (documents.company_id), NOT the
+  entity's own identity. A news article about CompanyX that mentions CompanyY has
+  company_id=CompanyX for all entities extracted from it (including CompanyY).
+- PIT-clean: all chunks already satisfy available_at <= as_of_date by the time
+  extraction runs.
+
+### E2. `theme_document_evidence.parquet`
+
+One row per community (theme). Enables one-read lookup of a theme's source documents
+without any client-side graph walk.
+
+Required columns:
+
+```text
+schema_version: string
+as_of_date: string       — run's as_of_date
+community_id: string     — references communities.json
+theme_snapshot_id: string — references theme_snapshots.json
+chunk_ids: list[string]  — sorted, deduped chunk ids from all edges touching this community
+document_ids: list[string] — deduped document ids resolved from chunk_ids
+```
+
+Rules:
+
+- Written by `POST /api/provenance/materialize` after themes are discovered.
+- chunk_ids includes evidence from ALL structural edges where at least one endpoint
+  is in the community's node_ids (intra-community AND cross-community edges).
+- document_ids are resolved by joining chunk_ids against chunks.parquet.document_id.
+- PIT-clean: only edges with first_seen_at <= as_of_date contribute.
+- One row per community_id; community_ids match communities.json exactly.
+
+### E3. `company_theme_document_evidence.parquet`
+
+One row per (company_id, theme_snapshot_id, community_id). Enables per-theme document
+lookup for a company without a graph walk. Evidence groups are DISTINCT per theme.
+
+Required columns:
+
+```text
+schema_version: string
+as_of_date: string       — run's as_of_date
+company_id: string       — Company ENTITY id from entities.parquet (entity_type=Company).
+                           NOT document.company_id.
+theme_snapshot_id: string — references theme_snapshots.json
+community_id: string      — references communities.json
+chunk_ids: list[string]   — company-specific top evidence chunk ids from exposure.parquet
+document_ids: list[string] — deduped document ids resolved from chunk_ids
+```
+
+Rules:
+
+- Written by `POST /api/provenance/materialize` after exposure is computed.
+- company_id is the Company entity_id from company_theme_exposure.parquet.company_id —
+  NEVER document.company_id. A document about CompanyX that mentions CompanyY only
+  appears in CompanyY's evidence group (not CompanyX's), because attribution follows
+  the structural edges where CompanyY is a node.
+- chunk_ids are sourced from company_theme_exposure.parquet.top_evidence_chunk_ids
+  per (company_id, theme_snapshot_id, community_id) row. These are already PIT-gated
+  by the exposure computation.
+- Evidence groups never bleed across themes: a company spanning N themes produces
+  N rows with disjoint evidence sets (per the underlying exposure rows).
+- document_ids are resolved by joining chunk_ids against chunks.parquet.document_id.
+
+### New API Endpoints (EG-E)
+
+#### `POST /api/provenance/materialize`
+
+Input:
+
+```json
+{"run_id": "run_20240630_120000"}
+```
+
+Output:
+
+```json
+{
+  "success": true,
+  "run_id": "run_20240630_120000",
+  "artifacts": [
+    "discovery/theme_document_evidence.parquet",
+    "discovery/company_theme_document_evidence.parquet"
+  ],
+  "theme_rows": 12,
+  "company_theme_rows": 96
+}
+```
+
+Preconditions: communities.json, theme_snapshots.json, edges.parquet, chunks.parquet,
+and company_theme_exposure.parquet must exist (i.e. run after exposure/compute).
+
+#### `GET /api/themes/{run_id}/communities/{community_id}/documents`
+
+Returns E2 provenance record for a community (one read, no graph walk):
+
+```json
+{
+  "community_id": "community_017",
+  "theme_snapshot_id": "theme_20240630_017",
+  "as_of_date": "2024-06-30",
+  "chunk_ids": ["chunk_001", "chunk_002"],
+  "document_ids": ["doc_001"]
+}
+```
+
+#### `GET /api/themes/{run_id}/companies/{company_id}/documents`
+
+Returns E3 provenance records for all themes a company is exposed to (list):
+
+```json
+[
+  {
+    "company_id": "ent_abc123",
+    "theme_snapshot_id": "theme_20240630_017",
+    "community_id": "community_017",
+    "as_of_date": "2024-06-30",
+    "chunk_ids": ["chunk_001"],
+    "document_ids": ["doc_001"]
+  },
+  {
+    "company_id": "ent_abc123",
+    "theme_snapshot_id": "theme_20240630_025",
+    "community_id": "community_025",
+    "as_of_date": "2024-06-30",
+    "chunk_ids": ["chunk_007"],
+    "document_ids": ["doc_003"]
+  }
+]
+```
+
+`company_id` must be a Company entity_id (ent_...). Each item is a distinct
+theme evidence group; there is no cross-theme bleed.
