@@ -140,7 +140,12 @@ def gather_dossier(run_id: str, community_id: str) -> dict:
 
 
 def _default_client_model():
-    from openai import OpenAI  # noqa: PLC0415
+    try:
+        from openai import OpenAI  # noqa: PLC0415
+    except ImportError as exc:
+        # Treat missing openai package the same as missing env vars so the
+        # endpoint handler can return 503 rather than 500.
+        raise KeyError("openai package not installed") from exc
     client = OpenAI(api_key=os.environ["LLM_API_KEY"], base_url=os.environ["LLM_BASE_URL"])
     return client, os.environ["LLM_MODEL_NAME"]
 

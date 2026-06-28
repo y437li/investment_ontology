@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import html
 import html.parser
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,20 @@ from . import runs
 SCHEMA_VERSION = "1.0"
 CLEANING_VERSION = "clean_v1"
 CLEANING_AGENT = "data_cleaning_agent"
+
+# Structured-block marker format embedded in cleaned text (survives whitespace
+# normalization because markers are placed on their own lines).
+# The chunker reads these markers to produce typed chunks.
+# IMPORTANT: markers must NOT use '<' or '>' so they don't trigger the existing
+# HTML-tag check (_TAG_RE = re.compile(r"<[^>]+>")).  Triple-bracket format
+# ([[[...]]] ) is used instead — never found in real financial filings.
+TABLE_MARKER_PREFIX = "[[[TABLE_DATA:"
+TABLE_MARKER_SUFFIX = "]]]"
+SECTION_MARKER_PREFIX = "[[[SECTION_TITLE:"
+SECTION_MARKER_SUFFIX = "]]]"
+
+RULE_TABLE_EXTRACT = "table_extract_v1"
+RULE_ASCII_TABLE_EXTRACT = "ascii_table_extract_v1"
 
 # io_contracts.md section 6: documents.parquet
 DOCUMENTS_COLUMNS: list[str] = [
@@ -161,21 +176,139 @@ class _TextExtractor(html.parser.HTMLParser):
         return "".join(self._parts)
 
 
+class _StructuredTextExtractor(html.parser.HTMLParser):
+    """Structure-preserving HTML parser.
+
+    Extends the basic text extractor with two capabilities:
+    1. Tables: ``<table>`` elements are extracted as a normalized cell grid
+       and emitted as ``[[[TABLE_DATA:{json}]]]`` markers on their own lines.
+       The grid is ``{"rows": [["cell", ...], ...]}`` — rows × cells, all
+       cell text preserved.  Nested tables use the outermost row set.
+    2. Headings: ``<h1>``–``<h6>`` tag content is emitted as
+       ``[[[SECTION_TITLE:text]]]`` markers so the chunker can track section
+       boundaries without the original tags.
+
+    Both markers survive the downstream whitespace-normalization steps because
+    they are placed on their own lines and contain no page-number–like patterns.
+    Deterministic: same HTML input → same marker sequence.
+    """
+
+    _SKIP_TAGS = frozenset(("script", "style"))
+    _HEADING_TAGS = frozenset(("h1", "h2", "h3", "h4", "h5", "h6"))
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._skip_depth: int = 0
+        # Table tracking (supports single-level nesting: we only capture the
+        # outermost <table> so nested layout tables don't produce spurious grids).
+        self._table_depth: int = 0
+        self._table_rows: list[list[str]] = []
+        self._current_row: list[str] | None = None
+        self._current_cell: list[str] = []
+        self._in_cell: bool = False
+        # Heading tracking
+        self._in_heading: bool = False
+        self._heading_parts: list[str] = []
+
+    # ------------------------------------------------------------------ tags
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        t = tag.lower()
+        if t in self._SKIP_TAGS:
+            self._skip_depth += 1
+            return
+        if self._skip_depth > 0:
+            return
+        if t == "table":
+            self._table_depth += 1
+            if self._table_depth == 1:
+                self._table_rows = []
+                self._current_row = None
+        elif t == "tr" and self._table_depth > 0:
+            self._current_row = []
+        elif t in ("td", "th") and self._table_depth > 0:
+            self._in_cell = True
+            self._current_cell = []
+        elif t in self._HEADING_TAGS and self._table_depth == 0:
+            self._in_heading = True
+            self._heading_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        t = tag.lower()
+        if t in self._SKIP_TAGS:
+            if self._skip_depth > 0:
+                self._skip_depth -= 1
+            return
+        if self._skip_depth > 0:
+            return
+        if t == "table" and self._table_depth > 0:
+            self._table_depth -= 1
+            if self._table_depth == 0:
+                rows = [
+                    [c.strip() for c in row]
+                    for row in self._table_rows
+                    if any(c.strip() for c in row)
+                ]
+                if rows:
+                    marker = (
+                        f"\n{TABLE_MARKER_PREFIX}"
+                        f"{json.dumps({'rows': rows}, ensure_ascii=False)}"
+                        f"{TABLE_MARKER_SUFFIX}\n"
+                    )
+                    self._parts.append(marker)
+                self._table_rows = []
+                self._current_row = None
+                self._in_cell = False
+                self._current_cell = []
+        elif t == "tr" and self._table_depth > 0:
+            if self._current_row is not None:
+                self._table_rows.append(self._current_row)
+            self._current_row = None
+        elif t in ("td", "th") and self._table_depth > 0 and self._in_cell:
+            cell_text = "".join(self._current_cell).strip()
+            if self._current_row is not None:
+                self._current_row.append(cell_text)
+            self._current_cell = []
+            self._in_cell = False
+        elif t in self._HEADING_TAGS and self._in_heading:
+            heading_text = "".join(self._heading_parts).strip()
+            if heading_text:
+                marker = (
+                    f"\n{SECTION_MARKER_PREFIX}{heading_text}{SECTION_MARKER_SUFFIX}\n"
+                )
+                self._parts.append(marker)
+            self._in_heading = False
+            self._heading_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth > 0:
+            return
+        if self._in_heading:
+            self._heading_parts.append(data)
+        elif self._in_cell and self._table_depth > 0:
+            self._current_cell.append(data)
+        elif self._table_depth == 0:
+            self._parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self._parts)
+
+
 def _extract_html_text(raw_text: str) -> str:
     """Extract readable plain text from an HTML/SGML document.
 
     Steps (all deterministic, meaning-preserving):
     1. Strip EDGAR SGML wrapper lines (<DOCUMENT>, <TYPE>, <SEQUENCE> etc.)
        that sit outside any HTML block.
-    2. Feed the remaining content through a stdlib HTML parser that collects
-       visible text while skipping <script>/<style> blocks.
+    2. Feed the remaining content through a structure-preserving HTML parser
+       that collects visible text while skipping <script>/<style> blocks,
+       emitting ``[[[TABLE_DATA:{json}]]]`` markers for tables and
+       ``[[[SECTION_TITLE:text]]]`` markers for heading tags.
     3. Decode any residual HTML entities (html.unescape).
-    4. Collapse runs of whitespace and blank lines.
+    4. Collapse runs of whitespace and blank lines (markers are on their own
+       lines and are not affected by whitespace normalization).
     """
     # --- Step 1: strip EDGAR SGML wrapper lines --------------------------
-    # EDGAR wraps HTML filings in an outer SGML envelope.  Lines that are
-    # purely SGML wrapper tags are removed; everything else is kept verbatim
-    # so the HTML parser can see the real markup.
     stripped_lines: list[str] = []
     for line in raw_text.split("\n"):
         stripped = line.strip()
@@ -184,10 +317,8 @@ def _extract_html_text(raw_text: str) -> str:
         stripped_lines.append(line)
     sgml_stripped = "\n".join(stripped_lines)
 
-    # --- Step 2: parse HTML and collect visible text ----------------------
-    parser = _TextExtractor()
-    # Feed the content; errors in malformed HTML are tolerated (HTMLParser
-    # is lenient by default).
+    # --- Step 2: parse HTML and collect visible text + structure markers --
+    parser = _StructuredTextExtractor()
     try:
         parser.feed(sgml_stripped)
     except Exception:
@@ -198,26 +329,131 @@ def _extract_html_text(raw_text: str) -> str:
     extracted = parser.get_text()
 
     # --- Step 3: decode residual HTML entities ----------------------------
+    # Markers use only ASCII punctuation, so unescape is safe to apply here.
     extracted = html.unescape(extracted)
 
     # --- Step 4: collapse whitespace / blank lines -----------------------
-    # Replace non-newline whitespace runs with a single space, then
-    # collapse 2+ consecutive blank lines to one.
-    lines = extracted.split("\n")
-    normalised: list[str] = []
-    for line in lines:
-        normalised.append(re.sub(r"[ \t]+", " ", line).strip())
-    out: list[str] = []
-    blank_run = 0
-    for line in normalised:
-        if line == "":
-            blank_run += 1
-            if blank_run <= 1:
-                out.append(line)
+    # We must NOT collapse whitespace INSIDE table/section markers.
+    # Strategy: split on markers, normalise each inter-marker segment, then
+    # reassemble.
+    extracted = _normalise_preserving_markers(extracted)
+    return extracted
+
+
+# Regex that splits text on the structured-block markers without consuming them.
+# Markers use '[[[' and ']]]' (literal triple brackets, escaped in regex).
+_MARKER_SPLIT_RE = re.compile(
+    r"(\[\[\[TABLE_DATA:.*?\]\]\]|\[\[\[SECTION_TITLE:.*?\]\]\])",
+    re.DOTALL,
+)
+
+
+def _normalise_preserving_markers(text: str) -> str:
+    """Collapse whitespace in prose segments while leaving markers verbatim."""
+    segments = _MARKER_SPLIT_RE.split(text)
+    result_parts: list[str] = []
+    for seg in segments:
+        if seg.startswith(TABLE_MARKER_PREFIX) or seg.startswith(SECTION_MARKER_PREFIX):
+            # Keep the marker exactly as-is (on its own line).
+            result_parts.append(seg)
         else:
+            # Normal prose: collapse whitespace.
+            lines = seg.split("\n")
+            normalised: list[str] = []
+            for line in lines:
+                normalised.append(re.sub(r"[ \t]+", " ", line).strip())
+            out: list[str] = []
             blank_run = 0
-            out.append(line)
-    return "\n".join(out).strip("\n")
+            for line in normalised:
+                if line == "":
+                    blank_run += 1
+                    if blank_run <= 1:
+                        out.append(line)
+                else:
+                    blank_run = 0
+                    out.append(line)
+            result_parts.append("\n".join(out))
+    return "\n".join(result_parts).strip("\n")
+
+
+# ---------------------------------------------------------------------------
+# ASCII / aligned-column table detection for plain-text documents
+# ---------------------------------------------------------------------------
+
+# Minimum columns and rows to consider a block an ASCII table.
+_ASCII_TABLE_MIN_COLS = 2
+_ASCII_TABLE_MIN_ROWS = 2
+
+# A pipe-table row: the line contains at least 2 '|' characters (= at least 2
+# separators, i.e. 3+ possible cells) but does NOT start with '[[[' (which
+# would indicate a structured marker).  Handles both bordered ( | a | b | )
+# and un-bordered ( a | b | c ) styles.
+_PIPE_ROW_RE = re.compile(r"^(?!\[\[\[)[^|]*\|[^|]*\|")
+# A separator row composed only of dashes, colons, pipes, and whitespace —
+# used in Markdown-style tables (|---|---|).  These rows are skipped when
+# collecting data cells.
+_PIPE_SEP_ROW_RE = re.compile(r"^\s*[\|:]+[-:|\s]+[\|:]+\s*$")
+
+
+def _parse_pipe_table_cells(line: str) -> list[str]:
+    """Split a pipe-delimited row into cell strings.
+
+    Handles both bordered ( | cell | cell | ) and un-bordered ( cell | cell )
+    styles by stripping optional leading/trailing pipe characters.
+    """
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [c.strip() for c in stripped.split("|")]
+
+
+def _mark_ascii_tables(text: str) -> tuple[str, int]:
+    """Detect pipe-delimited ASCII tables in plain text and replace each
+    contiguous block with a ``<<<TABLE_DATA:{json}>>>`` marker.
+
+    Returns the transformed text and the number of tables detected.
+    """
+    lines = text.split("\n")
+    result: list[str] = []
+    i = 0
+    tables_found = 0
+
+    while i < len(lines):
+        line = lines[i]
+        if _PIPE_ROW_RE.match(line) and not _PIPE_SEP_ROW_RE.match(line):
+            # Start of a potential pipe table.
+            block_lines: list[str] = []
+            j = i
+            while j < len(lines) and (
+                _PIPE_ROW_RE.match(lines[j]) or _PIPE_SEP_ROW_RE.match(lines[j])
+            ):
+                block_lines.append(lines[j])
+                j += 1
+            # Only treat as a table if we have enough rows and columns.
+            data_rows = [
+                _parse_pipe_table_cells(bl)
+                for bl in block_lines
+                if not _PIPE_SEP_ROW_RE.match(bl)
+            ]
+            if (
+                len(data_rows) >= _ASCII_TABLE_MIN_ROWS
+                and all(len(r) >= _ASCII_TABLE_MIN_COLS for r in data_rows)
+            ):
+                marker = (
+                    f"\n{TABLE_MARKER_PREFIX}"
+                    f"{json.dumps({'rows': data_rows}, ensure_ascii=False)}"
+                    f"{TABLE_MARKER_SUFFIX}\n"
+                )
+                result.append(marker)
+                tables_found += 1
+                i = j
+                continue
+        result.append(line)
+        i += 1
+
+    return "\n".join(result), tables_found
 
 
 def _sha256_text(text: str) -> str:
@@ -308,11 +544,19 @@ def _strip_repeated_headers(text: str) -> tuple[str, int]:
 
 def _clean_text(raw_text: str, raw_path: str = "") -> tuple[str, list[dict]]:
     """Apply deterministic cleaning steps, returning the cleaned text and a
-    list of per-step action descriptors for the cleaning log."""
+    list of per-step action descriptors for the cleaning log.
+
+    Structure-preserving additions (EG-A):
+    - HTML/SGML input: ``<table>`` → ``[[[TABLE_DATA:{json}]]]`` markers;
+      ``<h1>``–``<h6>`` → ``[[[SECTION_TITLE:text]]]`` markers.
+    - Plain-text input: pipe-delimited ASCII tables → same ``TABLE_DATA``
+      markers so the chunker can produce typed table chunks.
+    """
     actions: list[dict] = []
+    is_html = _is_html_sgml(raw_text, raw_path)
 
     # --- Pre-step: HTML/SGML extraction (runs before normalization) -------
-    if _is_html_sgml(raw_text, raw_path):
+    if is_html:
         extracted = _extract_html_text(raw_text)
         actions.append(
             {
@@ -337,6 +581,8 @@ def _clean_text(raw_text: str, raw_path: str = "") -> tuple[str, list[dict]]:
     )
 
     before = step_text
+    # For non-HTML content, normalise whitespace before ASCII-table detection
+    # so the detector sees clean column separators.
     step_text = _normalize_whitespace(step_text)
     actions.append(
         {
@@ -347,6 +593,21 @@ def _clean_text(raw_text: str, raw_path: str = "") -> tuple[str, list[dict]]:
             "after": step_text,
         }
     )
+
+    # --- ASCII table detection (plain-text only; HTML tables already handled)
+    if not is_html:
+        before = step_text
+        step_text, n_ascii_tables = _mark_ascii_tables(step_text)
+        if n_ascii_tables:
+            actions.append(
+                {
+                    "cleaning_step": "ascii_table_extract",
+                    "action_type": "extract",
+                    "rule_id": RULE_ASCII_TABLE_EXTRACT,
+                    "before": before,
+                    "after": step_text,
+                }
+            )
 
     before = step_text
     step_text, n_pages = _strip_page_numbers(step_text)

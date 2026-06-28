@@ -93,6 +93,11 @@ Allowed cleaning actions:
 - Remove repeated page headers, footers, and page numbers when detected by deterministic rules.
 - Preserve section titles, page references, and source spans where available.
 - Quarantine unreadable files, missing metadata, duplicates, and future documents.
+- Detect and preserve table structure: HTML `<table>` elements and ASCII
+  pipe-delimited tables are converted to ``[[[TABLE_DATA:{json}]]]`` markers
+  embedded in the cleaned text so downstream chunking can recover the cell grid.
+- Detect and preserve section headings: HTML `<h1>`–`<h6>` tags are converted
+  to ``[[[SECTION_TITLE:text]]]`` markers so chunking can populate `section_title`.
 
 Forbidden cleaning actions:
 
