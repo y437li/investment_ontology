@@ -999,12 +999,18 @@ def run_walk_forward_validation(run_id: str) -> dict:
     sweep_config = config.get("sweep", {}) or {}
 
     as_of_dates_raw: list[str] = wf_config.get("as_of_dates", []) or []
-    # min_points_for_claim from sweep section; fall back to walk_forward.min_snapshots
-    min_points_for_claim: int = int(
-        sweep_config.get(
-            "min_points_for_claim",
-            wf_config.get("min_snapshots", 3),
-        )
+    # min_points_for_claim from sweep section; fall back to walk_forward.min_snapshots.
+    # OI-1 hard rule (defense-in-depth): never below 3 — a claim must rest on a
+    # >=3-point panel regardless of config hygiene, so a misconfigured value of 1
+    # can't let a single-point panel emit claim_supported=True.
+    min_points_for_claim: int = max(
+        3,
+        int(
+            sweep_config.get(
+                "min_points_for_claim",
+                wf_config.get("min_snapshots", 3),
+            )
+        ),
     )
     forward_window: str = str(sweep_config.get("forward_window", "1M"))
     baseline_name: str = str(sweep_config.get("baseline", "equal_weight_universe"))
