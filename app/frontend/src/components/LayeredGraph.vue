@@ -65,7 +65,7 @@
  * and implement the same five methods. useGraphModel and consuming views
  * are completely untouched.
  */
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, toRef } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useGraphModel, LEVEL_COLORS, edgeColor } from '../composables/useGraphModel.js'
 import { createSvgRenderer } from '../renderers/svgRenderer.js'
 
