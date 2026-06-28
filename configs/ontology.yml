@@ -67,6 +67,16 @@ entity_types:
       is_guidance flag, and the source evidence chunk. Attached to its Company via
       reports (as-reported) or guides_to (guidance) edges.
     keep: true
+  Sentiment:
+    level: company
+    definition: >
+      A structured management-sentiment judgment extracted from management-attributable
+      text (MD&A sections, earnings call transcripts). Carries speaker_role, direction
+      (positive/negative/neutral/mixed), confidence_tone, hedging, forward_stance, and
+      the source evidence chunk. Attached to its Company via expresses_sentiment edges.
+      Produced by the SENT-B LLM management-sentiment pass; grounded in SENT-A lexicon
+      hits. Discovery-evidence only — NOT scored into exposure.
+    keep: true
 
 # Never extract these as entities (denoise).
 exclude:
@@ -100,6 +110,7 @@ edge_types:
   mentioned_in:  {structural: false, directed: true,  base_polarity:  0, definition: A is mentioned in document B (evidence only).}
   reports:       {structural: true,  directed: true,  base_polarity:  1, definition: Company A reports a FinancialMetric B (as-reported actual; XBRL wins on overlap).}
   guides_to:     {structural: true,  directed: true,  base_polarity:  1, definition: Company A provides guidance toward a FinancialMetric B (forward-looking / narrative).}
+  expresses_sentiment: {structural: false, directed: true, base_polarity: 0, definition: Company A expresses a management Sentiment B (discovery-evidence only; not scored into exposure). Attribution via speaker_role field on the Sentiment node.}
 
 # Extraction rules enforced after the LLM returns.
 rules:

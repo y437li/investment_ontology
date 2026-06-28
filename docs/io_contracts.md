@@ -1333,6 +1333,134 @@ Acceptance criteria (all covered by tests):
 
 ---
 
+## SENT-B: Management Sentiment Artifacts (Workstream S-B, GitHub #100)
+
+### S-B.1 `management_sentiment.parquet`
+
+**New in SENT-B.** One row per management-sentiment judgment extracted by the
+LLM management-sentiment pass (`run_sentiment_extraction`). Emits `Sentiment`
+nodes into the ontology attached to their Company via `expresses_sentiment` edges.
+
+**Speaker gating:** Only management-attributable chunks (`speaker_role == "management"`
+per SENT-A's `tag_speaker_role` tagger) are processed. Media/analyst/unknown chunks
+are skipped for cost discipline.
+
+**Lexicon grounding:** SENT-A's matched-word lists (LM lexicon hits per category)
+are passed into the LLM prompt as evidence. The model judges from the full text
+(negation and context override raw lexicon signals).
+
+**PIT rule:** Only chunks with `available_at <= run.as_of_date` are processed.
+
+**Evidence discipline:** Every row MUST have a non-empty `evidence_chunk_id`.
+Records without evidence are dropped before writing.
+
+**Discovery-evidence only:** Sentiment is NOT scored into exposure. It is kept
+for auditability, SENT-C fusion (agree/hedged/conflict flag), and UI display.
+
+Path: `data/runs/<run_id>/discovery/management_sentiment.parquet`
+
+Required columns:
+
+```text
+schema_version:   string       — "1.0"
+sentiment_id:     string       — stable deterministic id (sent_<sha256[:16]>)
+company_id:       string       — canonical company identifier
+speaker_role:     string       — always "management" in SENT-B output
+direction:        string       — "positive" | "negative" | "neutral" | "mixed"
+confidence_tone:  string       — "high" | "moderate" | "low" (assertiveness of language)
+hedging:          bool         — True if significant hedge/uncertainty language present
+forward_stance:   string       — "optimistic" | "cautious" | "neutral" | "negative"
+confidence:       float        — 0.0–1.0 extractor confidence in this judgment
+evidence_chunk_id: string      — REQUIRED: non-empty chunk_id of the source text
+lexicon_hits:     string       — JSON: matched words per LM category (SENT-A grounding evidence)
+created_at:       string       — ISO UTC timestamp
+```
+
+Rules:
+
+- Every row MUST have a non-empty `evidence_chunk_id`. Records without evidence
+  are dropped before writing.
+- `direction` must be one of: "positive", "negative", "neutral", "mixed".
+- `sentiment_id` is stable: same `(company_id, evidence_chunk_id, direction)`
+  always yields the same `sentiment_id`.
+- `lexicon_hits` is a JSON string encoding the SENT-A matched words that were
+  passed to the LLM as grounding evidence. Always present (empty JSON `{}` when
+  SENT-A hasn't run yet).
+- Fusion with the lexicon (agree/hedged/conflict flag) is SENT-C, not SENT-B.
+- No Management entity type is introduced. Attribution is via `speaker_role` field.
+
+### S-B.2 `sentiment_edges.parquet`
+
+**New in SENT-B.** One row per edge connecting a Company entity to a Sentiment
+node. Written alongside `management_sentiment.parquet` by `run_sentiment_extraction`.
+
+Edge type: `expresses_sentiment` (Company -> Sentiment, discovery-evidence only,
+`base_polarity: 0`, excluded from structural community detection).
+
+Path: `data/runs/<run_id>/discovery/sentiment_edges.parquet`
+
+Required columns:
+
+```text
+schema_version:     string        — "1.0"
+edge_id:            string        — stable deterministic id (sente_<sha256[:16]>)
+company_entity_id:  string        — entity_id of the Company node (from entities.parquet)
+sentiment_id:       string        — sentiment_id from management_sentiment.parquet
+edge_type:          string        — always "expresses_sentiment"
+speaker_role:       string        — attribution field (always "management" in SENT-B)
+evidence_chunk_ids: list[string]  — chunk_ids that grounded this edge (non-empty)
+confidence:         float         — 0.0–1.0
+created_at:         string        — ISO UTC timestamp
+```
+
+Rules:
+
+- `edge_id` is stable: same `(company_entity_id, sentiment_id)` always yields
+  the same `edge_id`.
+- `evidence_chunk_ids` must be non-empty.
+- `edge_type` is always "expresses_sentiment" for SENT-B output.
+- `expresses_sentiment` edges are structural=false; they never enter community
+  detection or exposure scoring.
+
+### S-B.3 Extractor Module
+
+Python function: `app/backend/theme_engine/extraction.run_sentiment_extraction`
+
+Public API additions in `extraction.py`:
+
+```python
+# Data structures
+SentimentRecord      — dataclass: company_id, speaker_role, direction,
+                        confidence_tone, hedging, forward_stance,
+                        evidence_chunk_id, confidence, lexicon_hits
+SentimentResult      — dataclass: records: list[SentimentRecord]
+
+# Extractor protocol + implementations
+SentimentExtractor           — ABC protocol
+RuleBasedSentimentExtractor  — deterministic, negation-aware, no network (tests/CI)
+OpenAISentimentExtractor     — LLM-backed, must be explicitly injected
+
+# Column lists
+MANAGEMENT_SENTIMENT_COLUMNS  — list[str] for management_sentiment.parquet
+SENTIMENT_EDGES_COLUMNS       — list[str] for sentiment_edges.parquet
+
+# Core function
+run_sentiment_extraction(run_id, sentiment_extractor=None) -> int
+```
+
+Acceptance criteria (all covered by tests):
+
+- On a committed management/transcript/MD&A fixture: >=1 sentiment record with
+  a direction, a forward_stance, and a non-empty evidence_chunk_id.
+- Hermetic: test injects a FakeSentimentExtractor (no network).
+- No record without an evidence chunk (negative test).
+- Negation: "we do NOT see strong demand" is judged negative despite "strong".
+- Speaker gating: a news/media chunk is NOT sent to the sentiment pass.
+- PIT: a chunk with available_at > as_of is not processed.
+- Lexicon grounding: lexicon_hits is populated in the output record.
+
+---
+
 ## EG-E Provenance Artifacts (Workstream E)
 
 These three artifacts eliminate multi-hop graph walks for provenance questions.

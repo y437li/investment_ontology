@@ -1870,3 +1870,833 @@ def build_default_fact_extractor() -> FactExtractor:
     if key and base and model:
         return OpenAIFactExtractor(api_key=key, base_url=base, llm_model_name=model)
     return RuleBasedFactExtractor()
+
+
+# ===========================================================================
+# PASS 3 — Management-sentiment extraction (SENT-B)
+# ===========================================================================
+#
+# Processes ONLY management-attributable chunks (speaker_role == "management")
+# for cost discipline.  Grounds the LLM in SENT-A's lexicon hits so the model
+# judges from the text rather than from priors.
+#
+# Emits Sentiment nodes + expresses_sentiment edges (Company -> Sentiment).
+# Attribution is stored via a `speaker_role` field on the Sentiment record.
+#
+# Sentiment is discovery-evidence only — NOT scored into exposure.
+# Reconciliation: none (SENT-C fusion is a future issue).
+# PIT discipline: only chunks with available_at <= run.as_of are processed.
+# Evidence discipline: NO record without a non-empty evidence_chunk_id.
+# ---------------------------------------------------------------------------
+
+# discovery/management_sentiment.parquet
+MANAGEMENT_SENTIMENT_COLUMNS: list[str] = [
+    "schema_version",
+    "sentiment_id",
+    "company_id",
+    "speaker_role",
+    "direction",
+    "confidence_tone",
+    "hedging",
+    "forward_stance",
+    "confidence",
+    "evidence_chunk_id",
+    "lexicon_hits",          # JSON string: matched words per category (from SENT-A)
+    "created_at",
+]
+
+# discovery/sentiment_edges.parquet
+SENTIMENT_EDGES_COLUMNS: list[str] = [
+    "schema_version",
+    "edge_id",
+    "company_entity_id",
+    "sentiment_id",
+    "edge_type",             # always "expresses_sentiment"
+    "speaker_role",          # attribution field carried on the edge
+    "evidence_chunk_ids",
+    "confidence",
+    "created_at",
+]
+
+# Valid direction values
+_VALID_DIRECTIONS = frozenset({"positive", "negative", "neutral", "mixed"})
+# Valid confidence_tone values
+_VALID_CONFIDENCE_TONES = frozenset({"high", "moderate", "low"})
+# Valid forward_stance values
+_VALID_FORWARD_STANCES = frozenset({"optimistic", "cautious", "neutral", "negative"})
+
+# Management speaker role labels (from sentiment.yml attribution rules)
+_MANAGEMENT_ROLES = frozenset({"management"})
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SentimentRecord:
+    """A single management-sentiment judgment extracted from a text chunk."""
+
+    company_id: str           # canonical company name
+    speaker_role: str         # always "management" for this pass
+    direction: str            # "positive" | "negative" | "neutral" | "mixed"
+    confidence_tone: str      # "high" | "moderate" | "low"
+    hedging: bool             # True if hedge/uncertainty language present
+    forward_stance: str       # "optimistic" | "cautious" | "neutral" | "negative"
+    evidence_chunk_id: str    # REQUIRED — source chunk
+    confidence: float         # 0–1
+    lexicon_hits: str = ""    # JSON-encoded matched_words from SENT-A (evidence)
+
+
+@dataclass
+class SentimentResult:
+    """Bundle returned by a SentimentExtractor for one chunk."""
+
+    records: list[SentimentRecord] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# SentimentExtractor protocol
+# ---------------------------------------------------------------------------
+
+
+class SentimentExtractor(ABC):
+    """Protocol for management-sentiment extractors.
+
+    Like FactExtractor, implementations must be stateless across calls.
+    A RuleBasedSentimentExtractor is provided for tests/CI (no network).
+    A real OpenAISentimentExtractor exists but must be explicitly constructed
+    and injected — never instantiated automatically.
+    """
+
+    @abstractmethod
+    def extract_sentiment(
+        self,
+        chunk_id: str,
+        chunk_text: str,
+        lexicon_evidence: dict,
+    ) -> SentimentResult:
+        """Extract management sentiment from a single management-attributable chunk.
+
+        Args:
+            chunk_id: Stable identifier for this chunk (recorded in evidence).
+            chunk_text: Cleaned text from chunks.parquet.
+            lexicon_evidence: Matched-word dict from SENT-A scorer
+                (keys: category names; values: list[str] of matched tokens).
+                Passed into the prompt to ground the LLM in the actual words.
+
+        Returns:
+            SentimentResult with SentimentRecord instances.
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Human-readable name of this extractor (recorded in source)."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Rule-based sentiment extractor (deterministic, no network — default for tests/CI)
+# ---------------------------------------------------------------------------
+
+# Patterns that signal positive management sentiment.
+# Use \bstem\w* to catch inflected forms (grows/grew/growth, exceeded, etc.)
+# while anchoring at the start of the word boundary.
+_POSITIVE_SIGNALS = re.compile(
+    r"\b(?:strong\w*|exceed\w*|record\w*|outstanding|robust|grow\w*|confident\w*|"
+    r"momentum|positive|beat\w*|outperform\w*|increas\w*|expand\w*|improv\w*|"
+    r"accelerat\w*|opportunit\w*|well-positioned|ahead of)",
+    re.IGNORECASE,
+)
+# Patterns that signal negative management sentiment.
+# Use \bstem\w* to catch inflected forms (declined, headwinds, pressured, etc.)
+_NEGATIVE_SIGNALS = re.compile(
+    r"\b(?:challeng\w*|difficult\w*|disappoint\w*|weaker|declin\w*|pressur\w*|headwind\w*|"
+    r"miss\w*|shortfall\w*|concern\w*|uncertain\w*|risk\w*|advers\w*|deteriorat\w*|"
+    r"slowdown\w*|reduc\w*|contract\w*|below expectation)",
+    re.IGNORECASE,
+)
+# Negation window: if a negation appears within N tokens before a signal,
+# the signal is considered negated.
+_NEGATION_RE = re.compile(
+    r"\b(not|no|never|neither|nor|cannot|can't|don't|doesn't|didn't|"
+    r"won't|wouldn't|shouldn't|isn't|aren't|wasn't|weren't|hardly|"
+    r"barely|scarcely)\b",
+    re.IGNORECASE,
+)
+_NEGATION_WINDOW_TOKENS = 5  # tokens before the signal to check for negation
+# Hedge patterns
+_HEDGE_RE = re.compile(
+    r"\b(may|might|could|would|should|if|subject to|provided|assuming|"
+    r"uncertain|depend|contingent|potential|possible|expect|anticipate|"
+    r"approximate|guidance|outlook|forecast)\b",
+    re.IGNORECASE,
+)
+# Forward-looking phrases
+_FORWARD_OPTIMISTIC_RE = re.compile(
+    r"\b(expect|confident|look forward|well-positioned|growth|opportunity|"
+    r"momentum|accelerat|positive|bright|strong outlook|optimistic)\b",
+    re.IGNORECASE,
+)
+_FORWARD_CAUTIOUS_RE = re.compile(
+    r"\b(cautious|monitor|uncertain|headwind|challenge|risk|volatile|"
+    r"depend on|subject to|if market|macro|may impact)\b",
+    re.IGNORECASE,
+)
+_FORWARD_NEGATIVE_RE = re.compile(
+    r"\b(decline|deteriorat|miss|below expectation|pressure|slowdown|"
+    r"concern|weak|adverse|reduce guidance|lower)\b",
+    re.IGNORECASE,
+)
+
+
+def _tokens_around(text: str, match_start: int, window: int = _NEGATION_WINDOW_TOKENS) -> list[str]:
+    """Return the `window` tokens immediately preceding position `match_start`."""
+    prefix = text[:match_start]
+    tokens = prefix.split()
+    return tokens[-window:] if len(tokens) >= window else tokens
+
+
+def _is_negated(text: str, match_start: int) -> bool:
+    """True if a negation word appears within the token window before match_start."""
+    preceding = _tokens_around(text, match_start)
+    for tok in preceding:
+        if _NEGATION_RE.match(tok):
+            return True
+    return False
+
+
+def _count_sentiment_signals(text: str) -> tuple[int, int]:
+    """Return (positive_count, negative_count) with negation-aware counting."""
+    pos = 0
+    neg = 0
+    for m in _POSITIVE_SIGNALS.finditer(text):
+        if _is_negated(text, m.start()):
+            neg += 1  # negated positive → counts negative
+        else:
+            pos += 1
+    for m in _NEGATIVE_SIGNALS.finditer(text):
+        if _is_negated(text, m.start()):
+            pos += 1  # negated negative → counts positive
+        else:
+            neg += 1
+    return pos, neg
+
+
+def _extract_company_from_text(text: str) -> Optional[str]:
+    """Very simple heuristic: find the first known company-like reference."""
+    # Check against the known company aliases in extraction.py
+    text_lower = text.lower()
+    for alias, canonical in _COMPANY_ALIASES.items():
+        if alias in text_lower:
+            return canonical
+    # Try entity rules (first Company match)
+    for pat, etype, canonical in _ENTITY_RULES:
+        if etype == "Company" and pat.search(text):
+            return canonical
+    return None
+
+
+class RuleBasedSentimentExtractor(SentimentExtractor):
+    """Deterministic pattern-matching sentiment extractor.
+
+    Produces stable output for the same input — no network calls.
+    Used in tests and CI.  Handles negation (e.g. "we do NOT see strong demand"
+    is scored negative despite the word "strong").
+    """
+
+    @property
+    def name(self) -> str:
+        return "rule_based_sentiment_extractor_v1"
+
+    def extract_sentiment(
+        self,
+        chunk_id: str,
+        chunk_text: str,
+        lexicon_evidence: dict,
+    ) -> SentimentResult:
+        """Extract management sentiment using negation-aware pattern matching.
+
+        Only emits a record when a company can be identified in the text.
+        Evidence chunk is always the supplied chunk_id.
+        """
+        import json as _json  # noqa: PLC0415
+
+        company = _extract_company_from_text(chunk_text)
+        if not company:
+            return SentimentResult(records=[])
+
+        pos, neg = _count_sentiment_signals(chunk_text)
+
+        # Determine direction
+        if pos > neg:
+            direction = "positive"
+        elif neg > pos:
+            direction = "negative"
+        elif pos == neg and pos > 0:
+            direction = "mixed"
+        else:
+            direction = "neutral"
+
+        # Confidence tone: high if strong signal, moderate if some, low if minimal
+        total = pos + neg
+        if total >= 4:
+            confidence_tone = "high"
+        elif total >= 2:
+            confidence_tone = "moderate"
+        else:
+            confidence_tone = "low"
+
+        # Hedging
+        hedging = bool(_HEDGE_RE.search(chunk_text))
+
+        # Forward stance
+        fwd_opt = bool(_FORWARD_OPTIMISTIC_RE.search(chunk_text))
+        fwd_cau = bool(_FORWARD_CAUTIOUS_RE.search(chunk_text))
+        fwd_neg = bool(_FORWARD_NEGATIVE_RE.search(chunk_text))
+        if fwd_neg and not fwd_opt:
+            forward_stance = "negative"
+        elif fwd_cau and not fwd_opt:
+            forward_stance = "cautious"
+        elif fwd_opt and not fwd_cau and not fwd_neg:
+            forward_stance = "optimistic"
+        else:
+            forward_stance = "neutral"
+
+        # Confidence in the judgment
+        confidence = min(0.6 + (total * 0.05), 0.90) if total > 0 else 0.50
+
+        lexicon_hits = _json.dumps({
+            cat: words for cat, words in (lexicon_evidence or {}).items() if words
+        })
+
+        return SentimentResult(records=[
+            SentimentRecord(
+                company_id=company,
+                speaker_role="management",
+                direction=direction,
+                confidence_tone=confidence_tone,
+                hedging=hedging,
+                forward_stance=forward_stance,
+                evidence_chunk_id=chunk_id,
+                confidence=confidence,
+                lexicon_hits=lexicon_hits,
+            )
+        ])
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible sentiment extractor (real LLM — NOT used in tests/CI)
+# ---------------------------------------------------------------------------
+
+
+class OpenAISentimentExtractor(SentimentExtractor):
+    """LLM-backed management-sentiment extractor using an OpenAI-compatible API.
+
+    Must be explicitly instantiated and injected — NEVER constructed automatically.
+    No network call occurs unless an instance of this class is explicitly used.
+    """
+
+    def __init__(self, api_key: str, base_url: str, llm_model_name: str) -> None:
+        self._api_key = api_key
+        self._base_url = base_url
+        self._llm_model_name = llm_model_name
+        self._client = None
+
+    @property
+    def name(self) -> str:
+        return f"openai_sentiment_extractor:{self._llm_model_name}"
+
+    def _get_client(self):  # type: ignore[return]
+        if self._client is None:
+            try:
+                from openai import OpenAI  # noqa: PLC0415
+            except ImportError as exc:
+                raise RuntimeError(
+                    "openai package required for OpenAISentimentExtractor; "
+                    "install it with: pip install openai"
+                ) from exc
+            self._client = OpenAI(api_key=self._api_key, base_url=self._base_url)
+        return self._client
+
+    @property
+    def _tool(self) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": "emit_management_sentiment",
+                "description": (
+                    "Emit structured management-sentiment judgments found in the text."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sentiment_records": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "company_id": {"type": "string"},
+                                    "speaker_role": {
+                                        "type": "string",
+                                        "enum": ["management"],
+                                    },
+                                    "direction": {
+                                        "type": "string",
+                                        "enum": sorted(_VALID_DIRECTIONS),
+                                    },
+                                    "confidence_tone": {
+                                        "type": "string",
+                                        "enum": sorted(_VALID_CONFIDENCE_TONES),
+                                    },
+                                    "hedging": {"type": "boolean"},
+                                    "forward_stance": {
+                                        "type": "string",
+                                        "enum": sorted(_VALID_FORWARD_STANCES),
+                                    },
+                                    "confidence": {"type": "number"},
+                                },
+                                "required": [
+                                    "company_id", "speaker_role", "direction",
+                                    "confidence_tone", "hedging", "forward_stance",
+                                ],
+                            },
+                        }
+                    },
+                    "required": ["sentiment_records"],
+                },
+            },
+        }
+
+    def extract_sentiment(
+        self,
+        chunk_id: str,
+        chunk_text: str,
+        lexicon_evidence: dict,
+    ) -> SentimentResult:
+        """Extract management-sentiment via LLM tool calling.
+
+        Passes SENT-A lexicon hits into the user message as grounding evidence.
+        Retries up to 3 times if the tool call is not returned.
+        """
+        import json as _json  # noqa: PLC0415
+
+        client = self._get_client()
+        system = registry.get_system_prompt("management_sentiment_extraction") or (
+            "You are a financial sentiment analyst. Produce structured management-"
+            "sentiment judgments from the provided text. Negation overrides lexicon "
+            "signals. Always call emit_management_sentiment."
+        )
+
+        # Build user message with lexicon grounding evidence
+        lex_lines = []
+        for cat, words in (lexicon_evidence or {}).items():
+            if words:
+                lex_lines.append(f"  {cat}: {', '.join(words[:10])}")
+        lex_block = (
+            "Lexicon evidence (Loughran-McDonald matched words per category):\n"
+            + ("\n".join(lex_lines) if lex_lines else "  (none)")
+        )
+        user_content = f"{lex_block}\n\nText:\n{chunk_text}"
+
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ]
+        args: dict = {}
+        for _attempt in range(3):
+            response = client.chat.completions.create(
+                model=self._llm_model_name,
+                messages=messages,
+                tools=[self._tool],
+                temperature=0,
+            )
+            tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
+            if tool_calls:
+                try:
+                    args = _json.loads(tool_calls[0].function.arguments)
+                    break
+                except Exception as exc:
+                    import logging  # noqa: PLC0415
+                    logging.getLogger(__name__).warning(
+                        "emit_management_sentiment parse failed: %s", exc
+                    )
+                    args = {}
+            messages.append({
+                "role": "user",
+                "content": "Call emit_management_sentiment with valid JSON arguments only.",
+            })
+        return self._records_from_args(
+            args,
+            chunk_id=chunk_id,
+            lexicon_evidence=lexicon_evidence,
+        )
+
+    def _records_from_args(
+        self,
+        args: dict,
+        chunk_id: str,
+        lexicon_evidence: dict,
+    ) -> SentimentResult:
+        import json as _json  # noqa: PLC0415
+
+        records: list[SentimentRecord] = []
+        lexicon_hits = _json.dumps({
+            cat: words for cat, words in (lexicon_evidence or {}).items() if words
+        })
+        for r in (args.get("sentiment_records") or []):
+            company = (r.get("company_id") or "").strip()
+            direction = (r.get("direction") or "").strip()
+            confidence_tone = (r.get("confidence_tone") or "").strip()
+            forward_stance = (r.get("forward_stance") or "").strip()
+            if (
+                not company
+                or direction not in _VALID_DIRECTIONS
+                or confidence_tone not in _VALID_CONFIDENCE_TONES
+                or forward_stance not in _VALID_FORWARD_STANCES
+            ):
+                continue
+            records.append(SentimentRecord(
+                company_id=company,
+                speaker_role="management",
+                direction=direction,
+                confidence_tone=confidence_tone,
+                hedging=bool(r.get("hedging", False)),
+                forward_stance=forward_stance,
+                evidence_chunk_id=chunk_id,
+                confidence=float(r.get("confidence", 0.7) or 0.7),
+                lexicon_hits=lexicon_hits,
+            ))
+        return SentimentResult(records=records)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic id helpers for Sentiment nodes
+# ---------------------------------------------------------------------------
+
+
+def _stable_sentiment_id(
+    company_id: str, evidence_chunk_id: str, direction: str
+) -> str:
+    """Stable id for a Sentiment node.
+
+    Unique per (company_id, evidence_chunk_id, direction) — one chunk can only
+    contribute one direction judgment per company.
+    """
+    basis = f"sentiment:{company_id.lower()}:{evidence_chunk_id}:{direction}"
+    return f"sent_{_sha256_hex(basis)[:16]}"
+
+
+def _stable_sentiment_edge_id(
+    company_entity_id: str, sentiment_id: str
+) -> str:
+    basis = f"sent_edge:{company_entity_id}:{sentiment_id}"
+    return f"sente_{_sha256_hex(basis)[:16]}"
+
+
+# ---------------------------------------------------------------------------
+# Core: management-sentiment extraction pass
+# ---------------------------------------------------------------------------
+
+
+def _read_chunk_tone_index(run_id: str) -> dict[str, dict]:
+    """Load chunk_tone.parquet (SENT-A) keyed by chunk_id.
+
+    Returns empty dict if the artifact doesn't exist yet (SENT-A not yet run).
+    The management-sentiment pass degrades gracefully: it processes all chunks
+    when no pre-computed tone is available (lexicon_evidence will be empty).
+    """
+    artifact = runs.get_run_dir(run_id) / "discovery" / "chunk_tone.parquet"
+    if not artifact.exists():
+        return {}
+    try:
+        rows = pq.read_table(artifact).to_pylist()
+    except Exception:
+        return {}
+    return {
+        str(r.get("chunk_id") or ""): r
+        for r in rows
+        if r.get("chunk_id")
+    }
+
+
+def _extract_lexicon_evidence(tone_row: Optional[dict]) -> dict:
+    """Build the lexicon_evidence dict from a chunk_tone row.
+
+    Returns {category: list[str]} with the matched_* columns from SENT-A.
+    When tone_row is None (SENT-A not yet run), returns an empty dict.
+    """
+    if tone_row is None:
+        return {}
+    evidence: dict[str, list] = {}
+    for key, val in tone_row.items():
+        if key.startswith("matched_") and isinstance(val, list) and val:
+            cat = key[len("matched_"):]
+            evidence[cat] = list(val)
+    return evidence
+
+
+def _is_management_chunk(chunk: dict, attribution_cfg: Optional[list]) -> bool:
+    """Return True when the chunk's speaker_role is management-attributable.
+
+    Uses SENT-A's tag_speaker_role tagger with the same config rules.
+    Accepts speaker_role pre-computed in chunk_tone.parquet (fast path) or
+    recomputes it on demand (fallback when SENT-A hasn't run yet).
+    """
+    from .sentiment_lexicon import tag_speaker_role, load_sentiment_config  # noqa: PLC0415
+
+    # Fast path: already tagged in chunk_tone.parquet
+    pre_role = chunk.get("speaker_role")
+    if pre_role is not None:
+        return pre_role in _MANAGEMENT_ROLES
+
+    # Fallback: recompute from chunk context
+    if attribution_cfg is None:
+        try:
+            cfg = load_sentiment_config()
+            attribution_cfg = cfg.get("attribution") or []
+        except Exception:
+            attribution_cfg = []
+    role = tag_speaker_role(chunk, attribution_cfg=attribution_cfg)
+    return role in _MANAGEMENT_ROLES
+
+
+def run_sentiment_extraction(
+    run_id: str,
+    sentiment_extractor: Optional[SentimentExtractor] = None,
+) -> int:
+    """Extract management-sentiment records from management-attributable chunks.
+
+    Args:
+        run_id: The run to process.  chunks.parquet must already exist.
+        sentiment_extractor: SentimentExtractor to use.  Defaults to the
+            env-selected extractor (build_default_sentiment_extractor).
+
+    Returns:
+        Number of Sentiment rows written.
+
+    PIT discipline: only chunks with available_at <= run.as_of are processed.
+    Speaker gating: only management-attributable chunks are processed.
+    Evidence discipline: every Sentiment record MUST carry a non-empty
+        evidence_chunk_id.
+    Grounding: SENT-A lexicon hits (matched_words per category) are passed
+        into the extractor as evidence so the LLM judges from the text.
+    """
+    if sentiment_extractor is None:
+        sentiment_extractor = build_default_sentiment_extractor()
+
+    manifest = runs.load_manifest(run_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+    as_of_date: str = manifest.as_of_date
+
+    chunks = _read_chunks(run_id)
+    # Load SENT-A chunk_tone artifact (for pre-computed speaker_role + lexicon hits)
+    tone_index = _read_chunk_tone_index(run_id)
+    # Build document_id -> company_id lookup from documents.parquet if available
+    doc_company_index = _read_doc_company_index(run_id)
+
+    # Load SENT-A attribution config (used as fallback when tone_index is empty)
+    attribution_cfg: Optional[list] = None
+
+    created_at = _utc_now_iso()
+    run_dir = runs.get_run_dir(run_id)
+    discovery_dir = run_dir / "discovery"
+
+    # Accumulate records keyed by (company_id, chunk_id) to deduplicate
+    # multiple calls on the same chunk.
+    record_map: dict[tuple[str, str], SentimentRecord] = {}
+
+    for chunk in chunks:
+        chunk_id: str = chunk.get("chunk_id") or ""
+        text: str = chunk.get("text") or ""
+        available_at = _to_date_str(chunk.get("available_at"))
+
+        if not chunk_id or not text:
+            continue
+
+        # PIT filter: skip chunks not yet available as of run date.
+        if available_at and available_at > as_of_date:
+            continue
+
+        # Enrich chunk with pre-computed speaker_role from SENT-A (if available)
+        tone_row = tone_index.get(chunk_id)
+        enriched_chunk = dict(chunk)
+        if tone_row is not None:
+            enriched_chunk["speaker_role"] = tone_row.get("speaker_role")
+
+        # Speaker gating: only process management-attributable chunks.
+        if not _is_management_chunk(enriched_chunk, attribution_cfg):
+            continue
+
+        # Get lexicon evidence from SENT-A scorer output (grounding)
+        lexicon_evidence = _extract_lexicon_evidence(tone_row)
+
+        result = sentiment_extractor.extract_sentiment(
+            chunk_id=chunk_id,
+            chunk_text=text,
+            lexicon_evidence=lexicon_evidence,
+        )
+
+        for rec in result.records:
+            # Evidence discipline: every record must have a non-empty chunk id.
+            if not rec.evidence_chunk_id:
+                continue
+
+            # Fill company_id from document metadata when not set
+            if not rec.company_id:
+                doc_id = str(chunk.get("document_id") or "")
+                rec = SentimentRecord(
+                    company_id=doc_company_index.get(doc_id) or "",
+                    speaker_role=rec.speaker_role,
+                    direction=rec.direction,
+                    confidence_tone=rec.confidence_tone,
+                    hedging=rec.hedging,
+                    forward_stance=rec.forward_stance,
+                    evidence_chunk_id=rec.evidence_chunk_id,
+                    confidence=rec.confidence,
+                    lexicon_hits=rec.lexicon_hits,
+                )
+
+            if not rec.company_id:
+                continue
+
+            # Validate direction
+            if rec.direction not in _VALID_DIRECTIONS:
+                continue
+
+            key = (rec.company_id, rec.evidence_chunk_id)
+            if key not in record_map:
+                record_map[key] = rec
+            # Keep only the first judgment per (company, chunk) — deterministic.
+
+    # Build output rows.
+    sentiment_rows: list[dict] = []
+    edge_rows: list[dict] = []
+
+    for rec in record_map.values():
+        sentiment_id = _stable_sentiment_id(
+            rec.company_id, rec.evidence_chunk_id, rec.direction
+        )
+        company_entity_id = _company_entity_id_from_name(rec.company_id)
+        edge_id = _stable_sentiment_edge_id(company_entity_id, sentiment_id)
+
+        sentiment_rows.append({
+            "schema_version": SCHEMA_VERSION,
+            "sentiment_id": sentiment_id,
+            "company_id": rec.company_id,
+            "speaker_role": rec.speaker_role,
+            "direction": rec.direction,
+            "confidence_tone": rec.confidence_tone,
+            "hedging": rec.hedging,
+            "forward_stance": rec.forward_stance,
+            "confidence": rec.confidence,
+            "evidence_chunk_id": rec.evidence_chunk_id,
+            "lexicon_hits": rec.lexicon_hits,
+            "created_at": created_at,
+        })
+
+        edge_rows.append({
+            "schema_version": SCHEMA_VERSION,
+            "edge_id": edge_id,
+            "company_entity_id": company_entity_id,
+            "sentiment_id": sentiment_id,
+            "edge_type": "expresses_sentiment",
+            "speaker_role": rec.speaker_role,
+            "evidence_chunk_ids": [rec.evidence_chunk_id],
+            "confidence": rec.confidence,
+            "created_at": created_at,
+        })
+
+    _write_management_sentiment(
+        sentiment_rows, discovery_dir / "management_sentiment.parquet"
+    )
+    _write_sentiment_edges(
+        edge_rows, discovery_dir / "sentiment_edges.parquet"
+    )
+
+    return len(sentiment_rows)
+
+
+def _write_management_sentiment(rows: list[dict], out_path: Path) -> None:
+    """Write management_sentiment.parquet with correct schema."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        field_map: dict[str, pa.DataType] = {
+            "schema_version": pa.string(),
+            "sentiment_id": pa.string(),
+            "company_id": pa.string(),
+            "speaker_role": pa.string(),
+            "direction": pa.string(),
+            "confidence_tone": pa.string(),
+            "hedging": pa.bool_(),
+            "forward_stance": pa.string(),
+            "confidence": pa.float64(),
+            "evidence_chunk_id": pa.string(),
+            "lexicon_hits": pa.string(),
+            "created_at": pa.string(),
+        }
+        schema = pa.schema([(c, field_map[c]) for c in MANAGEMENT_SENTIMENT_COLUMNS])
+        pq.write_table(
+            pa.table(
+                {c: pa.array([], type=field_map[c]) for c in MANAGEMENT_SENTIMENT_COLUMNS},
+                schema=schema,
+            ),
+            out_path,
+        )
+        return
+    pydict: dict[str, list] = {
+        col: [r.get(col) for r in rows] for col in MANAGEMENT_SENTIMENT_COLUMNS
+    }
+    pq.write_table(pa.Table.from_pydict(pydict), out_path)
+
+
+def _write_sentiment_edges(rows: list[dict], out_path: Path) -> None:
+    """Write sentiment_edges.parquet with correct schema."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        field_map: dict[str, pa.DataType] = {
+            "schema_version": pa.string(),
+            "edge_id": pa.string(),
+            "company_entity_id": pa.string(),
+            "sentiment_id": pa.string(),
+            "edge_type": pa.string(),
+            "speaker_role": pa.string(),
+            "evidence_chunk_ids": pa.list_(pa.string()),
+            "confidence": pa.float64(),
+            "created_at": pa.string(),
+        }
+        schema = pa.schema([(c, field_map[c]) for c in SENTIMENT_EDGES_COLUMNS])
+        pq.write_table(
+            pa.table(
+                {c: pa.array([], type=field_map[c]) for c in SENTIMENT_EDGES_COLUMNS},
+                schema=schema,
+            ),
+            out_path,
+        )
+        return
+    pydict: dict[str, list] = {
+        col: [r.get(col) for r in rows] for col in SENTIMENT_EDGES_COLUMNS
+    }
+    pq.write_table(pa.Table.from_pydict(pydict), out_path)
+
+
+def build_default_sentiment_extractor() -> SentimentExtractor:
+    """Select the sentiment extractor from environment.
+
+    Uses the LLM extractor when LLM_API_KEY + LLM_BASE_URL + LLM_MODEL_NAME are
+    set and SENTIMENT_EXTRACTOR != 'rule_based'; otherwise RuleBasedSentimentExtractor.
+    """
+    import os as _os  # noqa: PLC0415
+
+    if _os.environ.get("SENTIMENT_EXTRACTOR", "").lower() == "rule_based":
+        return RuleBasedSentimentExtractor()
+    key = _os.environ.get("LLM_API_KEY")
+    base = _os.environ.get("LLM_BASE_URL")
+    model = _os.environ.get("LLM_MODEL_NAME")
+    if key and base and model:
+        return OpenAISentimentExtractor(api_key=key, base_url=base, llm_model_name=model)
+    return RuleBasedSentimentExtractor()

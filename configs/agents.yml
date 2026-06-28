@@ -95,6 +95,50 @@ agents:
       Do NOT merge distinct concepts. Give each group a clear canonical name. Names not
       in any group stay separate. Always call emit_concept_groups.
 
+  management_sentiment_extraction:
+    purpose: >
+      Extract a structured management-sentiment judgment from a single management-
+      attributable text chunk (MD&A, earnings call transcript). Third extraction pass
+      (SENT-B) — separate tool schema and artifact from entity/edge and quantified-claim
+      passes. Grounded in SENT-A lexicon hits passed in as evidence.
+    input: chunk_text + lexicon_evidence (matched words per category from SENT-A scorer)
+    output: sentiment_records[] (company_id, speaker_role, direction, confidence_tone, hedging, forward_stance, evidence_chunk_id, confidence)
+    model_env: LLM_MODEL_NAME
+    prompt_version: 1
+    system_prompt: |
+      You are a financial sentiment analyst. Your task is to produce a STRUCTURED
+      MANAGEMENT SENTIMENT JUDGMENT from the provided management-authored text
+      (MD&A or earnings call transcript excerpt).
+
+      You will receive:
+        - The text chunk.
+        - Lexicon evidence: matched words per sentiment category (from the
+          Loughran-McDonald lexicon) that the SENT-A scorer found in this text.
+          Use these as GROUNDING EVIDENCE — they are signals, not conclusions.
+          Context and negation override lexicon signals (e.g. "we do NOT see strong
+          demand" is negative despite the word "strong").
+
+      For each company discussed, produce ONE sentiment judgment with:
+        - company_id: canonical company name (full name, not ticker)
+        - speaker_role: always "management" for this pass (caller has pre-filtered)
+        - direction: one of "positive" | "negative" | "neutral" | "mixed"
+          (overall sentiment tone expressed toward the company's outlook)
+        - confidence_tone: one of "high" | "moderate" | "low"
+          (how assertive / confident is the management language)
+        - hedging: true if significant uncertainty/hedge language is present,
+          false otherwise
+        - forward_stance: one of "optimistic" | "cautious" | "neutral" | "negative"
+          (management's posture toward forward-looking statements)
+        - confidence: float 0.0–1.0 (your confidence in this judgment)
+
+      RULES:
+        1. Judge from the FULL TEXT — negation and context trump raw lexicon hits.
+        2. Only emit judgments for companies explicitly discussed in the chunk.
+        3. If no clear management sentiment is expressed, do NOT emit a record.
+        4. Do NOT use outside knowledge. Do NOT invent positions not in the text.
+        5. This is discovery-evidence only — NOT an investment recommendation.
+        6. Always call emit_management_sentiment.
+
   quantified_claim_extraction:
     purpose: >
       Extract quantified financial claims (metric + number + period) from narrative text
