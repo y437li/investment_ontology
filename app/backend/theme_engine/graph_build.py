@@ -46,6 +46,40 @@ from . import registry  # noqa: E402
 _FALLBACK_STRUCTURAL = ["exposed_to", "sensitive_to", "causes", "benefits", "hurts"]
 STRUCTURAL_EDGE_TYPES: list[str] = registry.structural_edge_types() or _FALLBACK_STRUCTURAL
 
+# ---------------------------------------------------------------------------
+# FI-A: Signed/weighted edge model (GitHub #104)
+#
+# POLARITY — derived from configs/ontology.yml `base_polarity` per edge type:
+#   +1  positive / same-direction signal (benefits, causes, exposed_to, …)
+#   -1  negative / opposite-direction signal (hurts)
+#    0  undirected, evidence-only, or excluded from signed propagation
+#
+# For `causes`, `exposed_to`, `sensitive_to` the config base_polarity is +1
+# (source→target convention is positive).  When edges.parquet gains a future
+# `direction` field (e.g. "positive" / "negative"), graph_build will multiply
+# base_polarity by that direction multiplier.  Until then, the config value is
+# the sole polarity source.  polarity is NOT hardcoded here — it is read from
+# registry.edge_base_polarity() which loads configs/ontology.yml.
+#
+# PROPAGATION WEIGHT — derived from edge confidence in (0, 1]:
+#   propagation_weight = max(confidence, 0.01)
+#
+# confidence ∈ [0.0, 1.0]; clamped to 0.01 minimum so weight ∈ (0, 1].
+# Evidence count and recency are optional future enhancements; confidence alone
+# is used here.
+#
+# Both fields land on every edge dict in the `edges` list of graph.json so
+# FI-B (the propagation engine) can read them directly.  They do NOT affect
+# community_input_edges (community detection uses only structural edge ids).
+# ---------------------------------------------------------------------------
+
+_MIN_PROPAGATION_WEIGHT: float = 0.01  # clamp floor so weight is always in (0, 1]
+
+
+def _propagation_weight(confidence: float) -> float:
+    """Return propagation weight clamped to (0, 1]."""
+    return max(float(confidence), _MIN_PROPAGATION_WEIGHT)
+
 # Evidence edges (not used for structural clustering)
 EVIDENCE_EDGE_TYPES: list[str] = ["mentioned_in", "co_occurs_with"]
 
@@ -176,6 +210,12 @@ def build_graph(run_id: str) -> tuple[int, int]:
         # Both endpoints must exist (we need them for evidence edges too)
         # For evidence edges (mentioned_in, co_occurs_with) where one endpoint
         # might be a Document, we still store in graph.json but NOT in community_input.
+        #
+        # FI-A: polarity from config (ontology.yml base_polarity); propagation_weight
+        # from confidence.  Neither field touches community_input_edges.
+        polarity: int = registry.edge_base_polarity(edge_type)
+        prop_weight: float = _propagation_weight(confidence)
+
         all_edges.append(
             {
                 "edge_id": edge_id,
@@ -185,6 +225,9 @@ def build_graph(run_id: str) -> tuple[int, int]:
                 "weight": confidence,
                 "evidence_chunk_ids": list(evidence_chunk_ids) if evidence_chunk_ids else [],
                 "extraction_method": extraction_method,
+                # FI-A fields — substrate for forward-inference propagation engine
+                "polarity": polarity,
+                "propagation_weight": prop_weight,
             }
         )
 

@@ -78,17 +78,28 @@ exclude:
 
 # Edge types. `structural` edges drive community/slice discovery and exposure;
 # evidence/contextual edges are kept for traceability but excluded from discovery.
+#
+# `base_polarity` — signed polarity for forward-inference propagation (FI-A/FI-B):
+#   +1  edge conveys a positive/same-direction signal (source benefits or drives target)
+#   -1  edge conveys a negative/opposite-direction signal (source hurts target)
+#    0  edge is undirected, evidence-only, or excluded from signed propagation
+#
+# For `causes`, `exposed_to`, `sensitive_to` the base_polarity is +1 because
+# the source→target convention encodes a positive causal / exposure direction.
+# When a future `direction` field is added to edges.parquet (e.g. "positive" /
+# "negative"), graph_build will multiply base_polarity by that direction multiplier.
+# Until then, the config value is the sole source of polarity.
 edge_types:
-  causes:        {structural: true,  directed: true,  definition: A drives or causes B.}
-  benefits:      {structural: true,  directed: true,  definition: A benefits B.}
-  hurts:         {structural: true,  directed: true,  definition: A hurts or pressures B.}
-  exposed_to:    {structural: true,  directed: true,  definition: A is exposed to B.}
-  sensitive_to:  {structural: true,  directed: true,  definition: A is sensitive to B.}
-  located_in:    {structural: false, directed: true,  definition: A is located in B.}
-  co_occurs_with: {structural: false, directed: false, definition: A co-occurs with B in evidence.}
-  mentioned_in:  {structural: false, directed: true,  definition: A is mentioned in document B (evidence only).}
-  reports:       {structural: true,  directed: true,  definition: Company A reports a FinancialMetric B (as-reported actual; XBRL wins on overlap).}
-  guides_to:     {structural: true,  directed: true,  definition: Company A provides guidance toward a FinancialMetric B (forward-looking / narrative).}
+  causes:        {structural: true,  directed: true,  base_polarity:  1, definition: A drives or causes B.}
+  benefits:      {structural: true,  directed: true,  base_polarity:  1, definition: A benefits B.}
+  hurts:         {structural: true,  directed: true,  base_polarity: -1, definition: A hurts or pressures B.}
+  exposed_to:    {structural: true,  directed: true,  base_polarity:  1, definition: A is exposed to B.}
+  sensitive_to:  {structural: true,  directed: true,  base_polarity:  1, definition: A is sensitive to B.}
+  located_in:    {structural: false, directed: true,  base_polarity:  0, definition: A is located in B.}
+  co_occurs_with: {structural: false, directed: false, base_polarity:  0, definition: A co-occurs with B in evidence.}
+  mentioned_in:  {structural: false, directed: true,  base_polarity:  0, definition: A is mentioned in document B (evidence only).}
+  reports:       {structural: true,  directed: true,  base_polarity:  1, definition: Company A reports a FinancialMetric B (as-reported actual; XBRL wins on overlap).}
+  guides_to:     {structural: true,  directed: true,  base_polarity:  1, definition: Company A provides guidance toward a FinancialMetric B (forward-looking / narrative).}
 
 # Extraction rules enforced after the LLM returns.
 rules:

@@ -520,12 +520,24 @@ Format:
       "edge_type": "exposed_to",
       "weight": 0.72,
       "evidence_chunk_ids": ["chunk_001"],
-      "extraction_method": "document_stated"
+      "extraction_method": "document_stated",
+      "polarity": 1,
+      "propagation_weight": 0.72
     }
   ],
   "community_input_edges": ["edge_001"]
 }
 ```
+
+Edge fields (FI-A additions):
+
+- `polarity` — integer signed polarity for forward-inference propagation (FI-A/FI-B):
+  `+1` (same-direction), `-1` (opposite-direction), `0` (undirected / excluded).
+  Derived from `configs/ontology.yml` `base_polarity` per edge type; not hardcoded.
+  Present on ALL edges in the `edges` list (structural and evidence alike).
+- `propagation_weight` — float in `(0, 1]` representing signal attenuation per hop.
+  Formula: `max(confidence, 0.01)`. Evidence count and recency are optional future
+  enhancements not yet implemented.
 
 Rules:
 
@@ -533,6 +545,7 @@ Rules:
 - `community_input_edges` must only reference edges with non-Document endpoints and `edge_type in structural_edge_types`.
 - `evidence_edge_types` are allowed for traceability and reporting, but are excluded from structure-based clustering by default.
 - `run_id`, `as_of_date`, and `graph.json` content are immutable after freeze.
+- `polarity` and `propagation_weight` are informational substrate fields for FI-B; they must NOT alter which edges appear in `community_input_edges`.
 
 ## 14. `communities.json`
 
