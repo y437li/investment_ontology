@@ -668,6 +668,52 @@ _COMPANY_ALIASES = {
 }
 
 
+def _load_universe_company_names() -> frozenset:
+    """Load company names from configs/universe.tsx60.yml.
+
+    Returns a frozenset of lowercase company names so that known universe
+    constituents (e.g. "Hydro One", "Barrick Gold") are never dropped by
+    the person-name heuristic in ``_clean_result``.
+
+    Falls back to an empty frozenset when the file or pyyaml is unavailable,
+    so the rest of the pipeline remains hermetic.
+    """
+    import os as _os  # noqa: PLC0415
+
+    config_dir = Path(_os.environ.get("CONFIG_DIR", "configs"))
+    p = config_dir / "universe.tsx60.yml"
+    if not p.exists():
+        return frozenset()
+    try:
+        import yaml as _yaml  # noqa: PLC0415
+
+        data = _yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        companies = data.get("companies") or []
+        return frozenset(
+            c["name"].lower()
+            for c in companies
+            if isinstance(c, dict) and c.get("name")
+        )
+    except Exception:
+        return frozenset()
+
+
+# Populated lazily on first call to _clean_result; module-level so tests can
+# reset it via monkeypatch without re-importing the module.
+_UNIVERSE_COMPANY_NAMES: Optional[frozenset] = None
+
+
+def _get_universe_company_names() -> frozenset:
+    """Return the cached set of universe company names (lowercase).
+
+    Loaded once and cached for the lifetime of the process.
+    """
+    global _UNIVERSE_COMPANY_NAMES
+    if _UNIVERSE_COMPANY_NAMES is None:
+        _UNIVERSE_COMPANY_NAMES = _load_universe_company_names()
+    return _UNIVERSE_COMPANY_NAMES
+
+
 def _is_noise_name(name: str) -> bool:
     n = name.strip()
     if len(n) < 3:
@@ -692,7 +738,12 @@ def _clean_result(result: ExtractionResult) -> ExtractionResult:
     for e in result.entities:
         if _is_noise_name(e.name):
             continue
-        if e.entity_type == "Company" and _PERSON_RE.match(e.name.strip()) and e.name.strip().lower() not in _COMPANY_ALIASES:
+        if (
+            e.entity_type == "Company"
+            and _PERSON_RE.match(e.name.strip())
+            and e.name.strip().lower() not in _COMPANY_ALIASES
+            and e.name.strip().lower() not in _get_universe_company_names()
+        ):
             continue
         cn = _canonical_name(e.name, e.entity_type)
         if not cn or _is_noise_name(cn):
