@@ -124,3 +124,29 @@ export function getCompanyDetail(runId, companyId) {
 export function getCompanyEvidence(runId, companyId) {
   return service.get(`/api/themes/${runId}/companies/${companyId}/evidence`)
 }
+
+/**
+ * SENT-D: Management-sentiment panel data for a company.
+ * Returns {
+ *   company_id, as_of_date, available: bool, message: str|null,
+ *   fused_tone_summary: {
+ *     dominant_tone, dominant_tone_label, dominant_tone_severity,
+ *     tone_counts: {positive,negative,neutral,hedged},
+ *     has_conflict: bool, has_hedged: bool, reading_count: int
+ *   },
+ *   readings: [{
+ *     fusion_id, fused_tone, fused_tone_label, fused_tone_severity,
+ *     agreement, agreement_label, agreement_severity,
+ *     fused_confidence, direction, confidence_tone, hedging, forward_stance,
+ *     lm_direction, tone_positive, tone_negative, tone_uncertainty,
+ *     lexicon_hits: {category: [matched_words]},
+ *     available_at, evidence_chunk_id,
+ *     chunk_text: str|null, section_title: str|null,
+ *     document: {title, source, document_type, published_at}
+ *   }]
+ * }
+ * Returns available=false (not 404) when artifact absent or no readings.
+ */
+export function getCompanySentiment(runId, companyId) {
+  return service.get(`/api/themes/${runId}/companies/${companyId}/sentiment`)
+}

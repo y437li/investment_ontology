@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, company_profile as company_profile_mod, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
+from . import artifacts as artifacts_mod, chunking, company_profile as company_profile_mod, company_sentiment as company_sentiment_mod, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -561,6 +561,31 @@ def get_company_evidence(run_id: str, company_id: str):
     """
     try:
         return company_profile_mod.get_company_evidence_by_theme(run_id, company_id)
+    except HTTPException:
+        raise
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/themes/{run_id}/companies/{company_id}/sentiment")
+def get_company_sentiment(run_id: str, company_id: str):
+    """SENT-D: Management-sentiment panel for the company detail page.
+
+    Reads management_sentiment_fused.parquet (SENT-C artifact) and resolves
+    each evidence_chunk_id to its source chunk for display.
+
+    Returns a structured payload with:
+      - fused_tone_summary: dominant tone, counts, conflict/hedged flags
+      - readings: one entry per fused row, sorted conflict-first then hedged-first,
+        each carrying fused_tone, agreement (agree|hedged|conflict), lexicon_hits,
+        chunk_text preview, and document attribution for "read full source".
+
+    PIT-clean: only rows with available_at <= run.as_of_date are included.
+    Returns available=False (not 404) when the artifact is absent or company
+    has no readings, so the UI can render an explicit empty state.
+    """
+    try:
+        return company_sentiment_mod.get_company_sentiment(run_id, company_id)
     except HTTPException:
         raise
     except (FileNotFoundError, RuntimeError) as exc:
