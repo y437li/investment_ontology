@@ -14,16 +14,32 @@ basket_top_n: 10
 # random_seed: deterministic seed for random-community baseline benchmark.
 random_seed: 42
 
-# Sweep/backtesting gating.
+# Walk-forward schedule: >= 3 monthly as-of dates required for a valid panel.
+# Single-snapshot validation (run_validation) is ILLUSTRATIVE only.
+# A statistical/excess-return claim requires run_walk_forward_validation with
+# n_points >= sweep.min_points_for_claim.
 walk_forward:
-  # Explicit walk-forward schedule for a single sweep (single-snapshot mode may leave empty).
+  # Explicit walk-forward schedule for a sweep. Must contain >= 3 monthly dates
+  # (min_snapshot_gap_days apart) before any claim is supported.
   as_of_dates:
     - "2024-03-31"
     - "2024-06-30"
     - "2024-09-30"
+  # Alias for sweep.min_points_for_claim; used by walk-forward validation gate.
   min_snapshots: 3
   require_coverage: true
   min_snapshot_gap_days: 28
+
+# Sweep config: parameters for run_walk_forward_validation panel execution.
+# forward_window: holding window applied at each as_of point.
+# baseline: benchmark used for per-point excess calculation.
+# min_points_for_claim: minimum valid points before claim_supported=true is emitted.
+#   Single-snapshot (n_points < min_points_for_claim) always yields illustrative=true,
+#   claim_supported=false. A claim requires a walk-forward panel with sufficient points.
+sweep:
+  forward_window: 1M
+  baseline: equal_weight_universe
+  min_points_for_claim: 3
 
 benchmarks:
   - equal_weight_universe
