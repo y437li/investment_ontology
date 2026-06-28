@@ -1238,6 +1238,88 @@ Known caveats:
 
 ---
 
+## SENT-A: Chunk-Tone Artifact (Workstream S-A, GitHub #99)
+
+### S-A.1 `chunk_tone.parquet`
+
+**New in SENT-A.** One row per chunk. Contains the LM tone vector (token-normalised
+counts per category), the matched-word list per category (for auditability), the
+speaker role, and the token count used for normalisation.
+
+Path: `data/runs/<run_id>/discovery/chunk_tone.parquet`
+
+**Lexicon:** Loughran-McDonald (LM) Master Dictionary (Loughran & McDonald 2011,
+Journal of Finance). The committed file `data/lexicons/loughran_mcdonald.csv` is a
+curated representative subset; replace with the full LM Master Dictionary CSV for
+production. No code change is needed — the loader reads whatever rows are present.
+
+**Hermetic:** No network calls. All computation is local and deterministic.
+
+**Finance-neutral terms:** Words like "liability", "cost", "depreciation" carry
+NO negative flag in the LM lexicon (unlike generic word lists). Tests assert this.
+
+**Config:** Category set and speaker-role attribution rules come from
+`configs/sentiment.yml` — nothing is hardcoded in the scorer.
+
+Required columns:
+
+```text
+chunk_id:             string       — references chunks.parquet
+document_id:          string       — references documents.parquet
+available_at:         string       — inherited from chunk (YYYY-MM-DD)
+speaker_role:         string       — "management" | "analyst" | "media" | "unknown"
+token_count:          int          — token count used for normalisation
+tone_positive:        float        — positive word count / token_count
+tone_negative:        float        — negative word count / token_count
+tone_uncertainty:     float        — uncertainty word count / token_count
+tone_litigious:       float        — litigious word count / token_count
+tone_strong_modal:    float        — strong_modal word count / token_count
+tone_weak_modal:      float        — weak_modal word count / token_count
+matched_positive:     list[str]    — matched tokens in occurrence order
+matched_negative:     list[str]    — matched tokens in occurrence order
+matched_uncertainty:  list[str]    — matched tokens in occurrence order
+matched_litigious:    list[str]    — matched tokens in occurrence order
+matched_strong_modal: list[str]    — matched tokens in occurrence order
+matched_weak_modal:   list[str]    — matched tokens in occurrence order
+```
+
+Rules:
+
+- `available_at` is inherited from `chunks.parquet.available_at` (PIT-clean).
+- Tone scores are token-normalised: `score = raw_count / max(token_count, 1)`.
+- `matched_*` lists preserve order of occurrence in the text (duplicates retained);
+  they enable exact auditability of every score.
+- `speaker_role` is derived from `document_type` (from `documents.parquet`) and
+  `section_title` (from `chunks.parquet`) via the attribution rules in
+  `configs/sentiment.yml`.  No hardcoded rule logic.
+- `chunk_id` is the join key to `chunks.parquet`.
+- This artifact is a **discovery artifact** — never write to the validation path.
+- SENT-B (company-level aggregation) and SENT-C (temporal trending) read this
+  artifact; they must not modify it.
+
+### S-A.2 Scorer Module
+
+Python module: `app/backend/theme_engine/sentiment_lexicon.py`
+
+Public API:
+
+```python
+load_lexicon(csv_path=None, config=None) -> dict[str, dict[str, int]]
+score_chunk(text, token_count, *, lexicon, categories, ...) -> dict
+tag_speaker_role(chunk, attribution_cfg, ...) -> str
+score_chunks(chunks, *, lexicon, config, ...) -> list[dict]
+```
+
+Acceptance criteria (all covered by tests):
+- Correct category counts and EXACT matched-word list on a committed MD&A fixture.
+- An uncertainty-heavy passage scores high `tone_uncertainty` (token-normalised).
+- "liability" is NOT in the negative matched-words list (LM vs. Harvard-GI proof).
+- `speaker_role` correctly distinguishes MD&A/transcript (management) from news (media).
+- No network access at any point (hermetic).
+- Loader works on the curated subset and on a fuller CSV without code change.
+
+---
+
 ## EG-E Provenance Artifacts (Workstream E)
 
 These three artifacts eliminate multi-hop graph walks for provenance questions.

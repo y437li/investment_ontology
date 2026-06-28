@@ -1,0 +1,99 @@
+# Sentiment analysis configuration for the LM tone scorer (SENT-A).
+#
+# CATEGORIES from this config are the authoritative list; they are never
+# hardcoded in sentiment_lexicon.py. The scorer reads them from here so
+# adding a new category requires only a config + CSV update.
+#
+# Loughran-McDonald reference:
+#   Loughran, T. and McDonald, B. (2011), "When Is a Liability Not a Liability?
+#   Textual Analysis, Dictionaries, and 10-Ks", Journal of Finance 66(1), pp. 35-65.
+#
+# Lexicon path (relative to repo root or overridden via env var LEXICON_PATH):
+lexicon_path: data/lexicons/loughran_mcdonald.csv
+
+# Tone vector categories (must match column names in the CSV).
+# The scorer emits token-normalized counts for each category.
+categories:
+  - positive
+  - negative
+  - uncertainty
+  - litigious
+  - strong_modal
+  - weak_modal
+
+# Optional weights for computing a scalar sentiment composite if needed by
+# downstream stages (SENT-B/C). Positive > 0 indicates the category
+# contributes positively to composite sentiment; negative < 0 contributes
+# negatively. The tone vector itself is always raw token-normalized counts.
+weights:
+  positive:    1.0
+  negative:   -1.0
+  uncertainty: 0.5
+  litigious:  -0.5
+  strong_modal: 0.2
+  weak_modal: -0.2
+
+# Attribution rules: how to tag speaker_role from chunk context.
+# Rules are evaluated top-to-bottom; the first match wins.
+#
+# Each rule has:
+#   role             — the speaker_role value to assign
+#   document_types   — list of document_type values that trigger this role
+#                      (matched case-insensitively, substring match allowed)
+#   section_keywords — list of strings to look for in section_title
+#                      (matched case-insensitively, substring match)
+#
+# "management" encompasses:
+#   - 10-K / 40-F MD&A sections (company-authored annual report sections)
+#   - Earnings call transcripts (management remarks portion)
+#   - Press releases authored by management
+#
+# "media" encompasses:
+#   - News articles from external sources
+#
+# "analyst" encompasses:
+#   - Sell-side research / analyst notes
+#
+# "unknown" is the fallback when no rule matches.
+
+attribution:
+  - role: management
+    document_types:
+      - 10-k
+      - 10-q
+      - 40-f
+      - 20-f
+      - annual report
+      - annual_report
+      - earnings_transcript
+      - earnings transcript
+      - mda
+    section_keywords:
+      - management
+      - md&a
+      - management's discussion
+      - managements discussion
+      - discussion and analysis
+      - ceo
+      - chief executive
+      - outlook
+      - forward-looking
+
+  - role: media
+    document_types:
+      - news
+      - news_article
+      - press_release
+      - press release
+      - newswire
+    section_keywords: []
+
+  - role: analyst
+    document_types:
+      - analyst_report
+      - analyst report
+      - research
+      - research_report
+      - sell-side
+      - sellside
+    section_keywords: []
