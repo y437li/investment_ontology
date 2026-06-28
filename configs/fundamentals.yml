@@ -1,0 +1,97 @@
+# As-reported fundamentals configuration.
+#
+# metric_name values here are the canonical whitelist used by BOTH B1 (XBRL)
+# and B2 (LLM extraction). Never add metric_name strings anywhere else — all
+# code must draw from this file.
+#
+# xbrl_concepts lists the EDGAR/SEDAR XBRL element names that map to each
+# metric_name (US-GAAP namespace; prefix-stripped for lookup). The FIRST
+# matching concept wins. Computed metrics (margins) are derived from their
+# component concepts when both numerator and denominator are available.
+#
+# For as-reported: only the filing-date vintage of each value is stored
+# (available_at = filing_date). No forward-looking or restatement values.
+
+version: 1
+
+# PIT discipline: filing_date is the date the document became public;
+# available_at = filing_date for every row.
+source_mapping:
+  edgar_xbrl:
+    source: edgar_xbrl
+    base_url: https://data.sec.gov/api/xbrl/companyfacts
+    lag_days: 0          # available_at = filing_date; no extra lag
+
+metrics:
+  # ---- Income statement ----
+  - metric_name: revenue
+    unit: USD
+    xbrl_concepts:
+      - Revenues
+      - RevenueFromContractWithCustomerExcludingAssessedTax
+      - SalesRevenueNet
+      - RevenueFromContractWithCustomerIncludingAssessedTax
+    notes: Total revenues / net sales as reported.
+
+  - metric_name: net_income
+    unit: USD
+    xbrl_concepts:
+      - NetIncomeLoss
+      - NetIncomeLossAvailableToCommonStockholdersBasic
+    notes: Net income (loss) attributable to common shareholders.
+
+  - metric_name: eps
+    unit: USD/share
+    xbrl_concepts:
+      - EarningsPerShareDiluted
+      - EarningsPerShareBasic
+    notes: Diluted EPS preferred; falls back to basic.
+
+  # ---- Margins (computed from XBRL component values) ----
+  - metric_name: gross_margin
+    unit: ratio
+    derived_from:
+      numerator_concepts: [GrossProfit]
+      denominator_concepts: [Revenues, RevenueFromContractWithCustomerExcludingAssessedTax, SalesRevenueNet]
+    xbrl_concepts: []     # no single XBRL concept; computed in adapter
+    notes: GrossProfit / Revenues, expressed as a decimal (e.g. 0.43 = 43%).
+
+  - metric_name: operating_margin
+    unit: ratio
+    derived_from:
+      numerator_concepts: [OperatingIncomeLoss]
+      denominator_concepts: [Revenues, RevenueFromContractWithCustomerExcludingAssessedTax, SalesRevenueNet]
+    xbrl_concepts: []
+    notes: OperatingIncomeLoss / Revenues, expressed as a decimal.
+
+  - metric_name: ebitda_margin
+    unit: ratio
+    derived_from:
+      # EBITDA = OperatingIncomeLoss + D&A; use XBRL components where present
+      numerator_concepts:
+        - EarningsBeforeInterestTaxesDepreciationAndAmortization
+      denominator_concepts: [Revenues, RevenueFromContractWithCustomerExcludingAssessedTax, SalesRevenueNet]
+    xbrl_concepts:
+      - EarningsBeforeInterestTaxesDepreciationAndAmortization
+    notes: >
+      If EBITDA concept present in XBRL, emit as ratio over revenue.
+      If absent, omit (do not compute from components — avoids silent errors).
+
+  # ---- Cash flow ----
+  - metric_name: operating_cash_flow
+    unit: USD
+    xbrl_concepts:
+      - NetCashProvidedByUsedInOperatingActivities
+    notes: Cash flow from operations.
+
+  # ---- Balance sheet ----
+  - metric_name: total_debt
+    unit: USD
+    xbrl_concepts:
+      - LongTermDebtAndCapitalLeaseObligations
+      - LongTermDebt
+      - DebtAndCapitalLeaseObligations
+    notes: >
+      Long-term debt preferred. Short-term portion excluded by default to stay
+      consistent across reporters; downstream users should sum short + long if
+      needed.

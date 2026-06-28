@@ -137,13 +137,32 @@ Rules:
 - `theme_name` is interpretation metadata, not a discovery input.
 - Low-confidence records should be included with confidence fields or routed to review, not silently dropped.
 
+## 4a. As-Reported Fundamentals (Discovery-time, EG-B1)
+
+The XBRL ingestion adapter (`fundamentals_adapter.py`) writes a **discovery-time**
+as-reported fundamentals artifact that is PIT-clean by construction:
+
+```text
+discovery/fundamentals_asreported.parquet
+```
+
+Schema: `(company_id, period_end, metric_name, metric_value, unit, currency,
+filing_date, available_at, source, source_id)`.
+
+- `available_at = filing_date` (first public date; never `period_end`).
+- Metric names drawn exclusively from `configs/fundamentals.yml`.
+- Empty-but-schema-valid when a company has no XBRL.
+- **Not** a substitute for, and never overwriting, the §20 `validation/fundamentals.parquet`.
+
+See `docs/io_contracts.md §20a` for the full field contract.
+
 ## 5. L3 Structured Validation Standard
 
 Validation data is structured and intentionally separated from discovery data:
 
 ```text
 market_prices.parquet
-fundamentals.parquet
+fundamentals.parquet        ← validation-only (§20); discovery must not read this
 portfolio_baskets.parquet
 validation.csv
 ```
@@ -151,6 +170,7 @@ validation.csv
 Rules:
 
 - Discovery stages must not read `market_prices.parquet`, `fundamentals.parquet`, `portfolio_baskets.parquet`, or `validation.csv`.
+- The discovery-time `fundamentals_asreported.parquet` (§20a) is a **separate** artifact; it is not the same as `validation/fundamentals.parquet`.
 - Exposure must be computed before validation loads future market or fundamental outcomes.
 - `portfolio_baskets.parquet` must preserve constituents, weights, and selection rules so validation can be reproduced.
 
