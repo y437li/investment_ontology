@@ -1621,3 +1621,87 @@ Returns E3 provenance records for all themes a company is exposed to (list):
 
 `company_id` must be a Company entity_id (ent_...). Each item is a distinct
 theme evidence group; there is no cross-theme bleed.
+
+---
+
+## FI-C: `projected_impacts.parquet` (Workstream P-C, GitHub #106)
+
+**New in FI-C.** One row per `(trigger_id, company_id)` pair reached by forward-inference
+propagation.  Persists the in-memory output of FI-B (`propagation.propagate()`) as a
+regenerable, PIT-clean discovery artifact.
+
+Path: `data/runs/<run_id>/discovery/projected_impacts.parquet`
+
+**Trigger selection (v1 — data-driven):** Triggers are **Event nodes** present in
+`graph.json`.  Event is a first-class structural node type; Events represent discrete
+episodic occurrences (e.g. "Fed rate hike March 2024") that naturally model "what happens
+when THIS event activates?"  Triggers are whatever Event entities the extraction pipeline
+found in the source corpus — no user input required.  All triggers are already
+PIT-filtered by `graph_build.py` (`first_seen_at <= as_of_date`, fail-closed).
+
+**Shock convention (v1):** `shock = +1.0` for all Event triggers.  `direction` on each row
+reflects the NET causal sign from trigger to company (product of edge polarities along the
+path).
+
+Required columns:
+
+```text
+schema_version:       string      — always "1.0"
+run_id:               string      — references run_manifest.json
+as_of_date:           string      — run's as_of_date (YYYY-MM-DD); inherited from manifest
+trigger_id:           string      — entity_id of the triggering Event node
+trigger_kind:         string      — entity_type of trigger ("Event" for v1)
+company_id:           string      — entity_id of the impacted Company node
+direction:            int32       — +1 (net positive impact) or -1 (net negative impact)
+strength:             float64     — abs(aggregate); ORDINAL rank only — NOT a calibrated %
+path:                 list[str]   — edge_id chain of the PRIMARY path (trigger → company)
+contributing_edge_ids: list[str]  — flat union of ALL edge_ids across all paths to company
+evidence_chunk_ids:   list[str]   — deduped chunk_ids from all contributing edges;
+                                    resolvable via source.py chunk_source(run_id, chunk_id)
+confidence:           float64     — mean propagation_weight along the primary path
+method:               string      — always "propagation_v1_event_trigger"
+```
+
+Rules:
+
+- `direction` is always `+1` or `-1` (sign of the sign-aware aggregate contribution sum).
+- `strength` is `abs(aggregate)` and is purely ordinal.  It is NOT a probability or
+  calibrated percentage.  Two rows may be compared ordinally but not interpreted as "X%
+  impact".
+- `path` holds the PRIMARY path edge_ids (the first path in the canonically sorted list
+  returned by `propagate()`).  Its purpose is to let the UI display WHY a company was
+  impacted.
+- `contributing_edge_ids` is the UNION of all paths' edge_ids.  Used together with
+  `evidence_chunk_ids` for full traceability.
+- `evidence_chunk_ids` are resolved by looking up each edge in `contributing_edge_ids`
+  against the `edges` list in `graph.json` (the same dict returned by `graph_build.py`).
+  Each `chunk_id` is resolvable via `source.chunk_source(run_id, chunk_id)`.
+- **PIT-clean by construction:** `graph.json` is already PIT-filtered by `graph_build.py`
+  (`first_seen_at <= as_of_date`, fail-closed).  `propagate()` also excludes edges with
+  `available_at > as_of_date` when that field is present (test fixtures).
+- **Derived / regenerable:** the artifact is rebuilt every run.  It is never restated;
+  historical snapshots are captured by separate `run_id`s with their own `as_of_date`.
+- An empty artifact (schema-valid, zero rows) is written when no Event triggers exist or
+  when no trigger reaches any Company node.
+
+Known limitation (#110):
+
+`causes`, `exposed_to`, and `sensitive_to` edges have `base_polarity = +1`
+unconditionally.  `direction` for impacts derived SOLELY from those edge types is
+provisional.  Only `hurts` (−1) and `benefits` (+1) carry reliable signs today.  See
+`propagation.py` module docstring for the full caveat.
+
+### FI-C Module
+
+Python module: `app/backend/theme_engine/projected_impacts.py`
+
+Public API:
+
+```python
+select_triggers(graph: dict) -> list[dict]
+    # Returns Event nodes from the PIT graph as trigger candidates.
+
+compute_projected_impacts(run_id: str, shock: float = 1.0) -> int
+    # Orchestrates trigger selection + propagation + artifact write.
+    # Returns number of rows written.
+```
