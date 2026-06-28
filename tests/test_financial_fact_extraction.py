@@ -52,6 +52,7 @@ from theme_engine.extraction import (
     FINANCIAL_METRIC_EDGES_COLUMNS,
     _B1_ARTIFACT_NAME,
     load_metric_vocabulary,
+    _normalize_period_to_iso,
 )
 from theme_engine.config import settings
 from theme_engine.chunking import CHUNKS_COLUMNS
@@ -174,18 +175,22 @@ def _write_b1_fixture(
     metric_name: str,
     metric_value: float = 3.5,
 ) -> None:
-    """Write a minimal B1 fundamentals artifact with one row."""
+    """Write a minimal B1 fundamentals artifact with one row.
+
+    ``period_end`` must be an ISO YYYY-MM-DD date (B1 contract).
+    The filename matches B1's FUNDAMENTALS_ARTIFACT constant.
+    """
     row: dict = {
         "company_id": company_id,
         "period_end": period_end,
         "metric_name": metric_name,
         "metric_value": metric_value,
-        "unit": "USD_billions",
-        "currency": "USD",
-        "filing_date": "2024-04-15",
-        "available_at": "2024-04-15",
-        "source": "xbrl",
-        "source_id": "xbrl-001",
+        "unit": "CAD_billions",
+        "currency": "CAD",
+        "filing_date": "2024-08-05",
+        "available_at": "2024-08-05",
+        "source": "edgar_xbrl",
+        "source_id": "xbrl-ry-001",
     }
     table = pa.Table.from_pydict({k: [v] for k, v in row.items()})
     pq.write_table(table, discovery_dir / _B1_ARTIFACT_NAME)
@@ -363,15 +368,26 @@ def test_no_claim_without_evidence_chunk():
 
 
 def test_reconciliation_xbrl_wins_for_as_reported():
-    """When B1 XBRL covers (company_id, period, metric_name), the LLM as-reported
-    claim must be dropped; a guidance claim on the same company+metric must survive."""
+    """When B1 XBRL covers (company_id, period_end, metric_name), the LLM
+    as-reported claim must be dropped after period normalization.
+
+    B1 stores period_end as ISO YYYY-MM-DD (e.g. "2024-06-30" for Q2 2024).
+    B2 LLM emits free-text periods ("Q2 2024").  The period normalizer maps
+    "Q2 2024" -> "2024-06-30" so the XBRL row wins.
+    Guidance claims (is_guidance=True) survive regardless.
+    """
+    # Verify the normalizer works for the period used in this test.
+    assert _normalize_period_to_iso("Q2 2024") == "2024-06-30", (
+        "period normalizer must map 'Q2 2024' -> '2024-06-30'"
+    )
+
     both_claims = [
         QuantifiedClaim(
             company_id="ACME",
             metric_name="revenue",
-            value=3.0,       # different from XBRL's 3.5 — LLM should lose
-            unit="USD_billions",
-            period="Q2 2024",   # matches B1 period_end key
+            value=3.0,        # different from XBRL's 3.5 — LLM should lose
+            unit="CAD_billions",
+            period="Q2 2024", # normalizes to "2024-06-30" -> matches B1 ISO period_end
             direction="rose",
             is_guidance=False,
             evidence_chunk_id="",
@@ -381,8 +397,8 @@ def test_reconciliation_xbrl_wins_for_as_reported():
             company_id="ACME",
             metric_name="revenue",
             value=13.0,
-            unit="USD_billions",
-            period="FY 2024",   # guidance — different period, is_guidance=True
+            unit="CAD_billions",
+            period="FY 2024",  # guidance — different period, is_guidance=True
             direction="",
             is_guidance=True,
             evidence_chunk_id="",
@@ -393,24 +409,27 @@ def test_reconciliation_xbrl_wins_for_as_reported():
     run_id, discovery = _make_run(
         chunk_text="Acme Corp revenue rose to $3.0 billion in Q2 2024.",
         chunk_company_id="ACME",
+        available_at="2024-08-05",
+        as_of_date="2024-12-31",
     )
-    # Write B1 XBRL row for ("ACME", "Q2 2024", "revenue")
-    _write_b1_fixture(discovery, "ACME", "Q2 2024", "revenue")
+    # B1 fixture uses realistic ISO period_end "2024-06-30" (Q2 FY-end for calendar quarter).
+    _write_b1_fixture(discovery, "ACME", "2024-06-30", "revenue")
 
     run_fact_extraction(run_id, fact_extractor=FakeFactExtractor(both_claims))
 
     rows = pq.read_table(discovery / "financial_metrics.parquet").to_pylist()
 
-    # LLM as-reported revenue for Q2 2024 must be absent (XBRL wins).
+    # LLM as-reported revenue for Q2 2024 must be absent (XBRL wins after
+    # period normalization "Q2 2024" -> "2024-06-30").
     actual_revenue = [
         r for r in rows if r["metric_name"] == "revenue" and not r["is_guidance"]
     ]
     assert actual_revenue == [], (
-        "LLM as-reported revenue should be suppressed by XBRL; got: "
-        + str(actual_revenue)
+        "LLM as-reported revenue should be suppressed by XBRL after period "
+        "normalization; got: " + str(actual_revenue)
     )
 
-    # Guidance claim (FY 2024) must survive.
+    # Guidance claim (FY 2024) must survive (is_guidance=True is never suppressed).
     guidance_revenue = [
         r for r in rows if r["metric_name"] == "revenue" and r["is_guidance"]
     ]
@@ -419,14 +438,87 @@ def test_reconciliation_xbrl_wins_for_as_reported():
 
 
 # ---------------------------------------------------------------------------
-# Smoke: metric vocabulary loaded correctly
+# Smoke: metric vocabulary loaded correctly from B1's object-list YAML
 # ---------------------------------------------------------------------------
 
 
 def test_metric_vocabulary_contains_required_names():
-    """The metric vocabulary must contain all shared-contract metric_names."""
+    """The metric vocabulary must contain all shared-contract metric_names.
+
+    This test exercises load_metric_vocabulary() against the REAL
+    configs/fundamentals.yml (B1's object-list format with IFRS concepts).
+    Each element is a dict {"metric_name": ..., "xbrl_concepts": [...], ...}.
+    The parser must extract metric_name keys, not stringify the whole dict.
+    """
     vocab = load_metric_vocabulary()
     required = {"revenue", "net_income", "eps", "gross_margin", "operating_margin",
                 "ebitda_margin", "operating_cash_flow", "total_debt"}
     missing = required - vocab
-    assert not missing, f"Missing metric_names in vocabulary: {missing}"
+    assert not missing, (
+        f"Missing metric_names in vocabulary: {missing}. "
+        "This usually means load_metric_vocabulary() is stringifying dicts instead "
+        "of extracting metric_name keys from B1's object-list YAML."
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. PIT discipline: chunk not yet available is silently skipped
+# ---------------------------------------------------------------------------
+
+
+def test_pit_future_chunk_dropped():
+    """A chunk with available_at AFTER as_of_date must yield zero claims."""
+    claim_that_should_not_emit = QuantifiedClaim(
+        company_id="ACME",
+        metric_name="revenue",
+        value=7.0,
+        unit="CAD_billions",
+        period="Q1 2025",
+        direction="",
+        is_guidance=False,
+        evidence_chunk_id="",
+        confidence=0.9,
+    )
+
+    # as_of_date = 2024-12-31, chunk available_at = 2025-03-01 (future chunk)
+    run_id, discovery = _make_run(
+        chunk_text="Acme Corp revenue was $7 billion in Q1 2025.",
+        chunk_company_id="ACME",
+        available_at="2025-03-01",   # AFTER as_of_date
+        as_of_date="2024-12-31",
+    )
+
+    count = run_fact_extraction(
+        run_id, fact_extractor=FakeFactExtractor([claim_that_should_not_emit])
+    )
+    assert count == 0, (
+        f"Expected 0 claims from a future-dated chunk; got {count}. "
+        "PIT filter must drop chunks where available_at > as_of_date."
+    )
+
+    rows = pq.read_table(discovery / "financial_metrics.parquet").to_pylist()
+    assert rows == [], f"Expected empty metrics table for future chunk; got: {rows}"
+
+
+# ---------------------------------------------------------------------------
+# 6. Period normalizer unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("period,expected", [
+    ("Q1 2024", "2024-03-31"),
+    ("Q2 2024", "2024-06-30"),
+    ("Q3 2023", "2023-09-30"),
+    ("Q4 2022", "2022-12-31"),
+    ("FY2023", "2023-12-31"),
+    ("FY 2024", "2024-12-31"),
+    ("H1 2024", "2024-06-30"),
+    ("H2 2023", "2023-12-31"),
+    ("unknown period", None),
+    ("", None),
+])
+def test_period_normalizer(period, expected):
+    """_normalize_period_to_iso must map common LLM period strings to ISO dates."""
+    assert _normalize_period_to_iso(period) == expected, (
+        f"_normalize_period_to_iso({period!r}) should be {expected!r}"
+    )

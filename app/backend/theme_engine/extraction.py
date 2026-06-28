@@ -918,10 +918,11 @@ _FALLBACK_METRIC_NAMES = frozenset(
 def load_metric_vocabulary() -> frozenset[str]:
     """Return the canonical metric_name whitelist from configs/fundamentals.yml.
 
+    Supports both the old flat-string format (list of plain strings) and
+    B1's object-list format (list of dicts with a ``metric_name`` key).
     Falls back to the built-in set when the file or pyyaml is absent so that
     tests and CI stay hermetic regardless of B1 merge status.
     """
-    config_dir = Path("configs")
     # Honour CONFIG_DIR env var the same way registry.py does.
     import os as _os  # noqa: PLC0415
     config_dir = Path(_os.environ.get("CONFIG_DIR", "configs"))
@@ -931,9 +932,20 @@ def load_metric_vocabulary() -> frozenset[str]:
     try:
         import yaml as _yaml  # noqa: PLC0415
         data = _yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        names = data.get("metrics") or []
-        if names:
-            return frozenset(str(n) for n in names)
+        items = data.get("metrics") or []
+        if items:
+            names: list[str] = []
+            for m in items:
+                if isinstance(m, dict):
+                    # B1 object-list format: {"metric_name": "revenue", ...}
+                    n = m.get("metric_name")
+                    if n:
+                        names.append(str(n))
+                else:
+                    # Legacy flat-string format: "revenue"
+                    names.append(str(m))
+            if names:
+                return frozenset(names)
     except Exception:
         pass
     return _FALLBACK_METRIC_NAMES
@@ -1369,7 +1381,60 @@ B1_FUNDAMENTALS_COLUMNS = (
     "company_id", "period_end", "metric_name", "metric_value",
     "unit", "currency", "filing_date", "available_at", "source", "source_id",
 )
-_B1_ARTIFACT_NAME = "financial_fundamentals_xbrl.parquet"
+_B1_ARTIFACT_NAME = "fundamentals_asreported.parquet"  # matches B1's FUNDAMENTALS_ARTIFACT
+
+# ---------------------------------------------------------------------------
+# Period normalization: LLM free-text -> ISO calendar quarter-end date
+# ---------------------------------------------------------------------------
+#
+# B1 stores period_end as ISO YYYY-MM-DD (e.g. "2024-06-30").
+# B2 / LLM produces free-text periods like "Q2 2024", "FY2023", "H1 2024".
+# This helper maps LLM periods to their canonical quarter-end ISO dates so
+# that reconciliation can match across the two representations.
+
+_QUARTER_END: dict[int, str] = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+_HALF_END: dict[int, str] = {1: "06-30", 2: "12-31"}
+
+_PERIOD_NORM_RE = re.compile(
+    r"""
+    (?:
+        (?P<q>Q[1-4])\s*(?P<qy>\d{4})   # Q1 2024 / Q12024
+      | (?:FY|F\.?Y\.?)\s*(?P<fy>\d{4}) # FY2023 / FY 2023
+      | (?P<h>H[12])\s*(?P<hy>\d{4})    # H1 2024 / H2 2024
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _normalize_period_to_iso(period: str) -> Optional[str]:
+    """Convert a LLM free-text period string to an ISO YYYY-MM-DD quarter-end date.
+
+    Examples
+    --------
+    >>> _normalize_period_to_iso("Q2 2024")
+    '2024-06-30'
+    >>> _normalize_period_to_iso("FY2023")
+    '2023-12-31'
+    >>> _normalize_period_to_iso("H1 2024")
+    '2024-06-30'
+    >>> _normalize_period_to_iso("unknown")
+    None
+    """
+    m = _PERIOD_NORM_RE.search(period)
+    if not m:
+        return None
+    if m.group("q") and m.group("qy"):
+        q = int(m.group("q")[1])
+        y = m.group("qy")
+        return f"{y}-{_QUARTER_END[q]}"
+    if m.group("fy"):
+        return f"{m.group('fy')}-12-31"
+    if m.group("h") and m.group("hy"):
+        h = int(m.group("h")[1])
+        y = m.group("hy")
+        return f"{y}-{_HALF_END[h]}"
+    return None
 
 
 def _load_b1_fundamentals(run_id: str) -> dict[tuple[str, str, str], dict]:
@@ -1417,16 +1482,6 @@ def _stable_fm_edge_id(company_entity_id: str, metric_id: str, edge_type: str) -
 # ---------------------------------------------------------------------------
 # Company-id extraction helper
 # ---------------------------------------------------------------------------
-
-# Map company names from chunk source metadata to canonical company_ids.
-# The chunk's `company_id` field (from source manifest) is the authoritative source.
-_COMPANY_ID_FALLBACK: dict[str, str] = {
-    "acme": "ACME",
-    "acme corp": "ACME",
-    "beta": "BETA",
-    "beta industries": "BETA",
-}
-
 
 def _company_entity_id_from_name(company_id: str) -> str:
     """Look up or derive the entity_id for a company by company_id / name."""
@@ -1565,16 +1620,17 @@ def run_fact_extraction(
 
     # Reconciliation: drop as-reported claims when a B1 XBRL row covers the
     # same (company_id, period_end, metric_name).
-    # `period` from LLM is free-text; we match case-insensitively to period_end.
-    # We keep guidance claims even when XBRL covers the same (company, metric).
+    # B1 stores period_end as ISO YYYY-MM-DD (e.g. "2024-06-30").
+    # LLM produces free-text periods ("Q2 2024", "FY2023", "H1 2024") which
+    # are normalized to their calendar quarter-end date before matching.
+    # Guidance claims (is_guidance=True) are always kept regardless.
     filtered_claims: list[tuple[QuantifiedClaim, list[str]]] = []
     for (company_id, metric_name, period, is_guidance), (claim, chunk_ids) in claim_map.items():
         if not is_guidance:
-            # Check for an XBRL row that covers this (company, period, metric).
-            # period_end in B1 is YYYY-MM-DD; period from LLM is free-text like "Q2 2024".
-            # We do a best-effort match: skip if any B1 row matches on company+metric
-            # and the period string appears in either side.
-            xbrl_key = (company_id, period, metric_name)
+            # Normalize the LLM free-text period to a YYYY-MM-DD date so we
+            # can look it up in B1's ISO period_end index.
+            iso_period = _normalize_period_to_iso(period) or period
+            xbrl_key = (company_id, iso_period, metric_name)
             if xbrl_key in b1_index:
                 # XBRL wins — drop the LLM as-reported claim.
                 continue

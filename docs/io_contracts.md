@@ -746,6 +746,93 @@ Rules:
 - Discovery stages may read this artifact; validation stages may not use it as a
   substitute for the §20 artifact.
 
+## 20b. `financial_metrics.parquet` (discovery-time, EG-B2)
+
+**New in EG-B2.** One row per quantified financial claim extracted by the LLM
+fact-extraction pass (`run_fact_extraction`). Emits `FinancialMetric` nodes
+into the graph.
+
+Path: `data/runs/<run_id>/discovery/financial_metrics.parquet`
+
+**PIT rule:** Only chunks with `available_at <= run.as_of_date` are processed.
+Claims derived from future-dated chunks are silently dropped before any claim
+is written.
+
+**Reconciliation:** The B1 XBRL artifact (`fundamentals_asreported.parquet`)
+is the authoritative source for as-reported values. When B1 covers a
+`(company_id, period_end, metric_name)` triple, the corresponding B2 LLM
+as-reported claim (`is_guidance=False`) is dropped. B2 LLM guidance claims
+(`is_guidance=True`) are always kept regardless of B1 overlap.
+
+Period matching: B1 stores `period_end` as ISO YYYY-MM-DD. B2 LLM periods are
+free-text (e.g. "Q2 2024"). The reconciliation layer normalizes LLM periods to
+their calendar quarter-end ISO date before the lookup:
+- "Q1 YYYY" -> "YYYY-03-31", "Q2 YYYY" -> "YYYY-06-30"
+- "Q3 YYYY" -> "YYYY-09-30", "Q4 YYYY" -> "YYYY-12-31"
+- "FY YYYY" -> "YYYY-12-31"
+- "H1 YYYY" -> "YYYY-06-30", "H2 YYYY" -> "YYYY-12-31"
+
+Required columns:
+
+```text
+schema_version:    string        — "1.0"
+metric_id:         string        — stable deterministic id (fm_<sha256[:16]>)
+company_id:        string        — canonical company identifier (tsx_ticker)
+metric_name:       string        — from configs/fundamentals.yml whitelist
+value:             float         — extracted numeric value
+unit:              string        — e.g. "CAD_billions", "percent", "CAD_per_share"
+period:            string        — LLM free-text period (e.g. "Q2 2024", "FY 2024")
+direction:         string        — "rose" | "fell" | "stable" | "" (empty = unknown)
+is_guidance:       bool          — True = forward-looking / management guidance
+confidence:        float         — 0.0–1.0 extractor confidence score
+evidence_chunk_id: string        — REQUIRED: non-empty chunk_id of the source text
+source:            string        — extractor name (e.g. "rule_based_fact_extractor_v1")
+created_at:        string        — ISO UTC timestamp of row creation
+```
+
+Rules:
+
+- Every row MUST have a non-empty `evidence_chunk_id`. Claims without evidence
+  are dropped before writing.
+- `metric_name` must be in the `configs/fundamentals.yml` whitelist.
+- `metric_id` is stable: same `(company_id, metric_name, period, is_guidance)`
+  always yields the same `metric_id`.
+- B2 never overwrites B1 as-reported values; only guidance values are exclusive
+  to B2.
+
+## 20c. `financial_metric_edges.parquet` (discovery-time, EG-B2)
+
+**New in EG-B2.** One row per edge connecting a Company entity to a
+FinancialMetric node. Written alongside `financial_metrics.parquet` by
+`run_fact_extraction`.
+
+Path: `data/runs/<run_id>/discovery/financial_metric_edges.parquet`
+
+Edge types:
+- `reports` — Company reported this metric (is_guidance=False)
+- `guides_to` — Company issued guidance for this metric (is_guidance=True)
+
+Required columns:
+
+```text
+schema_version:    string        — "1.0"
+edge_id:           string        — stable deterministic id (fme_<sha256[:16]>)
+company_entity_id: string        — entity_id of the Company node (from entities.parquet)
+metric_id:         string        — metric_id from financial_metrics.parquet
+edge_type:         string        — "reports" | "guides_to"
+evidence_chunk_ids: list[string] — all chunk_ids that contributed evidence for this edge
+confidence:        float         — 0.0–1.0
+created_at:        string        — ISO UTC timestamp of row creation
+```
+
+Rules:
+
+- `edge_id` is stable: same `(company_entity_id, metric_id, edge_type)` always
+  yields the same `edge_id`.
+- `evidence_chunk_ids` must be non-empty (at least one chunk must provide the
+  evidence that grounded the corresponding `financial_metrics` row).
+- `edge_type` maps 1-to-1 from `is_guidance`: False -> "reports", True -> "guides_to".
+
 ## 20. `fundamentals.parquet`
 
 **Validation-only** — this is the §20 artifact for walk-forward validation.
