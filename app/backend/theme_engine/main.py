@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, company_profile as company_profile_mod, company_sentiment as company_sentiment_mod, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
+from . import artifacts as artifacts_mod, chunking, company_profile as company_profile_mod, company_sentiment as company_sentiment_mod, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, projection_ui as projection_ui_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -621,3 +621,57 @@ def report_generate(req: ReportGenerateRequest) -> ReportGenerateResponse:
         artifact="report.md",
         report_path=relative_path,
     )
+
+
+@app.get("/api/themes/{run_id}/projections/triggers")
+def get_projection_triggers(run_id: str):
+    """FI-F: List data-driven Event triggers present in projected_impacts.parquet.
+
+    Returns each trigger with its graph label and the count of companies it
+    reaches.  Triggers are sorted alphabetically by label.
+
+    Raises 404 if projected_impacts.parquet has not been built for this run
+    (run POST /api/fi/compute-projections first).
+
+    PIT-clean: projected_impacts.parquet is already PIT-filtered by FI-C.
+    Projections are HYPOTHETICAL — the UI must label them accordingly.
+    """
+    try:
+        return projection_ui_mod.list_projection_triggers(run_id)
+    except HTTPException:
+        raise
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/themes/{run_id}/projections")
+def get_run_projections(run_id: str, trigger: str = ""):
+    """FI-F: Ranked projected company impacts for a given Event trigger.
+
+    Query params:
+      trigger (required): trigger_id (entity_id of an Event node)
+
+    Returns a ranked list of company impacts (strongest first) each with:
+      - direction (+1/-1), strength (ordinal, NOT probability), confidence
+      - sign_blind flag: True when direction is provisional (issue #110 caveat)
+      - path: list of edge_ids forming the causal chain
+      - path_graph: LayeredGraph-compatible {nodes, edges} subgraph for the path
+      - evidence_chunk_ids: resolvable via GET /api/themes/{run_id}/chunks/{chunk_id}
+
+    When the trigger reaches no companies, returns empty impacts list with an
+    explicit empty_reason string — never silently blank.
+
+    PIT-clean: inherited from projected_impacts.parquet (FI-C guarantee).
+    Projections are HYPOTHETICAL — never style them as stated facts.
+    """
+    if not trigger or not trigger.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="provide ?trigger=<trigger_id> (entity_id of an Event node)",
+        )
+    try:
+        return projection_ui_mod.get_projections(run_id, trigger.strip())
+    except HTTPException:
+        raise
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

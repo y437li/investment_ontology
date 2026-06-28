@@ -126,6 +126,40 @@ export function getCompanyEvidence(runId, companyId) {
 }
 
 /**
+ * FI-F: List data-driven Event triggers present in projected_impacts.parquet.
+ * Returns {
+ *   as_of_date: str, trigger_count: int,
+ *   triggers: [{ trigger_id, trigger_kind, label, company_count }]
+ * }
+ * Raises 404 if projected_impacts.parquet not yet built for this run.
+ * PIT-clean; projections are HYPOTHETICAL.
+ */
+export function getProjectionTriggers(runId) {
+  return service.get(`/api/themes/${runId}/projections/triggers`)
+}
+
+/**
+ * FI-F: Ranked projected company impacts for a given Event trigger.
+ * Returns {
+ *   trigger_id, trigger_kind, trigger_label, as_of_date,
+ *   impact_count: int, empty_reason: str|null,
+ *   impacts: [{
+ *     company_id, company_name,
+ *     direction: +1|-1, strength: float, confidence: float,
+ *     sign_blind: bool,   // true when direction is provisional (#110)
+ *     path: [edge_id],
+ *     path_graph: { nodes:[{id,label,entity_type,level}], edges:[{source,target,edge_type}] },
+ *     evidence_chunk_ids: [chunk_id]
+ *   }]
+ * }
+ * empty_reason is set (never null) when impact_count == 0.
+ * PIT-clean; projections are HYPOTHETICAL.
+ */
+export function getProjections(runId, triggerId) {
+  return service.get(`/api/themes/${runId}/projections?trigger=${encodeURIComponent(triggerId)}`)
+}
+
+/**
  * SENT-D: Management-sentiment panel data for a company.
  * Returns {
  *   company_id, as_of_date, available: bool, message: str|null,

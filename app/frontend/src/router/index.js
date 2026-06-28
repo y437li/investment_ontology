@@ -9,6 +9,7 @@ import ValidationView from '../views/ValidationView.vue'
 import ReportView from '../views/ReportView.vue'
 import InteractionView from '../views/InteractionView.vue'
 import CompanyView from '../views/CompanyView.vue'
+import ScenarioView from '../views/ScenarioView.vue'
 
 const routes = [
   {
@@ -69,6 +70,14 @@ const routes = [
     path: '/runs/:runId/companies/:companyId',
     name: 'Company',
     component: CompanyView,
+    props: true
+  },
+  {
+    // FI-F: projected scenarios (data-driven Event triggers -> company impacts)
+    // v1: browse-only; no user scenario input (that is v1.1)
+    path: '/runs/:runId/scenarios',
+    name: 'Scenarios',
+    component: ScenarioView,
     props: true
   }
 ]
