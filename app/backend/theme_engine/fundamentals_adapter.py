@@ -1,9 +1,20 @@
-"""As-reported fundamentals adapter: EDGAR XBRL ingestion (US-listed).
+"""As-reported fundamentals adapter: EDGAR XBRL ingestion for the TSX 60 universe.
 
 Reads a locally stored EDGAR *company facts* JSON (the payload returned by
 ``data.sec.gov/api/xbrl/companyfacts/CIK##########.json``) and emits
 as-reported financial metric rows into the discovery-time fundamentals
 artifact ``discovery/fundamentals_asreported.parquet``.
+
+Universe: S&P/TSX 60 (Canadian companies; currency CAD; country Canada).
+Each constituent has a ``tsx_ticker`` and optionally a ``sec_cik`` (U.S. SEC
+Central Index Key for cross-listed filers). Companies with ``sec_cik=null``
+have no EDGAR data: the adapter writes an empty-but-schema-valid artifact for
+them.  Companies with a CIK file 40-F forms and report under the IFRS
+taxonomy (``ifrs-full`` namespace).
+
+Taxonomy priority:
+  1. ``ifrs-full`` — primary for Canadian cross-filers.
+  2. ``us-gaap``  — fallback for any constituent that reports US-GAAP.
 
 THIS IS A DISCOVERY ARTIFACT — completely separate from the validation-only
 ``validation/fundamentals.parquet`` (io_contracts §20). Discovery stages
@@ -23,8 +34,14 @@ Design constraints (load-bearing; match macro_adapter / altdata_adapter):
   libraries. Callers download the company-facts JSON and pass its path.
 - DETERMINISTIC: given the same input files and config, produces the same
   artifact (no wall-clock or RNG dependency).
-- EMPTY-SAFE: when no XBRL file exists for a company, the adapter writes a
-  schema-valid empty artifact (zero rows, correct columns).
+- EMPTY-SAFE: when no XBRL file exists for a company (sec_cik is null or
+  the file is absent), the adapter writes a schema-valid empty artifact
+  (zero rows, correct columns).
+
+Currency handling:
+  Currency is read from the XBRL unit string (e.g. "CAD", "CAD/shares",
+  "USD", "USD/shares"). Do NOT assume USD. The ``currency`` column stores
+  the ISO code extracted from the unit (e.g. "CAD/shares" -> "CAD").
 
 Reconciliation note (shared B1/B2 contract):
   Key = (company_id, period_end, metric_name).
@@ -66,11 +83,19 @@ FUNDAMENTALS_COLUMNS: list[str] = [
 # Discovery artifact filename (never the §20 validation path).
 FUNDAMENTALS_ARTIFACT = "fundamentals_asreported.parquet"
 
+# EDGAR taxonomy namespaces to search, in priority order.
+# ifrs-full is primary for Canadian cross-filers (40-F forms); us-gaap is
+# the fallback for any constituent that reports US-GAAP (10-K forms).
+_TAXONOMY_PRIORITY = ["ifrs-full", "us-gaap"]
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 _DATE_FMT = "%Y-%m-%d"
+
+# Known currencies for unit extraction (extend as needed).
+_KNOWN_CURRENCIES = frozenset({"CAD", "USD", "EUR", "GBP", "AUD", "CHF", "JPY"})
 
 
 def _config_dir() -> Path:
@@ -88,7 +113,7 @@ def _load_fundamentals_config() -> dict:
 def _metric_index(cfg: dict) -> dict[str, dict]:
     """Build {concept_name: metric_cfg} lookup from the config metric list.
 
-    A concept may appear in multiple metrics (e.g. Revenues as denominator for
+    A concept may appear in multiple metrics (e.g. Revenue as denominator for
     margin computation). We resolve by direct-match first, then derived.
     """
     direct: dict[str, dict] = {}
@@ -118,6 +143,50 @@ def _source_id(company_id: str, accession: str) -> str:
     return hashlib.sha256(f"{company_id}|{accession}".encode()).hexdigest()[:16]
 
 
+def _extract_currency(unit_str: str) -> str | None:
+    """Extract ISO currency code from an XBRL unit string.
+
+    Examples:
+      "CAD"        -> "CAD"
+      "USD"        -> "USD"
+      "CAD/shares" -> "CAD"   (EPS unit; currency is the base)
+      "USD/shares" -> "USD"
+      "pure"       -> None
+      "ratio"      -> None
+    """
+    # Direct match (e.g. "CAD", "USD")
+    if unit_str in _KNOWN_CURRENCIES:
+        return unit_str
+    # Slash-separated (e.g. "CAD/shares", "USD/shares")
+    if "/" in unit_str:
+        base = unit_str.split("/")[0]
+        if base in _KNOWN_CURRENCIES:
+            return base
+    return None
+
+
+def _merge_taxonomy_concepts(facts_json: dict) -> dict[str, dict]:
+    """Merge ifrs-full and us-gaap concept dicts into one, IFRS winning.
+
+    Returns {concept_name: concept_data} where ifrs-full entries shadow any
+    same-named us-gaap entries. This lets the metric_index do a single pass.
+    """
+    merged: dict[str, dict] = {}
+    # us-gaap loaded first (lower priority)
+    for concept_name, concept_data in (
+        (facts_json.get("facts") or {}).get("us-gaap") or {}
+    ).items():
+        merged[concept_name] = concept_data
+
+    # ifrs-full loaded second (wins on conflict)
+    for concept_name, concept_data in (
+        (facts_json.get("facts") or {}).get("ifrs-full") or {}
+    ).items():
+        merged[concept_name] = concept_data
+
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # EDGAR company-facts JSON parsing
 # ---------------------------------------------------------------------------
@@ -136,7 +205,7 @@ def _parse_company_facts(
     facts_json:
         Parsed content of a CIK########.json company-facts file.
     company_id:
-        Canonical company identifier (ticker or CIK-based).
+        Canonical company identifier (tsx_ticker or sec_cik-based string).
     as_of:
         If provided, only rows with available_at <= as_of are returned
         (PIT filter). Pass None to return all rows (useful for tests).
@@ -144,8 +213,14 @@ def _parse_company_facts(
         {concept_name: metric_cfg} from _metric_index().
     derived:
         List of metric configs that require computation across concepts.
+
+    Taxonomy priority:
+        ifrs-full is searched first; us-gaap is the fallback. When both
+        namespaces define the same concept name, ifrs-full wins.
     """
-    us_gaap = (facts_json.get("facts") or {}).get("us-gaap") or {}
+    # Merge ifrs-full (primary) and us-gaap (fallback) into a single concept map.
+    all_concepts = _merge_taxonomy_concepts(facts_json)
+
     rows: list[dict] = []
 
     # --- Step 1: direct concept -> metric_name mapping ---
@@ -153,7 +228,7 @@ def _parse_company_facts(
     # can reuse them for margin computation.
     raw_by_concept: dict[str, dict[tuple[str, str], dict]] = {}
 
-    for concept_name, concept_data in us_gaap.items():
+    for concept_name, concept_data in all_concepts.items():
         units_map = (concept_data.get("units") or {})
         for unit_str, observations in units_map.items():
             for obs in (observations or []):
@@ -171,9 +246,6 @@ def _parse_company_facts(
                 accn = obs.get("accn") or ""
                 form = obs.get("form") or ""
 
-                # Only annual and quarterly periodical filings (10-K / 10-Q);
-                # skip instant-point balance sheet observations (no start/end span
-                # distinction here — EDGAR includes both; we take all with a filed date).
                 bucket = raw_by_concept.setdefault(concept_name, {})
                 key = (end, filed)
                 # If we already have this (concept, period_end, filing_date),
@@ -191,14 +263,16 @@ def _parse_company_facts(
                 # Emit direct metrics
                 if concept_name in metric_idx:
                     m = metric_idx[concept_name]
-                    currency = unit_str if unit_str.startswith("USD") or unit_str == "CAD" else None
+                    # Currency is always read from the XBRL unit — never assumed.
+                    # "CAD/shares" -> currency "CAD"; "ratio"/"pure" -> None.
+                    currency = _extract_currency(unit_str)
                     rows.append({
                         "company_id": company_id,
                         "period_end": end,
                         "metric_name": m["metric_name"],
                         "metric_value": float(val),
-                        "unit": m.get("unit") or unit_str,
-                        "currency": currency,
+                        "unit": unit_str,      # actual XBRL unit (e.g. "CAD", "CAD/shares")
+                        "currency": currency,  # ISO code extracted from unit
                         "filing_date": filed,
                         "available_at": filed,
                         "source": "edgar_xbrl",
@@ -288,12 +362,19 @@ def _empty_table() -> pa.Table:
 
 
 def _rows_to_table(rows: list[dict]) -> pa.Table:
+    """Convert a list of row dicts to a PyArrow table with a pinned schema.
+
+    The schema is always pinned to _empty_table()'s schema so that all-None
+    columns (e.g. currency for ratio metrics) keep the string type rather than
+    being inferred as pa.null(). This prevents schema mismatches on read-back.
+    """
     if not rows:
         return _empty_table()
-    return pa.Table.from_pylist([
-        {col: row.get(col) for col in FUNDAMENTALS_COLUMNS}
-        for row in rows
-    ])
+    schema = _empty_table().schema
+    return pa.Table.from_pylist(
+        [{col: row.get(col) for col in FUNDAMENTALS_COLUMNS} for row in rows],
+        schema=schema,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -315,10 +396,13 @@ def ingest_xbrl(
     run_id:
         The pipeline run identifier.
     company_id:
-        Canonical company identifier (e.g. ticker "AAPL" or "CIK320193").
+        Canonical company identifier (e.g. tsx_ticker "RY.TO" or sec_cik
+        string "0001000275"). For companies with sec_cik=null in the universe
+        config, pass the ticker and pass facts_json_path=None.
     facts_json_path:
         Path to the local company-facts JSON file. Pass None to emit an
-        empty-but-schema-valid artifact for companies with no XBRL.
+        empty-but-schema-valid artifact for companies with no XBRL
+        (i.e. sec_cik is null in the universe config).
     config_path:
         Optional override for the fundamentals config file path (for tests).
 

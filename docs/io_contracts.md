@@ -693,22 +693,40 @@ Rules:
 produced by the XBRL ingestion adapter (`fundamentals_adapter.py`) during
 **discovery**. This is **separate** from the validation-only §20 artifact below.
 
+**Universe note:** This artifact serves the S&P/TSX 60 (Canadian companies;
+currency CAD). Companies are identified by their `tsx_ticker`; cross-listed
+filers are fetched by `sec_cik` from `configs/universe.tsx60.yml`. Companies
+with `sec_cik=null` have no EDGAR data and receive an empty-but-schema-valid
+artifact.
+
+**Taxonomy note:** Canadian cross-filers use IFRS (`ifrs-full` namespace in
+EDGAR company-facts JSON). The adapter searches `ifrs-full` first, then
+`us-gaap` as fallback. IFRS concepts used: `Revenue`, `ProfitLoss`,
+`BasicEarningsLossPerShare`, `CashFlowsFromUsedInOperatingActivities`,
+`LongtermBorrowings`, `GrossProfit`, `ProfitFromOperatingActivities`.
+
 Path: `data/runs/<run_id>/discovery/fundamentals_asreported.parquet`
 
 Required columns:
 
 ```text
-company_id:    string         — canonical company identifier (ticker or CIK-based)
+company_id:    string         — canonical company identifier (tsx_ticker, e.g. "RY.TO")
 period_end:    string (date)  — fiscal period end date (YYYY-MM-DD)
 metric_name:   string         — canonical metric name from configs/fundamentals.yml
 metric_value:  float          — as-reported numeric value
-unit:          string         — e.g. "USD", "USD/share", "ratio"
-currency:      string | null  — ISO currency code for monetary metrics; null for ratios
+unit:          string         — actual XBRL unit, e.g. "CAD", "CAD/shares", "ratio"
+currency:      string | null  — ISO currency code extracted from unit (e.g. "CAD");
+                                null for ratios and unitless metrics
 filing_date:   string (date)  — date the filing became public (EDGAR filingDate)
 available_at:  string (date)  — = filing_date (PIT: first public date; never period_end)
-source:        string         — e.g. "edgar_xbrl"
+source:        string         — "edgar_xbrl"
 source_id:     string         — stable hash of (company_id, accession_number)
 ```
+
+Currency rules:
+- `currency` is always read from the XBRL unit string, never assumed or hardcoded.
+- `"CAD"` -> currency `"CAD"`. `"CAD/shares"` (EPS) -> currency `"CAD"`, unit `"CAD/shares"`.
+- Ratio metrics (gross_margin, operating_margin, ebitda_margin) have `currency=null`.
 
 Reconciliation key: `(company_id, period_end, metric_name)`.
 For any as-reported overlap between B1 (XBRL) and B2 (LLM), **B1 wins**; B2
@@ -723,8 +741,8 @@ Rules:
   hardcoded inside adapter code.
 - As-reported values only (first published); later restatements are new rows with
   a later `filing_date` but must not silently overwrite earlier rows.
-- If a company has no XBRL, write a schema-valid empty artifact (zero rows, same
-  columns). Do not omit the artifact.
+- Companies with `sec_cik=null` in the universe config have no EDGAR data; write
+  a schema-valid empty artifact (zero rows, same columns). Do not omit the artifact.
 - Discovery stages may read this artifact; validation stages may not use it as a
   substitute for the §20 artifact.
 
