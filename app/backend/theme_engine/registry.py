@@ -54,6 +54,26 @@ def structural_edge_types() -> list[str]:
     return [k for k, v in et.items() if (v or {}).get("structural")]
 
 
+def edge_base_polarity(edge_type: str) -> int:
+    """Return the base polarity for an edge type from configs/ontology.yml.
+
+    Polarity values:
+      +1  edge carries a positive / same-direction signal
+      -1  edge carries a negative / opposite-direction signal
+       0  edge is undirected, evidence-only, or excluded from signed propagation
+
+    The polarity is derived solely from the ontology config so the config is
+    the single source of truth.  For edge types that lack a ``base_polarity``
+    entry (unknown / future types) this returns 0 as a safe default.
+    """
+    et = load_ontology().get("edge_types") or {}
+    entry = (et.get(edge_type) or {})
+    val = entry.get("base_polarity")
+    if val is None:
+        return 0
+    return int(val)
+
+
 def entity_level(entity_type: str) -> str | None:
     """Factor-hierarchy level for an entity type (macro/industry/company/idiosyncratic/...)."""
     return ((load_ontology().get("entity_types") or {}).get(entity_type) or {}).get("level")
