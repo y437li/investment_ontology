@@ -1,0 +1,190 @@
+{
+  "cik": "1000275",
+  "entityName": "Royal Bank of Canada",
+  "facts": {
+    "ifrs-full": {
+      "Revenue": {
+        "label": "Revenue",
+        "description": "Income arising in the course of an entity's ordinary activities.",
+        "units": {
+          "CAD": [
+            {
+              "end": "2023-10-31",
+              "val": 57290000000,
+              "accn": "0001000275-23-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2023-12-01"
+            },
+            {
+              "end": "2022-10-31",
+              "val": 49107000000,
+              "accn": "0001000275-22-000008",
+              "fy": 2022,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2022-12-02"
+            }
+          ]
+        }
+      },
+      "ProfitLoss": {
+        "label": "Profit (Loss)",
+        "description": "The total of income less expenses from continuing and discontinued operations.",
+        "units": {
+          "CAD": [
+            {
+              "end": "2023-10-31",
+              "val": 14897000000,
+              "accn": "0001000275-23-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2023-12-01"
+            },
+            {
+              "end": "2022-10-31",
+              "val": 15793000000,
+              "accn": "0001000275-22-000008",
+              "fy": 2022,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2022-12-02"
+            }
+          ]
+        }
+      },
+      "BasicEarningsLossPerShare": {
+        "label": "Basic Earnings (Loss) Per Share",
+        "description": "The amount of profit (loss) attributable to ordinary equity holders of the parent entity per share.",
+        "units": {
+          "CAD/shares": [
+            {
+              "end": "2023-10-31",
+              "val": 10.50,
+              "accn": "0001000275-23-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2023-12-01"
+            },
+            {
+              "end": "2022-10-31",
+              "val": 10.96,
+              "accn": "0001000275-22-000008",
+              "fy": 2022,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2022-12-02"
+            }
+          ]
+        }
+      },
+      "CashFlowsFromUsedInOperatingActivities": {
+        "label": "Cash Flows From (Used In) Operating Activities",
+        "description": "The amount of cash flows from (used in) operating activities.",
+        "units": {
+          "CAD": [
+            {
+              "end": "2023-10-31",
+              "val": 6239000000,
+              "accn": "0001000275-23-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2023-12-01"
+            },
+            {
+              "end": "2022-10-31",
+              "val": 3172000000,
+              "accn": "0001000275-22-000008",
+              "fy": 2022,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2022-12-02"
+            }
+          ]
+        }
+      },
+      "LongtermBorrowings": {
+        "label": "Long-term Borrowings",
+        "description": "The amount of long-term borrowings.",
+        "units": {
+          "CAD": [
+            {
+              "end": "2023-10-31",
+              "val": 197623000000,
+              "accn": "0001000275-23-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2023-12-01"
+            },
+            {
+              "end": "2022-10-31",
+              "val": 170521000000,
+              "accn": "0001000275-22-000008",
+              "fy": 2022,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2022-12-02"
+            }
+          ]
+        }
+      },
+      "GrossProfit": {
+        "label": "Gross Profit",
+        "description": "The amount of profit after cost of sales.",
+        "units": {
+          "CAD": [
+            {
+              "end": "2023-10-31",
+              "val": 25000000000,
+              "accn": "0001000275-23-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2023-12-01"
+            },
+            {
+              "end": "2022-10-31",
+              "val": 21420000000,
+              "accn": "0001000275-22-000008",
+              "fy": 2022,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2022-12-02"
+            }
+          ]
+        }
+      },
+      "ProfitFromOperatingActivities": {
+        "label": "Profit From Operating Activities",
+        "description": "The amount of profit from operating activities.",
+        "units": {
+          "CAD": [
+            {
+              "end": "2023-10-31",
+              "val": 18000000000,
+              "accn": "0001000275-23-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2023-12-01"
+            },
+            {
+              "end": "2022-10-31",
+              "val": 15500000000,
+              "accn": "0001000275-22-000008",
+              "fy": 2022,
+              "fp": "FY",
+              "form": "40-F",
+              "filed": "2022-12-02"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

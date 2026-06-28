@@ -1,0 +1,157 @@
+# As-reported fundamentals configuration.
+#
+# metric_name values here are the canonical whitelist used by BOTH B1 (XBRL)
+# and B2 (LLM extraction). Never add metric_name strings anywhere else — all
+# code must draw from this file.
+#
+# Universe: S&P/TSX 60 (Canadian companies; currency CAD).
+#   Taxonomy priority: IFRS full (ifrs-full) is PRIMARY for Canadian cross-filers;
+#   US-GAAP (us-gaap) is FALLBACK for any constituent that reports US-GAAP.
+#   The adapter searches the ifrs-full namespace first, then us-gaap.
+#
+# xbrl_concepts lists the XBRL element names (prefix-stripped) that map to each
+# metric_name. Names present in both taxonomies are disambiguated at the
+# namespace level in the adapter (ifrs-full wins). The FIRST matching concept
+# per namespace wins.
+#
+# Computed metrics (margins) are derived from their component concepts when
+# both numerator and denominator are available in either taxonomy.
+#
+# For as-reported: only the filing-date vintage of each value is stored
+# (available_at = filing_date). No forward-looking or restatement values.
+#
+# Currency: read from the XBRL unit at ingest time (e.g. "CAD", "CAD/shares").
+# Do NOT assume USD; Canadian filers report in CAD.
+
+version: 1
+
+# PIT discipline: filing_date is the date the document became public;
+# available_at = filing_date for every row.
+source_mapping:
+  edgar_xbrl:
+    source: edgar_xbrl
+    base_url: https://data.sec.gov/api/xbrl/companyfacts
+    lag_days: 0          # available_at = filing_date; no extra lag
+
+metrics:
+  # ---- Income statement ----
+  - metric_name: revenue
+    xbrl_concepts:
+      # IFRS primary (ifrs-full namespace)
+      - Revenue
+      # US-GAAP fallback
+      - Revenues
+      - RevenueFromContractWithCustomerExcludingAssessedTax
+      - SalesRevenueNet
+      - RevenueFromContractWithCustomerIncludingAssessedTax
+    notes: >
+      Total revenues as reported. IFRS: Revenue. US-GAAP: Revenues /
+      RevenueFromContractWithCustomerExcludingAssessedTax. Currency read
+      from XBRL unit (CAD for Canadian filers).
+
+  - metric_name: net_income
+    xbrl_concepts:
+      # IFRS primary
+      - ProfitLoss
+      # US-GAAP fallback
+      - NetIncomeLoss
+      - NetIncomeLossAvailableToCommonStockholdersBasic
+    notes: >
+      Net income (loss) for the period. IFRS: ProfitLoss. US-GAAP: NetIncomeLoss.
+
+  - metric_name: eps
+    xbrl_concepts:
+      # IFRS primary (basic preferred; diluted as alternative)
+      - BasicEarningsLossPerShare
+      - DilutedEarningsLossPerShare
+      # US-GAAP fallback
+      - EarningsPerShareDiluted
+      - EarningsPerShareBasic
+    notes: >
+      Earnings per share. IFRS: BasicEarningsLossPerShare (or Diluted).
+      US-GAAP: EarningsPerShareDiluted. Currency extracted from XBRL unit
+      (e.g. "CAD/shares" -> currency "CAD", unit "CAD/shares").
+
+  # ---- Margins (computed from XBRL component values) ----
+  - metric_name: gross_margin
+    unit: ratio
+    derived_from:
+      numerator_concepts:
+        # GrossProfit exists in both ifrs-full and us-gaap with the same name
+        - GrossProfit
+      denominator_concepts:
+        # IFRS primary denominator
+        - Revenue
+        # US-GAAP fallback denominators
+        - Revenues
+        - RevenueFromContractWithCustomerExcludingAssessedTax
+        - SalesRevenueNet
+    xbrl_concepts: []     # no single XBRL concept; computed in adapter
+    notes: >
+      GrossProfit / Revenue, expressed as a decimal (e.g. 0.43 = 43%).
+      IFRS: GrossProfit / Revenue. US-GAAP: GrossProfit / Revenues.
+      Not typically tagged for banks; omitted if numerator absent.
+
+  - metric_name: operating_margin
+    unit: ratio
+    derived_from:
+      numerator_concepts:
+        # IFRS primary
+        - ProfitFromOperatingActivities
+        # US-GAAP fallback
+        - OperatingIncomeLoss
+      denominator_concepts:
+        - Revenue
+        - Revenues
+        - RevenueFromContractWithCustomerExcludingAssessedTax
+        - SalesRevenueNet
+    xbrl_concepts: []
+    notes: >
+      Operating income / Revenue. IFRS: ProfitFromOperatingActivities / Revenue.
+      US-GAAP: OperatingIncomeLoss / Revenues.
+
+  - metric_name: ebitda_margin
+    unit: ratio
+    derived_from:
+      # EBITDA: use XBRL EBITDA concept if present; otherwise omit silently
+      numerator_concepts:
+        - EarningsBeforeInterestTaxesDepreciationAndAmortization
+      denominator_concepts:
+        - Revenue
+        - Revenues
+        - RevenueFromContractWithCustomerExcludingAssessedTax
+        - SalesRevenueNet
+    xbrl_concepts:
+      - EarningsBeforeInterestTaxesDepreciationAndAmortization
+    notes: >
+      If EBITDA concept present in XBRL, emit as ratio over revenue.
+      If absent, omit (do not compute from components — avoids silent errors).
+      This concept is not commonly tagged under ifrs-full; usually derived
+      externally. Omit for companies that do not directly tag it.
+
+  # ---- Cash flow ----
+  - metric_name: operating_cash_flow
+    xbrl_concepts:
+      # IFRS primary
+      - CashFlowsFromUsedInOperatingActivities
+      # US-GAAP fallback
+      - NetCashProvidedByUsedInOperatingActivities
+    notes: >
+      Cash flow from operations. IFRS: CashFlowsFromUsedInOperatingActivities.
+      US-GAAP: NetCashProvidedByUsedInOperatingActivities.
+
+  # ---- Balance sheet ----
+  - metric_name: total_debt
+    xbrl_concepts:
+      # IFRS primary
+      - LongtermBorrowings
+      - Borrowings
+      # US-GAAP fallback
+      - LongTermDebtAndCapitalLeaseObligations
+      - LongTermDebt
+      - DebtAndCapitalLeaseObligations
+    notes: >
+      Long-term debt / borrowings. IFRS: LongtermBorrowings or Borrowings.
+      US-GAAP: LongTermDebtAndCapitalLeaseObligations / LongTermDebt.
+      Short-term portion excluded by default; downstream users should sum
+      short + long if needed.
