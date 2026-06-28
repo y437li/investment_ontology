@@ -1835,3 +1835,76 @@ compute_projected_impacts(run_id: str, shock: float = 1.0) -> int
     # Orchestrates trigger selection + propagation + artifact write.
     # Returns number of rows written.
 ```
+
+---
+
+## FI-E: `projection_scores.parquet` (Workstream P-E, GitHub #108)
+
+**New in FI-E.** Post-freeze projection-validation pass.  For each
+`(trigger_id, company_id)` row in `projected_impacts.parquet`, compares the
+projected `direction` (and ordinal `strength`) against the realized
+forward-window return drawn from `validation/market_prices.parquet`.
+
+Path: `data/runs/<run_id>/validation/projection_scores.parquet`
+
+**POST-FREEZE, ONE-WAY:** This artifact is written AFTER `discovery_frozen=True`
+is confirmed.  Scores must **never** flow back into discovery-time projection
+(`propagation.py` / `projected_impacts.py`).  `projection_scorer.py` must not
+be imported by any discovery-stage module.
+
+**Scoring algorithm:**
+
+1. For each projected impact, compute `realized_return` via the same
+   forward-window machinery as `validation.py` (entry = earliest price_date
+   strictly after `as_of_date`; exit = latest price_date within the window;
+   `available_at <= price_date` guard applied).
+2. `hit = 1` if `sign(realized_return) == direction`; `hit = 0` if the signs
+   disagree; `hit = null` when `realized_return == 0` or no price data.
+3. `hit_rate_by_trigger` = mean(hit) over all non-null hits for the trigger.
+4. `rank_corr_by_trigger` = Spearman(strength, |realized_return|) over all
+   rows with non-null `realized_return` for the trigger; null when n < 2.
+
+Required columns:
+
+```text
+schema_version:         string    — always "1.0"
+run_id:                 string    — references run_manifest.json
+as_of_date:             string    — run's as_of_date (YYYY-MM-DD)
+trigger_id:             string    — entity_id of the triggering Event node
+company_id:             string    — entity_id of the impacted Company node
+direction:              int32     — +1 or -1, from projected_impacts
+strength:               float64   — ordinal strength from projected_impacts
+forward_window:         string    — e.g. "1M", "3M"
+realized_return:        float64   — realized forward return; null if no data
+hit:                    int32     — 1 (correct direction), 0 (wrong), null (no data)
+hit_rate_by_trigger:    float64   — mean hit over non-null hits for this trigger
+rank_corr_by_trigger:   float64   — Spearman(strength, |ret|) for this trigger
+scorer_method:          string    — always "projection_scorer_v1"
+caveats:                string    — one-way + illustrative-only caveat
+```
+
+Rules:
+
+- The scorer reads `projected_impacts.parquet` post-freeze as a READ-ONLY
+  discovery artifact.  It never modifies or regenerates discovery outputs.
+- Realized prices are sourced exclusively from `validation/market_prices.parquet`
+  (same leakage filter: `price_date > as_of_date`, `available_at <= price_date`).
+- Windows without sufficient forward coverage are silently skipped (same OI-7
+  coverage gate as `validation.py`).
+- An empty schema-valid artifact is written when no impact rows qualify.
+- `rank_corr_by_trigger` is `null` when fewer than 2 rows have price data for
+  a trigger (Spearman is undefined for n < 2).
+
+### FI-E Module
+
+Python module: `app/backend/theme_engine/projection_scorer.py`
+
+Public API:
+
+```python
+score_projections(run_id: str) -> dict
+    # Post-freeze projection scoring pass.
+    # Raises PermissionError if discovery_frozen != True.
+    # Returns dict with keys: success, scored_rows, windows_scored,
+    #   artifacts, message.
+```
