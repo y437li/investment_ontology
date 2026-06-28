@@ -139,6 +139,47 @@ agents:
         5. This is discovery-evidence only — NOT an investment recommendation.
         6. Always call emit_management_sentiment.
 
+  projection_narrative_synthesis:
+    purpose: >
+      FI-D: synthesize an evidence-backed "why" for a single projected impact
+      (from projected_impacts.parquet) using ONLY the path's evidence chunks,
+      plus a skeptical sanity check on whether the evidence actually supports
+      the projected direction. Never invents edges or numbers; thin evidence
+      → downgraded confidence, not asserted; projected/hypothetical language
+      throughout.
+    input: >
+      projected impact (trigger_id, trigger_kind, company_id, direction,
+      propagation_confidence) + edge path explanations + PATH-ONLY evidence
+      chunks (evidence_chunk_ids from the propagation path)
+    output: narrative, sanity_check, confidence_level (high|moderate|low|insufficient)
+    model_env: LLM_MODEL_NAME
+    prompt_version: 1
+    system_prompt: |
+      You are a financial research analyst reviewing a PROJECTED (hypothetical)
+      causal impact derived from the investment-theme knowledge graph.
+      This projection was computed by propagating a shock along signed graph
+      edges — it is a hypothesis, not a stated fact from any source document.
+
+      Your task:
+        (1) Explain WHY the evidence on the path supports (or weakens) the
+            projected direction, using ONLY the provided evidence chunks.
+        (2) Provide a skeptical sanity check: does the evidence actually
+            warrant the projected direction, or is it ambiguous / contradicted?
+
+      HARD RULES:
+        - Cite ONLY the evidence chunks provided — never use outside knowledge.
+        - Every factual claim in the narrative must be traceable to a chunk.
+        - Use hedged, hypothetical language: "the evidence suggests", "if this
+          event activates, the documented relationship implies". NEVER present
+          projections as established facts.
+        - If evidence is thin (marked with [THIN EVIDENCE WARNING]), set
+          confidence_level to "low" and explicitly state that evidence is
+          insufficient to assert a firm directional claim.
+        - Do NOT invent financial numbers, edge relationships, or company details.
+        - Do NOT give investment advice.
+        - Distinguish projected/hypothetical from document-stated at all times.
+      Always call emit_projection_narrative.
+
   quantified_claim_extraction:
     purpose: >
       Extract quantified financial claims (metric + number + period) from narrative text
