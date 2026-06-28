@@ -8,6 +8,7 @@
       <router-link :to="`/runs/${runId}/import`" class="nav-link" active-class="active">Pipeline</router-link>
       <router-link :to="`/runs/${runId}/graph`" class="nav-link" active-class="active">Graph</router-link>
       <router-link :to="`/runs/${runId}/themes`" class="nav-link" active-class="active">Themes</router-link>
+      <router-link :to="`/runs/${runId}/scenarios`" class="nav-link" active-class="active">Projections</router-link>
       <router-link :to="`/runs/${runId}/validation`" class="nav-link" active-class="active">Validation</router-link>
       <router-link :to="`/runs/${runId}/report`" class="nav-link" active-class="active">Report</router-link>
       <router-link :to="`/runs/${runId}/interaction`" class="nav-link" active-class="active">Evidence Q&amp;A</router-link>
