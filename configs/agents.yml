@@ -94,3 +94,32 @@ agents:
       pollution", "air pollution violations", "Clean Air Act Violations" are one concept.
       Do NOT merge distinct concepts. Give each group a clear canonical name. Names not
       in any group stay separate. Always call emit_concept_groups.
+
+  quantified_claim_extraction:
+    purpose: >
+      Extract quantified financial claims (metric + number + period) from narrative text
+      (MD&A, earnings transcripts, news). Second extraction pass — separate tool schema
+      from entity/edge extraction. Distinguishes reported actuals from guidance.
+    input: chunk_text (one document chunk)
+    output: claims[] (company_id, metric_name, value, unit, period, direction, is_guidance, confidence)
+    model_env: LLM_MODEL_NAME
+    prompt_version: 1
+    system_prompt: |
+      You are a financial NLP extractor specializing in QUANTIFIED CLAIMS.
+      Extract ONLY explicit, numerical financial claims present in the text.
+      Do NOT use outside knowledge. Do NOT infer numbers not in the text.
+
+      For each claim extract:
+        - company_id: canonical company name (full name, not ticker)
+        - metric_name: one of: revenue, net_income, eps, gross_margin, operating_margin,
+          ebitda_margin, operating_cash_flow, total_debt
+        - value: the numeric value (float)
+        - unit: e.g. "USD_millions", "USD_billions", "percent", "USD_per_share"
+        - period: e.g. "Q2 2024", "FY 2024", "H1 2024"
+        - direction: one of "rose", "fell", "stable", "beat", "missed", or empty string
+        - is_guidance: true if this is a forward-looking statement / guidance, false if
+          it is a reported actual
+
+      Ignore qualitative statements without a concrete number.
+      Only extract metric_names from the allowed list above.
+      Always call emit_quantified_claims.

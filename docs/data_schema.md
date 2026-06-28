@@ -184,6 +184,47 @@ Other rules:
 
 See `docs/io_contracts.md §20a` for the full field contract.
 
+## 4b. LLM Quantified-Fact Extraction (Discovery-time, EG-B2)
+
+The LLM fact-extraction pass (`run_fact_extraction`) reads `chunks.parquet` and
+writes two additional discovery artifacts:
+
+```text
+discovery/financial_metrics.parquet       — FinancialMetric nodes
+discovery/financial_metric_edges.parquet  — Company -> FinancialMetric edges
+```
+
+**financial_metrics.parquet schema:**
+`(schema_version, metric_id, company_id, metric_name, value, unit, period,
+direction, is_guidance, confidence, evidence_chunk_id, source, created_at)`
+
+**financial_metric_edges.parquet schema:**
+`(schema_version, edge_id, company_entity_id, metric_id, edge_type,
+evidence_chunk_ids, confidence, created_at)`
+
+`edge_type` values: `"reports"` (as-reported, `is_guidance=False`) and
+`"guides_to"` (management guidance, `is_guidance=True`).
+
+**PIT rule:** Only chunks with `available_at <= run.as_of_date` are processed.
+Chunks that are future-dated relative to the run's as_of_date are skipped before
+extraction begins; no claims from those chunks appear in the output.
+
+**Reconciliation with B1:**
+- `metric_name` must be in `configs/fundamentals.yml` whitelist (shared contract
+  with B1).
+- For as-reported overlaps (`is_guidance=False`), B1 XBRL values win: if
+  `fundamentals_asreported.parquet` has a row for the same
+  `(company_id, period_end, metric_name)`, the LLM claim is dropped.
+- Period matching normalizes LLM free-text periods to ISO calendar-quarter-end
+  dates before the B1 lookup (e.g. "Q2 2024" -> "2024-06-30").
+- Guidance claims (`is_guidance=True`) are always kept — B2 owns guidance
+  exclusively.
+
+**Evidence requirement:** Every `financial_metrics` row must carry a non-empty
+`evidence_chunk_id`. Claims without evidence are dropped before writing.
+
+See `docs/io_contracts.md §20b` and `§20c` for the full field contracts.
+
 ## 5. L3 Structured Validation Standard
 
 Validation data is structured and intentionally separated from discovery data:
