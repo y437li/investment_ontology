@@ -137,13 +137,55 @@ Rules:
 - `theme_name` is interpretation metadata, not a discovery input.
 - Low-confidence records should be included with confidence fields or routed to review, not silently dropped.
 
+## 4a. As-Reported Fundamentals (Discovery-time, EG-B1)
+
+The XBRL ingestion adapter (`fundamentals_adapter.py`) writes a **discovery-time**
+as-reported fundamentals artifact that is PIT-clean by construction:
+
+```text
+discovery/fundamentals_asreported.parquet
+```
+
+Schema: `(company_id, period_end, metric_name, metric_value, unit, currency,
+filing_date, available_at, source, source_id)`.
+
+Universe: S&P/TSX 60 (Canadian companies; currency CAD; country Canada).
+- Companies are identified by their `tsx_ticker` (e.g. `"RY.TO"`).
+- Cross-listed filers are fetched from EDGAR using `sec_cik` from
+  `configs/universe.tsx60.yml`. Companies with `sec_cik=null` (e.g. Hydro One,
+  Constellation Software) have no EDGAR data and receive an empty artifact.
+
+Taxonomy: IFRS (`ifrs-full` namespace) is **primary** for Canadian cross-filers.
+US-GAAP (`us-gaap`) is searched as a **fallback**. IFRS concepts mapped:
+- `Revenue` -> revenue, `ProfitLoss` -> net_income
+- `BasicEarningsLossPerShare` -> eps
+- `CashFlowsFromUsedInOperatingActivities` -> operating_cash_flow
+- `LongtermBorrowings` -> total_debt
+- `GrossProfit` / `Revenue` -> gross_margin (derived)
+- `ProfitFromOperatingActivities` / `Revenue` -> operating_margin (derived)
+
+Currency rules:
+- `currency` is read from the XBRL unit string; never assumed.
+- `"CAD"` -> `"CAD"`. `"CAD/shares"` (EPS) -> currency `"CAD"`, unit `"CAD/shares"`.
+- Ratio metrics have `currency=null`, `unit="ratio"`.
+
+Other rules:
+- `available_at = filing_date` (first public date; never `period_end`).
+- Metric names drawn exclusively from `configs/fundamentals.yml`.
+- Empty-but-schema-valid when a company has no XBRL (`sec_cik=null` or file absent).
+- Arrow schema is pinned on write so all-None columns (e.g. `currency` for ratio
+  rows) remain `string` type rather than being inferred as `null`.
+- **Not** a substitute for, and never overwriting, the §20 `validation/fundamentals.parquet`.
+
+See `docs/io_contracts.md §20a` for the full field contract.
+
 ## 5. L3 Structured Validation Standard
 
 Validation data is structured and intentionally separated from discovery data:
 
 ```text
 market_prices.parquet
-fundamentals.parquet
+fundamentals.parquet        ← validation-only (§20); discovery must not read this
 portfolio_baskets.parquet
 validation.csv
 ```
@@ -151,6 +193,7 @@ validation.csv
 Rules:
 
 - Discovery stages must not read `market_prices.parquet`, `fundamentals.parquet`, `portfolio_baskets.parquet`, or `validation.csv`.
+- The discovery-time `fundamentals_asreported.parquet` (§20a) is a **separate** artifact; it is not the same as `validation/fundamentals.parquet`.
 - Exposure must be computed before validation loads future market or fundamental outcomes.
 - `portfolio_baskets.parquet` must preserve constituents, weights, and selection rules so validation can be reproduced.
 

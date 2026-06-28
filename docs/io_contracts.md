@@ -137,6 +137,7 @@ Each child run remains a single-as_of run and may reuse run-level frozen artifac
 | Compute Exposure | `discovery/communities.json`, `discovery/graph.json`, `discovery/entities.parquet`, `discovery/edges.parquet` | `discovery/company_theme_exposure.parquet` |
 | Freeze Discovery | all discovery artifacts | updated `run_manifest.json` |
 | Load Market Data | market files or adapter output | `validation/market_prices.parquet` |
+| Ingest XBRL Fundamentals (B1) | EDGAR company-facts JSON (local), `configs/fundamentals.yml` | `discovery/fundamentals_asreported.parquet` |
 | Load Fundamentals | fundamentals files or adapter output | `validation/fundamentals.parquet` |
 | Validate | frozen discovery artifacts, `discovery/company_theme_exposure.parquet`, `validation/market_prices.parquet`, optional `validation/fundamentals.parquet` | `validation/portfolio_baskets.parquet`, `validation/validation.csv` |
 | Report | all artifacts | `report.md` |
@@ -686,7 +687,69 @@ Rules:
 - Validation may include prices after `as_of_date` only after `discovery_frozen=true`.
 - Return calculations must state whether `close` or `adjusted_close` is used.
 
+## 20a. `fundamentals_asreported.parquet` (discovery-time, PIT)
+
+**New in EG-B1.** One row per company, period, and as-reported financial metric,
+produced by the XBRL ingestion adapter (`fundamentals_adapter.py`) during
+**discovery**. This is **separate** from the validation-only §20 artifact below.
+
+**Universe note:** This artifact serves the S&P/TSX 60 (Canadian companies;
+currency CAD). Companies are identified by their `tsx_ticker`; cross-listed
+filers are fetched by `sec_cik` from `configs/universe.tsx60.yml`. Companies
+with `sec_cik=null` have no EDGAR data and receive an empty-but-schema-valid
+artifact.
+
+**Taxonomy note:** Canadian cross-filers use IFRS (`ifrs-full` namespace in
+EDGAR company-facts JSON). The adapter searches `ifrs-full` first, then
+`us-gaap` as fallback. IFRS concepts used: `Revenue`, `ProfitLoss`,
+`BasicEarningsLossPerShare`, `CashFlowsFromUsedInOperatingActivities`,
+`LongtermBorrowings`, `GrossProfit`, `ProfitFromOperatingActivities`.
+
+Path: `data/runs/<run_id>/discovery/fundamentals_asreported.parquet`
+
+Required columns:
+
+```text
+company_id:    string         — canonical company identifier (tsx_ticker, e.g. "RY.TO")
+period_end:    string (date)  — fiscal period end date (YYYY-MM-DD)
+metric_name:   string         — canonical metric name from configs/fundamentals.yml
+metric_value:  float          — as-reported numeric value
+unit:          string         — actual XBRL unit, e.g. "CAD", "CAD/shares", "ratio"
+currency:      string | null  — ISO currency code extracted from unit (e.g. "CAD");
+                                null for ratios and unitless metrics
+filing_date:   string (date)  — date the filing became public (EDGAR filingDate)
+available_at:  string (date)  — = filing_date (PIT: first public date; never period_end)
+source:        string         — "edgar_xbrl"
+source_id:     string         — stable hash of (company_id, accession_number)
+```
+
+Currency rules:
+- `currency` is always read from the XBRL unit string, never assumed or hardcoded.
+- `"CAD"` -> currency `"CAD"`. `"CAD/shares"` (EPS) -> currency `"CAD"`, unit `"CAD/shares"`.
+- Ratio metrics (gross_margin, operating_margin, ebitda_margin) have `currency=null`.
+
+Reconciliation key: `(company_id, period_end, metric_name)`.
+For any as-reported overlap between B1 (XBRL) and B2 (LLM), **B1 wins**; B2
+owns guidance / forward-looking / narrative numbers only.
+
+Rules:
+
+- `available_at` = `filing_date` (the date the document was first public). Never
+  use `period_end` as `available_at` — that would create future leakage.
+- Only rows with `available_at <= run.as_of_date` are surfaced in discovery.
+- `metric_name` values must come from `configs/fundamentals.yml`; none are
+  hardcoded inside adapter code.
+- As-reported values only (first published); later restatements are new rows with
+  a later `filing_date` but must not silently overwrite earlier rows.
+- Companies with `sec_cik=null` in the universe config have no EDGAR data; write
+  a schema-valid empty artifact (zero rows, same columns). Do not omit the artifact.
+- Discovery stages may read this artifact; validation stages may not use it as a
+  substitute for the §20 artifact.
+
 ## 20. `fundamentals.parquet`
+
+**Validation-only** — this is the §20 artifact for walk-forward validation.
+**Discovery stages must never read or write this file.**
 
 One row per company, period, and fundamental metric.
 
