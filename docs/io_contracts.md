@@ -308,16 +308,31 @@ end_char: int | null
 page_start: int | null
 page_end: int | null
 section_title: string | null
+block_type: string
+table_data: string | null
 available_at: date | timestamp
 content_hash: string
 cleaning_version: string
 ```
 
+Allowed `block_type` values:
+
+- `prose` — regular narrative text, sentence/paragraph-aware chunked.
+- `table` — a structured cell grid; rows × cells recovered from HTML `<table>`
+  or ASCII pipe-delimited tables.  `text` is the human-readable pipe-rendered
+  form; `table_data` is a JSON string `{"rows": [["col1", ...], ...]}`.
+- `heading` — reserved for future standalone heading chunks (not yet emitted).
+
 Rules:
 
 - `chunk_id` must be stable for the same document hash and chunking config.
+- `block_type` must be present on EVERY chunk (no nulls allowed).
+- `table_data` is a JSON string for `block_type="table"` chunks; null otherwise.
+- `section_title` should be non-null for ≥80 % of chunks derived from
+  structured filings (EDGAR/HTML) where section headings are detectable.
 - Chunks inherit `available_at` from documents.
 - `text` must come from cleaned document text, not raw unnormalized files.
+- Table chunks are atomic: one table = one chunk (numbers stay with their labels).
 
 ## 9. `entities.parquet`
 
