@@ -51,10 +51,28 @@ _REQUIRED_DISCOVERY_ARTIFACTS: list[str] = [
 ]
 
 # Additional discovery artifacts included in hashes when present.
+# OI-3: extended to cover the full pipeline artifact set (EG-B, SENT-B/C, FI-C,
+# provenance, etc.).  Any file present in discovery/ that is not in the required
+# list is hashed here to ensure all discovery evidence is frozen.
 _OPTIONAL_DISCOVERY_ARTIFACTS: list[str] = [
+    # Original optional set
     "theme_lineage.json",
     "edge_explanations.parquet",
     "entity_aliases_global.parquet",
+    # EG-B: discovery-time fundamentals / metrics (io_contracts §20a-c)
+    "fundamentals_asreported.parquet",
+    "financial_metrics.parquet",
+    "financial_metric_edges.parquet",
+    # SENT-B/C: management sentiment (io_contracts §S-B, §S-C)
+    "management_sentiment.parquet",
+    "sentiment_edges.parquet",
+    "management_sentiment_fused.parquet",
+    # FI-C: forward inference projected impacts (io_contracts §FI-C)
+    "projected_impacts.parquet",
+    # EG-E: provenance artifacts (io_contracts §E1-E3)
+    "entity_chunk_provenance.parquet",
+    "theme_document_evidence.parquet",
+    "company_theme_document_evidence.parquet",
 ]
 
 
