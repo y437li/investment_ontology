@@ -369,3 +369,325 @@ def get_or_synthesize(run_id: str, community_id: str, refresh: bool = False,
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(result, indent=2))
     return result
+
+
+# ── FI-D: projection-narrative pass ──────────────────────────────────────────
+#
+# Given a single projected impact (a row from projected_impacts.parquet),
+# synthesize an evidence-backed "why" using ONLY the impact's edge path +
+# that path's evidence chunks, PLUS a skeptical sanity check.
+# Never creates edges or numbers; thin evidence → low-confidence, not asserted.
+
+_PROJECTION_NARRATIVE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "emit_projection_narrative",
+        "description": (
+            "Emit the evidence-backed 'why' for a projected impact and a skeptical "
+            "sanity check. Use ONLY the provided evidence chunks — never cite outside "
+            "knowledge."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "narrative": {
+                    "type": "string",
+                    "description": (
+                        "3-5 sentence explanation of WHY this impact is projected, "
+                        "grounded in the provided evidence chunks. MUST use "
+                        "hypothetical/projected language (e.g. 'the evidence suggests', "
+                        "'if this event activates, the documented relationship implies'). "
+                        "Never state projections as established facts."
+                    ),
+                },
+                "sanity_check": {
+                    "type": "string",
+                    "description": (
+                        "1-2 sentence skeptical assessment: does the provided evidence "
+                        "actually support the projected direction? Note any gaps, "
+                        "contradictions, or alternative readings of the evidence."
+                    ),
+                },
+                "confidence_level": {
+                    "type": "string",
+                    "enum": ["high", "moderate", "low", "insufficient"],
+                    "description": (
+                        "How strongly does the evidence support this projection? "
+                        "'high' = multiple direct supporting chunks; "
+                        "'moderate' = indirect or partial support; "
+                        "'low' = thin evidence (only 1 chunk or tenuous link); "
+                        "'insufficient' = no relevant evidence chunks at all."
+                    ),
+                },
+            },
+            "required": ["narrative", "sanity_check", "confidence_level"],
+        },
+    },
+}
+
+# If fewer than this many distinct evidence chunks are available, the impact is
+# treated as thin-evidence and confidence is capped at "low".
+_THIN_EVIDENCE_THRESHOLD: int = 2
+
+# Stub returned (without any LLM call) when evidence_chunk_ids is empty.
+_NO_EVIDENCE_NARRATIVE: str = (
+    "[No evidence] No evidence chunks were found for this projected path. "
+    "The projected direction is structurally derived from the graph but cannot "
+    "be supported by any source document text."
+)
+_NO_EVIDENCE_SANITY: str = (
+    "Evidence is absent. The projected direction cannot be verified against "
+    "any source text; treat this projection as purely structural."
+)
+
+
+def gather_projection_dossier(run_id: str, impact: dict) -> dict:
+    """Build a mini-dossier for a single projected impact (FI-D).
+
+    Loads ONLY the evidence chunks referenced by the impact's
+    ``evidence_chunk_ids`` (the path-derived union from FI-C) and the edge
+    explanations for its ``contributing_edge_ids``.  No chunks outside the
+    impact's path are loaded — path-only citation is enforced here, not in
+    the prompt.
+
+    Parameters
+    ----------
+    run_id : str
+    impact : dict
+        A projected_impacts.parquet row or equivalent dict with keys:
+        trigger_id, trigger_kind, company_id, direction, strength,
+        confidence, path, contributing_edge_ids, evidence_chunk_ids.
+
+    Returns
+    -------
+    dict
+        Keys: trigger_id, trigger_kind, company_id, direction, strength,
+        confidence, path_edge_ids, evidence_chunks (list of {chunk_id, text}),
+        edge_explanations (list of {edge_id, explanation}), evidence_thin (bool).
+    """
+    path_evidence_ids: list[str] = list(impact.get("evidence_chunk_ids") or [])
+    contributing_edge_ids: list[str] = list(
+        impact.get("contributing_edge_ids") or impact.get("path") or []
+    )
+
+    # Load only the chunks present in this impact's path (path-only citation gate)
+    path_id_set: set[str] = set(path_evidence_ids)
+    all_chunks: list[dict] = _load(run_id, "chunks.parquet")
+    chunks_text: dict[str, str] = {
+        ch["chunk_id"]: ch.get("text", "")
+        for ch in all_chunks
+        if ch.get("chunk_id") in path_id_set
+    }
+    evidence_chunks: list[dict] = [
+        {"chunk_id": cid, "text": chunks_text.get(cid, "")}
+        for cid in path_evidence_ids
+        if cid
+    ]
+
+    # Load edge explanations for contributing edges only
+    expl_all: dict[str, str] = {
+        e["edge_id"]: e.get("explanation", "")
+        for e in _load(run_id, "edge_explanations.parquet")
+    }
+    edge_explanations: list[dict] = [
+        {"edge_id": eid, "explanation": expl_all.get(eid, "")}
+        for eid in contributing_edge_ids
+        if eid
+    ]
+
+    evidence_thin: bool = len(evidence_chunks) < _THIN_EVIDENCE_THRESHOLD
+
+    return {
+        "trigger_id": impact.get("trigger_id", ""),
+        "trigger_kind": impact.get("trigger_kind", ""),
+        "company_id": impact.get("company_id", ""),
+        "direction": impact.get("direction"),
+        "strength": impact.get("strength"),
+        "confidence": impact.get("confidence"),
+        "path_edge_ids": contributing_edge_ids,
+        "evidence_chunks": evidence_chunks,
+        "edge_explanations": edge_explanations,
+        "evidence_thin": evidence_thin,
+    }
+
+
+def _synthesize_projection_dossier(dossier: dict, client, model: str) -> dict:
+    """Core LLM synthesis for a single projection dossier (FI-D).
+
+    Returns a no-evidence stub immediately (without LLM call) when
+    ``evidence_chunks`` is empty.  When evidence is thin, forces
+    ``confidence_level`` to ``"low"`` regardless of what the model returns.
+    """
+    import json as _json  # noqa: PLC0415
+
+    evidence_chunks: list[dict] = dossier["evidence_chunks"]
+
+    # FI-D acceptance: no claim without an evidence chunk
+    if not evidence_chunks:
+        return {
+            "narrative": _NO_EVIDENCE_NARRATIVE,
+            "sanity_check": _NO_EVIDENCE_SANITY,
+            "confidence_level": "insufficient",
+            "reasoning_chain": "",
+        }
+
+    direction = dossier.get("direction")
+    direction_label = "positive" if (direction or 0) >= 0 else "negative"
+    direction_sign = "+" if direction_label == "positive" else "-"
+    conf_val = dossier.get("confidence")
+    conf_str = f"{float(conf_val):.3f}" if conf_val is not None else "unknown"
+
+    thin_addendum = (
+        "\n\n[THIN EVIDENCE WARNING] Only 1 evidence chunk is available. "
+        "You MUST set confidence_level to 'low' and explicitly acknowledge "
+        "that evidence is insufficient to assert a firm directional claim."
+    ) if dossier["evidence_thin"] else ""
+
+    # Evidence block — PATH-ONLY chunks
+    evidence_block = "\n".join(
+        f"[chunk {i + 1} / id={ec['chunk_id']}]\n{ec['text'][:400]}"
+        for i, ec in enumerate(evidence_chunks)
+    )
+
+    # Edge explanation block
+    edge_block = "\n".join(
+        f"- {ee['edge_id']}: {ee['explanation']}"
+        for ee in dossier["edge_explanations"]
+        if ee.get("explanation")
+    ) or "(no edge explanations available)"
+
+    system = registry.get_system_prompt("projection_narrative_synthesis") or (
+        "You are a financial research analyst reviewing a PROJECTED (hypothetical) "
+        "causal impact derived from the investment-theme knowledge graph. "
+        "This projection was computed by propagating a shock along signed graph edges — "
+        "it is a hypothesis, not a stated fact from any source document. "
+        "\n\n"
+        "Your task:\n"
+        "  (1) Explain WHY the evidence on the path supports (or weakens) the projected "
+        "direction, using ONLY the provided evidence chunks.\n"
+        "  (2) Provide a skeptical sanity check: does the evidence actually warrant the "
+        "projected direction, or is it ambiguous / contradicted?\n"
+        "\n"
+        "HARD RULES:\n"
+        "  - Cite ONLY the evidence chunks provided below — never use outside knowledge.\n"
+        "  - Every factual claim in the narrative must be traceable to a specific chunk.\n"
+        "  - Use hedged, hypothetical language: 'the evidence suggests', 'if this event "
+        "activates, the documented relationship implies'. NEVER present projections as "
+        "established facts.\n"
+        "  - If evidence is thin (marked with [THIN EVIDENCE WARNING]), set "
+        "confidence_level to 'low' and explicitly state that evidence is insufficient "
+        "to assert a firm claim.\n"
+        "  - Do NOT invent financial numbers, edge relationships, or company details.\n"
+        "  - Do NOT give investment advice.\n"
+        "Always call emit_projection_narrative."
+    )
+
+    user = (
+        f"Projected impact summary:\n"
+        f"  trigger      : {dossier['trigger_id']} ({dossier['trigger_kind']})\n"
+        f"  target company: {dossier['company_id']}\n"
+        f"  projected direction: {direction_label} ({direction_sign})\n"
+        f"  propagation confidence: {conf_str}\n"
+        f"\n"
+        f"Edge path explanations:\n{edge_block}\n"
+        f"\n"
+        f"Evidence chunks (PATH-ONLY — cite ONLY these):\n{evidence_block}"
+        f"{thin_addendum}"
+    )
+
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    args: dict = {}
+    content = ""
+    for _ in range(3):
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=[_PROJECTION_NARRATIVE_TOOL],
+            temperature=0.1,
+        )
+        msg = resp.choices[0].message
+        content = msg.content or content
+        tool_calls = getattr(msg, "tool_calls", None) or []
+        if tool_calls:
+            try:
+                args = _json.loads(tool_calls[0].function.arguments)
+                break
+            except Exception as exc:
+                import logging  # noqa: PLC0415
+                logging.getLogger(__name__).warning(
+                    "emit_projection_narrative tool-call parse failed: %s", exc
+                )
+                args = {}
+        messages.append({
+            "role": "user",
+            "content": "Call emit_projection_narrative with valid JSON arguments only.",
+        })
+
+    m = _THINK_RE.search(content)
+    reasoning_chain = m.group(1).strip() if m else ""
+
+    narrative = args.get("narrative") or _THINK_RE.sub("", content).strip() or _NO_EVIDENCE_NARRATIVE
+    sanity_check = args.get("sanity_check") or ""
+    confidence_level = args.get("confidence_level") or (
+        "low" if dossier["evidence_thin"] else "moderate"
+    )
+
+    # Enforce thin-evidence cap: model must not over-claim when evidence is thin
+    if dossier["evidence_thin"] and confidence_level not in ("low", "insufficient"):
+        confidence_level = "low"
+
+    return {
+        "narrative": narrative,
+        "sanity_check": sanity_check,
+        "confidence_level": confidence_level,
+        "reasoning_chain": reasoning_chain,
+    }
+
+
+def synthesize_projection_narrative(
+    run_id: str,
+    impact: dict,
+    client=None,
+    model: Optional[str] = None,
+) -> dict:
+    """Synthesize an evidence-backed narrative for one projected impact (FI-D).
+
+    Uses ONLY the evidence chunks on the impact's propagation path
+    (``impact["evidence_chunk_ids"]``).  Never creates edges or numbers.
+    If evidence is thin (< 2 chunks), downgrades confidence and flags it.
+    If evidence is absent, returns a no-evidence stub without calling the LLM.
+
+    Mirrors the ``synthesize_narrative`` / ``_default_client_model`` pattern;
+    inject ``client`` for hermetic tests.
+
+    Parameters
+    ----------
+    run_id : str
+    impact : dict
+        A projected_impacts.parquet row or equivalent dict.
+    client : optional
+        OpenAI-compatible client. Falls back to the env-configured client.
+    model : str, optional
+
+    Returns
+    -------
+    dict
+        Keys: trigger_id, trigger_kind, company_id, direction, strength,
+        path_edge_ids, evidence_chunks, evidence_thin,
+        narrative, sanity_check, confidence_level, reasoning_chain.
+    """
+    dossier = gather_projection_dossier(run_id, impact)
+    if client is None:
+        client, model = _default_client_model()
+    out = _synthesize_projection_dossier(dossier, client, model)
+    return {
+        "trigger_id": dossier["trigger_id"],
+        "trigger_kind": dossier["trigger_kind"],
+        "company_id": dossier["company_id"],
+        "direction": dossier["direction"],
+        "strength": dossier["strength"],
+        "path_edge_ids": dossier["path_edge_ids"],
+        "evidence_chunks": dossier["evidence_chunks"],
+        "evidence_thin": dossier["evidence_thin"],
+        **out,
+    }
