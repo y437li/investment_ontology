@@ -29,14 +29,12 @@ must never style them as stated facts.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Optional
 
-import pyarrow.parquet as pq
 from fastapi import HTTPException
 
-from . import runs
+from . import run_cache, runs
 
 # Edge types whose direction is provisional until issue #110 is resolved.
 _SIGN_BLIND_EDGE_TYPES: frozenset[str] = frozenset({
@@ -61,8 +59,7 @@ def _read_projected_impacts(run_id: str) -> list[dict]:
                 "Run POST /api/fi/compute-projections first."
             ),
         )
-    table = pq.read_table(p)
-    return table.to_pylist()
+    return run_cache.load_parquet_rows(p)
 
 
 def _read_graph(run_id: str) -> dict:
@@ -72,7 +69,7 @@ def _read_graph(run_id: str) -> dict:
     if not p.exists():
         return {"nodes": [], "edges": []}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return run_cache.load_json(p)
     except Exception:
         return {"nodes": [], "edges": []}
 

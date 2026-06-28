@@ -74,7 +74,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fastapi import HTTPException
 
-from . import graph_build, runs
+from . import graph_build, run_cache, runs
 
 SCHEMA_VERSION = "1.0"
 
@@ -153,7 +153,7 @@ def _read_graph(run_id: str) -> dict:
             status_code=404,
             detail=f"graph.json not found for run {run_id}; run graph/build first",
         )
-    return json.loads(artifact.read_text(encoding="utf-8"))
+    return run_cache.load_json(artifact)
 
 
 def _read_communities(run_id: str) -> dict:
@@ -163,7 +163,7 @@ def _read_communities(run_id: str) -> dict:
             status_code=404,
             detail=f"communities.json not found for run {run_id}; run themes/discover first",
         )
-    return json.loads(artifact.read_text(encoding="utf-8"))
+    return run_cache.load_json(artifact)
 
 
 def _read_theme_snapshots(run_id: str) -> dict:
@@ -173,7 +173,7 @@ def _read_theme_snapshots(run_id: str) -> dict:
             status_code=404,
             detail=f"theme_snapshots.json not found for run {run_id}; run themes/discover first",
         )
-    return json.loads(artifact.read_text(encoding="utf-8"))
+    return run_cache.load_json(artifact)
 
 
 def _read_entities(run_id: str) -> list[dict]:
@@ -183,7 +183,7 @@ def _read_entities(run_id: str) -> list[dict]:
             status_code=404,
             detail=f"entities.parquet not found for run {run_id}; run extraction first",
         )
-    return pq.read_table(artifact).to_pylist()
+    return run_cache.load_parquet_rows(artifact)
 
 
 def _read_edges(run_id: str) -> list[dict]:
@@ -193,7 +193,7 @@ def _read_edges(run_id: str) -> list[dict]:
             status_code=404,
             detail=f"edges.parquet not found for run {run_id}; run extraction first",
         )
-    return pq.read_table(artifact).to_pylist()
+    return run_cache.load_parquet_rows(artifact)
 
 
 # ---------------------------------------------------------------------------

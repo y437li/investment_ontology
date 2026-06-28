@@ -11,9 +11,7 @@ with zero date logic here.
 
 from __future__ import annotations
 
-import json
-
-from . import registry, runs, graph_build
+from . import registry, run_cache, runs, graph_build
 
 _EVIDENCE_EDGE_TYPES = set(graph_build.EVIDENCE_EDGE_TYPES)  # {"mentioned_in","co_occurs_with"}
 # Default structural admit set = exactly what community discovery uses.
@@ -42,7 +40,7 @@ class AnchorAmbiguous(ValueError):
 def _load_graph(run_id: str) -> dict:
     """Read discovery/graph.json (PIT-filtered at build time). FileNotFoundError if absent."""
     rd = runs.get_run_dir(run_id)
-    return json.loads((rd / "discovery" / "graph.json").read_text())
+    return run_cache.load_json(rd / "discovery" / "graph.json")
 
 
 def _candidate(node: dict) -> dict:

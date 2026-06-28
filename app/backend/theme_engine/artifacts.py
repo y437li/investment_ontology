@@ -11,13 +11,13 @@ Security:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
 
+from . import run_cache
 from .config import settings
 
 # Allowlisted artifact names — only these may be served.
@@ -110,16 +110,13 @@ def _resolve_artifact_path(run_id: str, artifact_name: str) -> Path:
 
 
 def _parquet_to_records(path: Path) -> list[dict[str, Any]]:
-    """Read a Parquet file and return records as a list of dicts."""
+    """Read a Parquet file and return records as a list of dicts (cached)."""
     try:
-        import pyarrow.parquet as pq  # noqa: PLC0415
+        return run_cache.load_parquet_rows(path)
     except ImportError as exc:
         raise HTTPException(
             status_code=500, detail=f"pyarrow not available: {exc}"
         ) from exc
-
-    table = pq.read_table(path)
-    return table.to_pylist()
 
 
 def _csv_to_records(path: Path) -> list[dict[str, Any]]:
@@ -158,7 +155,7 @@ def serve_artifact(run_id: str, artifact_name: str):
 
     if suffix == ".json":
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = run_cache.load_json(path)
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"failed to read artifact: {exc}"

@@ -6,9 +6,7 @@ Deterministic — read from graph.json + communities.json.
 
 from __future__ import annotations
 
-import json
-
-from . import registry, runs
+from . import registry, run_cache, runs
 
 _EVIDENCE_EDGE_TYPES = {"mentioned_in", "co_occurs_with"}
 
@@ -16,7 +14,7 @@ _EVIDENCE_EDGE_TYPES = {"mentioned_in", "co_occurs_with"}
 def community_subgraph(run_id: str, community_ids: list[str]) -> dict:
     """Union subgraph for the given communities: nodes (with level) + structural edges."""
     rd = runs.get_run_dir(run_id)
-    comm_doc = json.loads((rd / "discovery" / "communities.json").read_text())
+    comm_doc = run_cache.load_json(rd / "discovery" / "communities.json")
     communities = comm_doc.get("communities", comm_doc)
     wanted = set(community_ids)
 
@@ -25,7 +23,7 @@ def community_subgraph(run_id: str, community_ids: list[str]) -> dict:
         if c["community_id"] in wanted:
             node_ids.update(c.get("node_ids", []))
 
-    graph = json.loads((rd / "discovery" / "graph.json").read_text())
+    graph = run_cache.load_json(rd / "discovery" / "graph.json")
     nodes = [{
         "id": n["entity_id"],
         "label": n.get("label") or n["entity_id"],
