@@ -436,7 +436,19 @@ last_seen_at: date | timestamp
 as_of_date: date
 extraction_method: string
 review_status: string
+direction: int8   — evidence-backed signed direction (#110; additive, backward-compatible)
 ```
+
+`direction` field (#110 — additive column, default 0):
+
+- Applies to `causes`, `exposed_to`, `sensitive_to` edges only.
+- `+1` — relationship is beneficial / tailwind (source positively drives target).
+- `-1` — relationship is adverse / headwind (source negatively impacts target).
+- `0` — unknown / ambiguous. **Locked design decision**: unknown defaults to 0, NOT +1.
+  An edge with direction=0 is EXCLUDED from signed propagation (polarity=0 in graph.json).
+- `benefits` and `hurts` carry their sign via `edge_type` / `base_polarity`; no `direction` needed.
+- `co_occurs_with`, `mentioned_in`, `located_in` always have direction=0 (and polarity=0).
+- Old `edges.parquet` without the column load safely; missing values treated as 0.
 
 Allowed `edge_type` values:
 
@@ -459,6 +471,7 @@ Rules:
   - Exclude `llm_inferred` unless `include_weak_signals=true`.
   - Exclude `metadata_inferred` unless explicitly enabled.
 - `metadata_inferred` edges must carry `source_record_id` in `explanation` context so audit remains reconstructable.
+- `direction` must be in `{-1, 0, 1}` when present; 0 is the safe default for all edge types.
 
 ## 12. `edge_explanations.parquet`
 
@@ -529,11 +542,17 @@ Format:
 }
 ```
 
-Edge fields (FI-A additions):
+Edge fields (FI-A additions, updated in #110):
 
 - `polarity` — integer signed polarity for forward-inference propagation (FI-A/FI-B):
   `+1` (same-direction), `-1` (opposite-direction), `0` (undirected / excluded).
-  Derived from `configs/ontology.yml` `base_polarity` per edge type; not hardcoded.
+  Effective polarity rule (post-#110):
+  - `causes` / `exposed_to` / `sensitive_to`: polarity = the extracted `direction` field
+    from edges.parquet. `0` if direction is unknown/absent (EXCLUDED from signed propagation).
+    Locked design decision: unknown -> 0, NOT +1.
+  - `benefits`: polarity = +1 (from ontology base_polarity; unchanged).
+  - `hurts`: polarity = -1 (from ontology base_polarity; unchanged).
+  - All others (`co_occurs_with`, `mentioned_in`, `located_in`, …): polarity = 0.
   Present on ALL edges in the `edges` list (structural and evidence alike).
 - `propagation_weight` — float in `(0, 1]` representing signal attenuation per hop.
   Formula: `max(confidence, 0.01)`. Evidence count and recency are optional future
