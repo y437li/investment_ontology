@@ -12,21 +12,43 @@ Mutation safety : copy-on-read via ``copy.deepcopy()``.  Every caller receives
           an independent deep copy; mutations to the returned object cannot
           corrupt cached state or affect other callers.
 
+Pre-freeze validation guard (OI-3)
+-----------------------------------
+Before serving any artifact under a run's ``validation/`` sub-directory the
+cache checks that ``discovery_frozen=True`` in the run manifest.  If the run
+is NOT yet frozen, ``leakage.LeakageError`` is raised immediately — no file
+I/O is performed.  The check is cheap:
+
+  1. The path is resolved.  If it is not under ``settings.run_output_dir``,
+     the guard is skipped (non-run paths are never blocked).
+  2. The run_id is extracted from the resolved path.
+  3. The manifest's ``discovery_frozen`` flag is read and **cached** per run_id
+     in a module-level dict.  Once a run is frozen (True) the flag is permanent,
+     so the cached True is returned without a disk read on subsequent calls.
+  4. If ``discovery_frozen`` is ``False``, ``LeakageError`` is raised.
+
+Discovery artifact reads (``discovery/`` paths) are NEVER blocked.
+
 Public API
 ----------
   load_json(path: Path) -> dict
       Read a JSON file (or serve from cache).  Raises FileNotFoundError if path
       absent; callers should check existence before calling.
+      Raises LeakageError if path is under validation/ and run not yet frozen.
 
   load_parquet_rows(path: Path) -> list[dict]
       Read a Parquet file and return rows as list[dict] (or serve from cache).
       Raises FileNotFoundError if path absent.
+      Raises LeakageError if path is under validation/ and run not yet frozen.
 
   clear() -> None
       Flush the entire cache (useful in tests).
 
   cache_size() -> int
       Current number of cached entries (useful in tests / diagnostics).
+
+  clear_frozen_cache() -> None
+      Flush the per-run frozen-status cache (useful in tests).
 
 Thread safety
 -------------
@@ -50,15 +72,97 @@ import json
 from collections import OrderedDict
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Optional
 
 import pyarrow.parquet as pq
+
+from .leakage import LeakageError, assert_read_allowed
 
 # --------------------------------------------------------------------------- #
 # Configuration                                                               #
 # --------------------------------------------------------------------------- #
 
 _DEFAULT_MAX_ENTRIES: int = 256
+
+# --------------------------------------------------------------------------- #
+# Pre-freeze validation guard                                                 #
+# --------------------------------------------------------------------------- #
+
+# Per-run frozen status cache.  Keys are run_id strings; values are True once
+# a run is confirmed frozen.  ``discovery_frozen`` is a one-way transition
+# (False → True, never back), so we only store True permanently.
+_frozen_status_cache: dict[str, bool] = {}
+
+
+def _get_run_id_from_path(path: Path) -> Optional[str]:
+    """Extract the run_id from an artifact path under ``settings.run_output_dir``.
+
+    Returns ``None`` when the path is not under the run output directory
+    (e.g. during tests with ``tmp_path`` fixtures) so the guard silently skips.
+    """
+    from .config import settings  # local import to avoid load-time side-effects
+
+    try:
+        run_output = settings.run_output_dir.resolve()
+        rel = path.resolve().relative_to(run_output)
+        return rel.parts[0]  # first component is run_id
+    except (ValueError, IndexError):
+        return None
+
+
+def _is_frozen(run_id: str) -> bool:
+    """Return whether *run_id*'s discovery is frozen.
+
+    Consults the module-level cache first.  On a cache miss, loads the run
+    manifest.  If the manifest is missing or ``discovery_frozen`` is ``False``,
+    returns ``False`` without caching (so the next call re-checks).  Once
+    ``True`` is determined it is cached permanently (freeze is irreversible).
+    """
+    if _frozen_status_cache.get(run_id) is True:
+        return True
+
+    # Cache miss — load manifest
+    from . import runs as _runs  # local import to avoid circular at module level
+
+    manifest = _runs.load_manifest(run_id)
+    if manifest is None:
+        return False  # unknown run; don't enforce
+    if manifest.discovery_frozen:
+        _frozen_status_cache[run_id] = True
+        return True
+    return False
+
+
+def _check_prefreeeze_guard(path: Path) -> None:
+    """Raise ``LeakageError`` if *path* is a validation artifact on an unfrozen run.
+
+    This is the read-time enforcement for OI-3: validation/ data must not be
+    read until discovery is frozen (io_contracts §16).
+
+    The check is O(1) for frozen runs (cache hit) and one manifest read for
+    unfrozen runs.  Non-run paths (e.g. test tmp dirs) are skipped silently.
+
+    Raises
+    ------
+    LeakageError
+        When path is under validation/ and the owning run is not yet frozen.
+    """
+    run_id = _get_run_id_from_path(path)
+    if run_id is None:
+        return  # not a run artifact path — no enforcement
+
+    frozen = _is_frozen(run_id)
+    assert_read_allowed(path, frozen)
+
+
+def clear_frozen_cache() -> None:
+    """Flush the per-run frozen-status cache.
+
+    Useful in tests that create and freeze runs in the same session so the
+    cache does not carry stale state between test cases.
+    """
+    _frozen_status_cache.clear()
+
 
 # --------------------------------------------------------------------------- #
 # Internal cache class                                                        #
@@ -121,7 +225,10 @@ class _RunCache:
         without affecting the cache or other callers.
 
         Raises FileNotFoundError if the file does not exist.
+        Raises LeakageError if path is under validation/ and run not yet frozen.
         """
+        _check_prefreeeze_guard(path)  # OI-3: enforce pre-freeze read boundary
+
         path_str = str(path.resolve())
         mtime = self._mtime_ns(path)  # FileNotFoundError propagates to caller
         key: _CacheKey = (path_str, mtime)
@@ -147,7 +254,10 @@ class _RunCache:
         its row dicts without affecting the cache or other callers.
 
         Raises FileNotFoundError if the file does not exist.
+        Raises LeakageError if path is under validation/ and run not yet frozen.
         """
+        _check_prefreeeze_guard(path)  # OI-3: enforce pre-freeze read boundary
+
         path_str = str(path.resolve())
         mtime = self._mtime_ns(path)  # FileNotFoundError propagates to caller
         key: _CacheKey = (path_str, mtime)
@@ -235,3 +345,16 @@ def read_count() -> int:
 def reset_read_count() -> None:
     """Reset the read counter to zero."""
     _cache.reset_read_count()
+
+
+# Re-export LeakageError so callers can import from run_cache if needed.
+__all__ = [
+    "load_json",
+    "load_parquet_rows",
+    "clear",
+    "cache_size",
+    "read_count",
+    "reset_read_count",
+    "clear_frozen_cache",
+    "LeakageError",
+]
