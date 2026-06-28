@@ -1,0 +1,170 @@
+# SOURCE: Curated representative subset of the Loughran-McDonald (LM) Master Dictionary.
+# Cite: Loughran, T. and McDonald, B. (2011), "When Is a Liability Not a Liability?
+#       Textual Analysis, Dictionaries, and 10-Ks", Journal of Finance 66(1), pp. 35-65.
+# Full dictionary available at: https://sraf.nd.edu/loughranmcdonald/master-dictionary/
+#
+# LICENSE / ATTRIBUTION: The Loughran-McDonald word lists are provided for academic
+# and non-commercial research use. Please cite Loughran & McDonald (2011) when using
+# this lexicon. For commercial use, consult the authors' terms at the above URL.
+#
+# NOTE: This file is a CURATED REPRESENTATIVE SUBSET (~15-25 words per category)
+# for development and testing. It is NOT the full master dictionary.
+# To use the full LM dictionary in production:
+#   1. Download the LM Master Dictionary CSV from sraf.nd.edu.
+#   2. Rename or convert columns to match: word,positive,negative,uncertainty,
+#      litigious,strong_modal,weak_modal  (binary 0/1 per category).
+#   3. Drop this file in place — the loader reads whatever rows are present.
+#
+# FINANCE-NEUTRAL TERMS (proving LM, not Harvard-GI):
+# "liability", "cost", "depreciation" carry NO negative flag here. In general-purpose
+# dictionaries (e.g. Harvard-IV GI) these words score negative, but Loughran &
+# McDonald (2011) show they are NOT negative in financial contexts.
+#
+# Column definitions:
+#   word         — lowercase form to match against tokenized text
+#   positive     — 1 if word is in LM Positive word list
+#   negative     — 1 if word is in LM Negative word list
+#   uncertainty  — 1 if word is in LM Uncertainty word list
+#   litigious    — 1 if word is in LM Litigious word list
+#   strong_modal — 1 if word is in LM Strong Modal (Constraining) word list
+#   weak_modal   — 1 if word is in LM Weak Modal word list
+#
+# A word may have multiple flags = 1 (e.g., "may" is both uncertainty and weak_modal).
+# The loader yields one entry per row; words with multiple categories appear once
+# with multiple flags set.
+word,positive,negative,uncertainty,litigious,strong_modal,weak_modal
+# --- Positive words ---
+able,1,0,0,0,0,0
+achieve,1,0,0,0,0,0
+achieved,1,0,0,0,0,0
+best,1,0,0,0,0,0
+beneficial,1,0,0,0,0,0
+confident,1,0,0,0,0,0
+effective,1,0,0,0,0,0
+efficient,1,0,0,0,0,0
+excellent,1,0,0,0,0,0
+exceptional,1,0,0,0,0,0
+favorable,1,0,0,0,0,0
+growth,1,0,0,0,0,0
+improve,1,0,0,0,0,0
+improved,1,0,0,0,0,0
+improving,1,0,0,0,0,0
+outstanding,1,0,0,0,0,0
+profitable,1,0,0,0,0,0
+record,1,0,0,0,0,0
+solid,1,0,0,0,0,0
+strong,1,0,0,0,0,0
+success,1,0,0,0,0,0
+successful,1,0,0,0,0,0
+superior,1,0,0,0,0,0
+# --- Negative words ---
+# NOTE: "liability", "cost", "depreciation" are intentionally NOT here.
+adverse,0,1,0,0,0,0
+adversely,0,1,0,0,0,0
+decline,0,1,0,0,0,0
+deficit,0,1,0,0,0,0
+deteriorate,0,1,0,0,0,0
+difficult,0,1,0,0,0,0
+difficulties,0,1,0,0,0,0
+exposed,0,1,0,0,0,0
+fail,0,1,0,0,0,0
+failed,0,1,0,0,0,0
+failure,0,1,0,0,0,0
+impair,0,1,0,0,0,0
+impairment,0,1,0,0,0,0
+loss,0,1,0,0,0,0
+losses,0,1,0,0,0,0
+poor,0,1,0,0,0,0
+restructure,0,1,0,0,0,0
+unfavorable,0,1,0,0,0,0
+weak,0,1,0,0,0,0
+writedown,0,1,0,0,0,0
+writeoff,0,1,0,0,0,0
+# --- Finance-neutral terms: present but NOT negative (LM-specific) ---
+# These prove LM is not a generic sentiment list.
+liability,0,0,0,0,0,0
+liabilities,0,0,0,0,0,0
+cost,0,0,0,0,0,0
+costs,0,0,0,0,0,0
+depreciation,0,0,0,0,0,0
+amortization,0,0,0,0,0,0
+# --- Uncertainty words ---
+approximately,0,0,1,0,0,0
+anticipate,0,0,1,0,0,0
+anticipated,0,0,1,0,0,0
+believe,0,0,1,0,0,0
+believed,0,0,1,0,0,0
+believes,0,0,1,0,0,0
+contingent,0,0,1,0,0,0
+depend,0,0,1,0,0,0
+estimate,0,0,1,0,0,0
+estimated,0,0,1,0,0,0
+expect,0,0,1,0,0,0
+expected,0,0,1,0,0,0
+likely,0,0,1,0,0,0
+potential,0,0,1,0,0,0
+projected,0,0,1,0,0,0
+uncertain,0,0,1,0,0,0
+uncertainty,0,0,1,0,0,0
+unlikely,0,0,1,0,0,0
+# --- Uncertainty AND Weak Modal (LM cross-listed) ---
+may,0,0,1,0,0,1
+might,0,0,1,0,0,1
+could,0,0,1,0,0,1
+possibly,0,0,1,0,0,1
+perhaps,0,0,1,0,0,1
+probably,0,0,1,0,0,1
+# --- Litigious words ---
+alleged,0,0,0,1,0,0
+allegation,0,0,0,1,0,0
+allegations,0,0,0,1,0,0
+arbitration,0,0,0,1,0,0
+claim,0,0,0,1,0,0
+claims,0,0,0,1,0,0
+complaint,0,0,0,1,0,0
+defendant,0,0,0,1,0,0
+dispute,0,0,0,1,0,0
+disputes,0,0,0,1,0,0
+judgment,0,0,0,1,0,0
+lawsuit,0,0,0,1,0,0
+lawsuits,0,0,0,1,0,0
+legal,0,0,0,1,0,0
+litigation,0,0,0,1,0,0
+penalty,0,0,0,1,0,0
+penalties,0,0,0,1,0,0
+plaintiff,0,0,0,1,0,0
+plaintiffs,0,0,0,1,0,0
+proceedings,0,0,0,1,0,0
+regulatory,0,0,0,1,0,0
+settlement,0,0,0,1,0,0
+subpoena,0,0,0,1,0,0
+sue,0,0,0,1,0,0
+sued,0,0,0,1,0,0
+violation,0,0,0,1,0,0
+violations,0,0,0,1,0,0
+# --- Strong Modal words ---
+always,0,0,0,0,1,0
+cannot,0,0,0,0,1,0
+clearly,0,0,0,0,1,0
+definitely,0,0,0,0,1,0
+mandated,0,0,0,0,1,0
+mandatory,0,0,0,0,1,0
+must,0,0,0,0,1,0
+necessary,0,0,0,0,1,0
+never,0,0,0,0,1,0
+obligated,0,0,0,0,1,0
+required,0,0,0,0,1,0
+requires,0,0,0,0,1,0
+shall,0,0,0,0,1,0
+will,0,0,0,0,1,0
+# --- Weak Modal words (not already in uncertainty above) ---
+depending,0,0,0,0,0,1
+generally,0,0,0,0,0,1
+normally,0,0,0,0,0,1
+often,0,0,0,0,0,1
+ordinarily,0,0,0,0,0,1
+should,0,0,0,0,0,1
+sometimes,0,0,0,0,0,1
+typically,0,0,0,0,0,1
+usually,0,0,0,0,0,1
+whenever,0,0,0,0,0,1

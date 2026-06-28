@@ -204,6 +204,52 @@ Other rules:
 
 See `docs/io_contracts.md §20a` for the full field contract.
 
+## 4c. LM Tone Scoring (Discovery-time, SENT-A, GitHub #99)
+
+**New in SENT-A.** The LM tone scorer reads `chunks.parquet` (joined with
+`documents.parquet` for `document_type`) and writes:
+
+```text
+discovery/chunk_tone.parquet  — LM tone vector per chunk
+```
+
+**Layer:** L2 discovery artifact. Substrate for SENT-B (company-level aggregation)
+and SENT-C (temporal trending).
+
+**Lexicon:** Loughran-McDonald (2011) Master Dictionary. Committed subset at
+`data/lexicons/loughran_mcdonald.csv`; replace with the full dictionary for
+production (loader is drop-in compatible).
+
+**chunk_tone.parquet schema:**
+
+```text
+chunk_id:             string       — join key to chunks.parquet
+document_id:          string       — join key to documents.parquet
+available_at:         string       — YYYY-MM-DD; inherited from chunk
+speaker_role:         string       — "management" | "analyst" | "media" | "unknown"
+token_count:          int          — denominator for normalisation
+tone_positive:        float        — positive_count / token_count
+tone_negative:        float        — negative_count / token_count
+tone_uncertainty:     float        — uncertainty_count / token_count
+tone_litigious:       float        — litigious_count / token_count
+tone_strong_modal:    float        — strong_modal_count / token_count
+tone_weak_modal:      float        — weak_modal_count / token_count
+matched_positive:     list[str]    — matched token list (auditability)
+matched_negative:     list[str]
+matched_uncertainty:  list[str]
+matched_litigious:    list[str]
+matched_strong_modal: list[str]
+matched_weak_modal:   list[str]
+```
+
+**Config:** Category list and speaker-role attribution rules are in
+`configs/sentiment.yml` — not hardcoded in the scorer.
+
+**Finance-neutral terms:** "liability", "cost", "depreciation" score 0 on the
+negative category (proving LM, not Harvard-IV GI).
+
+See `docs/io_contracts.md §S-A` for the full field contract.
+
 ## 4b. LLM Quantified-Fact Extraction (Discovery-time, EG-B2)
 
 The LLM fact-extraction pass (`run_fact_extraction`) reads `chunks.parquet` and
