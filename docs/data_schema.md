@@ -19,6 +19,7 @@ MiroFish can inform the upload and task-status workflow, but it does not define 
 | L1 | Cleaned unstructured artifacts | Data Cleaning Agent | normalized text, document metadata, chunks, cleaning log | `documents.parquet`, `document_cleaning_log.parquet`, `chunks.parquet` |
 | L2 | Structured discovery artifacts | Extraction Agent, Graph Theme Agent | entities, aliases, edges, graph, communities, theme snapshots | `entities.parquet`, `edges.parquet`, `graph.json`, `theme_snapshots.json` |
 | L2-P | Provenance reverse-join artifacts (EG-E) | Provenance Agent | entity-chunk-document linkage; theme->documents; (company,theme)->documents | `entity_chunk_provenance.parquet`, `theme_document_evidence.parquet`, `company_theme_document_evidence.parquet` |
+| L2-FI | Forward-inference derived artifacts (FI-C) | Propagation Agent | per-Event-trigger company impact rows with causal path + evidence | `projected_impacts.parquet` |
 | L3 | Structured validation artifacts | Data Engineering Agent, Validation Agent | prices, fundamentals, baskets, validation metrics | `market_prices.parquet`, `fundamentals.parquet`, `portfolio_baskets.parquet`, `validation.csv` |
 
 Rule:
@@ -26,6 +27,7 @@ Rule:
 - No stage may skip from L0 raw files directly to L2 extraction.
 - L2 discovery artifacts must be frozen before L3 validation reads future outcomes.
 - L2-P provenance artifacts are computed from L2 artifacts and must be regenerated if upstream L2 artifacts change.
+- L2-FI forward-inference artifacts are derived from `graph.json` (L2); they are regenerable and must never be restated.
 
 ### EG-E Provenance Layer (L2-P)
 
@@ -44,6 +46,28 @@ Critical correctness rule for E3:
   evidence group (because the structural edge that causes CompanyY's exposure was
   extracted from that chunk with CompanyY as an endpoint).
 - Using `document.company_id` for this attribution would be wrong.
+
+### FI-C Forward-Inference Layer (L2-FI)
+
+FI-C persists the output of the deterministic forward-inference propagation engine
+(FI-B, `propagation.propagate()`) as a discovery artifact.
+
+| Artifact | Key | What it answers |
+|---|---|---|
+| `projected_impacts.parquet` | `(trigger_id, company_id)` | Which companies are impacted by an Event activation, in which direction, and via which causal edge path? |
+
+Design invariants:
+- **PIT-clean by construction:** derived from `graph.json` (already PIT-filtered by
+  `graph_build.py`, `first_seen_at <= as_of_date`, fail-closed).  `as_of_date` from the
+  run manifest is stamped on every row.
+- **Derived / regenerable:** rebuilt on every `compute_projected_impacts()` call.  Never
+  restated.  Historical snapshots are captured by separate `run_id`s.
+- **Trigger source (v1):** Event nodes from the PIT graph.  Data-driven — no user input.
+- **direction + ordinal strength only:** `direction` ∈ {+1, −1}; `strength` is an
+  absolute aggregate suitable for ordinal ranking only (NOT a calibrated probability).
+- **Known limitation (#110):** `causes`, `exposed_to`, `sensitive_to` edges have
+  `base_polarity = +1` unconditionally.  Direction is provisional for those edge types
+  until issue #110 adds per-instance edge direction.
 
 ## 2. L0 Raw Unstructured Input Standard
 
