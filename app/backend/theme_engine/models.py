@@ -124,6 +124,9 @@ class ValidationRunResponse(BaseModel):
     artifacts: list[str]
     validated_themes: int = 0
     message: Optional[str] = None
+    # OI-1 illustrative guard: single-snapshot always true/false; walk-forward may differ.
+    illustrative: Optional[bool] = None
+    claim_supported: Optional[bool] = None
     # Populated when validation_status == 'blocked_insufficient_forward_data'
     missing_ranges: Optional[list[str]] = None
     as_of_date: Optional[str] = None

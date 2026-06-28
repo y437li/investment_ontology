@@ -1328,12 +1328,34 @@ For `lineage_mode="single_snapshot"`, `winning_zone.json` is still a schema-vali
 
 Target framework:
 
-Monthly walk-forward requires a minimum of 3 monthly points for any inferential claim.
+Monthly walk-forward requires a minimum of 3 monthly as-of time points for any inferential claim.
+
+## Minimal Walk-Forward (MVP)
+
+The minimal walk-forward is **>= 3 monthly as-of time points** evaluated against the same frozen discovery basket. This is the minimum panel required before any excess-return or association claim is reported.
+
+Sweep semantics:
+
+- A sweep processes the `walk_forward.as_of_dates` list (ordered, monthly-spaced).
+- For each time point `t_i` in the list, the forward-return validation runs independently: theme basket return is measured using prices strictly after `t_i` and within the configured `sweep.forward_window`; baseline return is measured the same way.
+- Per-point result: `{as_of, theme_basket_return, baseline_return, excess}` where `excess = theme_basket_return - baseline_return`.
+- Pooled statistics across the panel: `mean_excess`, `hit_rate` (fraction of points where excess > 0), `n_points` (number of valid points).
+- `claim_supported = n_points >= sweep.min_points_for_claim`.
+
+MVP Caveat (hard rule):
+
+> **A single-snapshot validation result is ILLUSTRATIVE only and must NOT be reported as an excess-return or statistical-association claim.**
+>
+> - Every result from `run_validation()` (single-snapshot) must carry `illustrative=true` and `claim_supported=false`.
+> - An excess-return claim requires `n_points >= sweep.min_points_for_claim` from the walk-forward panel (`run_walk_forward_validation()`).
+> - No code path may emit `claim_supported=true` from a single-snapshot call. This is a tested, hard rule.
+
+Basket composition note: in the MVP, the theme basket is derived from a single frozen discovery snapshot. The walk-forward varies the ENTRY DATE for forward-return measurement (achieving PIT leakage discipline per point via price_date strictly > as_of) but does not re-run community detection at each time point. A full out-of-sample sweep requires per-point discovery re-runs (deferred to post-MVP sweep infrastructure).
 
 Single-snapshot behavior:
 
 - `backtest_status` in run artifacts must be `disabled_not_enough_snapshots`.
-- Validation outputs should state: "backtesting requires temporal panel and is not meaningful for single-snapshot inputs."
+- Validation outputs must state: "backtesting requires temporal panel and is not meaningful for single-snapshot inputs."
 
 Required minimum coverage:
 - 1M metrics require at least one month of market coverage after `as_of_date` for each snappoint.
@@ -1346,15 +1368,20 @@ Config binding:
 
 - `configs/validation.example.yml` provides executable policy:
   - `forward_coverage_months`: required future coverage by window.
-  - `walk_forward.min_snapshots`: minimum number of as-of points before claims.
-  - `walk_forward.as_of_dates`: explicit ordered as-of schedule for a sweep.
+  - `walk_forward.as_of_dates`: explicit ordered as-of schedule (>= 3 monthly dates for MVP).
+  - `walk_forward.min_snapshots`: minimum number of as-of points before claims (same as `sweep.min_points_for_claim`).
   - `walk_forward.min_snapshot_gap_days`: minimum spacing between adjacent as-of points.
   - `walk_forward.require_coverage`: fail fast if any window is short.
+  - `sweep.forward_window`: holding window for the walk-forward panel (e.g., `1M`).
+  - `sweep.baseline`: benchmark used per point (e.g., `equal_weight_universe`).
+  - `sweep.min_points_for_claim`: minimum valid points before `claim_supported=true` is emitted.
   - `rules.reject_insufficient_forward_data`: hard block with actionable error.
 - Validation output status semantics:
-  - `validation_status: disabled_not_enough_snapshots` for single-snapshot MVP.
+  - `backtest_status: disabled_not_enough_snapshots` for single-snapshot MVP.
   - `validation_status: blocked_insufficient_forward_data` when coverage is insufficient.
   - `validation_status: failed` for malformed windows.
+  - `illustrative: true` and `claim_supported: false` always set on single-snapshot results.
+  - `claim_supported: true` only when walk-forward panel has `n_points >= sweep.min_points_for_claim`.
 
 At time `t`:
 
@@ -1575,11 +1602,16 @@ Deliver:
 - `portfolio_baskets.parquet`.
 - `validation.csv`.
 - 1M/3M validation.
+- Minimal walk-forward runner (`run_walk_forward_validation`): panel across `>= 3` monthly as-of points from `walk_forward.as_of_dates`, per-point `{as_of, theme_basket_return, baseline_return, excess}` and pooled stats (`mean_excess`, `hit_rate`, `n_points`).
+- Illustrative guard: `run_validation()` (single-snapshot) always emits `illustrative=true, claim_supported=false`; `claim_supported=true` requires `n_points >= sweep.min_points_for_claim`.
 
 Acceptance:
 
 - Validation runs only after discovery artifacts are frozen.
 - Validation can reproduce basket constituents, weights, data version, and benchmark.
+- Single-snapshot result carries `illustrative=true` and `claim_supported=false` — no excess-return claim may be inferred.
+- Walk-forward panel with `n_points >= sweep.min_points_for_claim` may carry `claim_supported=true`.
+- Tests prove: (a) panel computes across >= 3 monthly points with pooled stats; (b) single-snapshot always illustrative; (c) no code path emits `claim_supported=true` from single-snapshot.
 
 ## Milestone 7: Report and Demo
 

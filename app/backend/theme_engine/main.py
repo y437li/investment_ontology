@@ -448,6 +448,9 @@ def validation_run(req: ValidationRunRequest) -> ValidationRunResponse:
         artifacts=result.get("artifacts", []),
         validated_themes=result.get("validated_themes", 0),
         message=result.get("message"),
+        # OI-1 illustrative guard fields
+        illustrative=result.get("illustrative"),
+        claim_supported=result.get("claim_supported"),
         missing_ranges=result.get("missing_ranges"),
         as_of_date=result.get("as_of_date"),
         holding_window=result.get("holding_window"),

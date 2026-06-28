@@ -32,9 +32,16 @@ Benchmarks:
   - sector_equal_weight: equal-weight by sector (from entities.parquet).
   - random_community_baseline: deterministic random basket (seed from config).
 
-Single-snapshot caveat (spec §2 MVP Caveats):
+Single-snapshot caveat (spec §2 MVP Caveats + OI-1 §22):
   - backtest_status='disabled_not_enough_snapshots'
+  - run_validation() always returns illustrative=True, claim_supported=False.
   - Single-snapshot runs are ILLUSTRATIVE only; no statistical/alpha claim.
+
+Walk-forward panel (OI-1 §22):
+  - run_walk_forward_validation() computes a panel across walk_forward.as_of_dates.
+  - Per-point: {as_of, theme_basket_return, baseline_return, excess}.
+  - Pooled: mean_excess, hit_rate, n_points.
+  - claim_supported=True only when n_points >= sweep.min_points_for_claim.
 """
 
 from __future__ import annotations
@@ -754,10 +761,13 @@ def run_validation(run_id: str) -> dict:
     valid_windows = [w for w in forward_windows_raw if w not in blocked_windows]
     if not valid_windows:
         first_blocked = next(iter(blocked_windows.values())) if blocked_windows else {}
+        # OI-1 hard rule: single-snapshot is always illustrative, never a claim.
         return {
             "success": False,
             "validation_status": "blocked_insufficient_forward_data",
             "backtest_status": "disabled_not_enough_snapshots",
+            "illustrative": True,
+            "claim_supported": False,
             "artifacts": [],
             "validated_themes": 0,
             "message": (
@@ -923,15 +933,19 @@ def run_validation(run_id: str) -> dict:
         "validation/validation.csv",
     ]
 
+    # OI-1 hard rule: single-snapshot is always illustrative, never a claim.
     return {
         "success": True,
         "validation_status": "completed",
         "backtest_status": "disabled_not_enough_snapshots",
+        "illustrative": True,
+        "claim_supported": False,
         "artifacts": artifacts,
         "validated_themes": len(validated_theme_ids),
         "message": (
             f"Single-snapshot MVP validation complete. "
-            f"Results are illustrative only; no statistical claim is made."
+            f"Results are illustrative only; no statistical claim is made. "
+            f"Use run_walk_forward_validation() with >= 3 time points for a claim."
         ),
     }
 
@@ -944,3 +958,219 @@ def _write_validation_csv(rows: list[dict], out_path: Path) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow({col: row.get(col, "") for col in VALIDATION_CSV_COLUMNS})
+
+
+# ---------------------------------------------------------------------------
+# OI-1: Walk-forward panel runner (spec §22 Minimal Walk-Forward)
+# ---------------------------------------------------------------------------
+
+
+def run_walk_forward_validation(run_id: str) -> dict:
+    """Execute walk-forward panel validation across config's as_of_dates (OI-1 §22).
+
+    For each time point in walk_forward.as_of_dates:
+      - Applies coverage gate (max(price_date) >= point + forward_window).
+      - Computes theme basket return using prices strictly after the point's as_of.
+      - Computes baseline return the same way.
+      - Records per-point excess = theme_basket_return - baseline_return.
+
+    Aggregates the panel into pooled stats:
+      - mean_excess: mean of per-point excess values.
+      - hit_rate: fraction of points where excess > 0.
+      - n_points: count of valid (non-skipped) points.
+
+    Returns:
+      - claim_supported=True only when n_points >= sweep.min_points_for_claim.
+      - illustrative=True when n_points < sweep.min_points_for_claim.
+
+    Hard rule (OI-1): a single as_of_date yields n_points=1 (or 0 if no coverage),
+    which is always < min_points_for_claim (>= 3), so claim_supported is always False
+    for a single-point call — matching the run_validation() single-snapshot discipline.
+
+    Precondition (OI-3): run must be frozen before this is called.
+    PIT per point: _compute_basket_return enforces price_date STRICTLY > point's as_of.
+    """
+    # --- PRECONDITION (OI-3): verify freeze gate ---
+    manifest = runs.validate_ready_for_validation(run_id)
+
+    # --- Load validation config ---
+    config = _load_validation_config(manifest.validation_config)
+    wf_config = config.get("walk_forward", {}) or {}
+    sweep_config = config.get("sweep", {}) or {}
+
+    as_of_dates_raw: list[str] = wf_config.get("as_of_dates", []) or []
+    # min_points_for_claim from sweep section; fall back to walk_forward.min_snapshots
+    min_points_for_claim: int = int(
+        sweep_config.get(
+            "min_points_for_claim",
+            wf_config.get("min_snapshots", 3),
+        )
+    )
+    forward_window: str = str(sweep_config.get("forward_window", "1M"))
+    baseline_name: str = str(sweep_config.get("baseline", "equal_weight_universe"))
+
+    basket_top_n: int = int(config.get("basket_top_n", 10))
+    random_seed: int = int(config.get("random_seed", 42))
+
+    if not as_of_dates_raw:
+        return {
+            "success": False,
+            "n_points": 0,
+            "min_points_for_claim": min_points_for_claim,
+            "claim_supported": False,
+            "illustrative": True,
+            "points": [],
+            "mean_excess": None,
+            "hit_rate": None,
+            "forward_window": forward_window,
+            "baseline": baseline_name,
+            "message": (
+                "walk_forward.as_of_dates is empty in validation config. "
+                "Add >= 3 monthly dates to enable walk-forward panel."
+            ),
+        }
+
+    # --- Load discovery artifacts (frozen) ---
+    exposure_rows = _load_exposure(run_id)
+    snapshots = _load_theme_snapshots(run_id)
+    entities = _load_entities(run_id)
+
+    # --- Load market prices (future data, validation/ only) ---
+    all_price_rows = _load_market_prices(run_id)
+
+    # Universe: all company_ids from exposure
+    universe_company_ids: list[str] = sorted(
+        set(str(r.get("company_id") or "") for r in exposure_rows if r.get("company_id"))
+    )
+
+    # Build baskets from frozen discovery (composition fixed at discovery snapshot)
+    basket_rows = _build_theme_baskets(
+        run_id=run_id,
+        as_of_date=manifest.as_of_date,
+        exposure_rows=exposure_rows,
+        snapshots=snapshots,
+        basket_top_n=basket_top_n,
+    )
+
+    # Aggregate basket: equal-weight all companies across all theme baskets
+    agg_company_ids: list[str] = sorted(
+        set(str(r.get("company_id") or "") for r in basket_rows if r.get("company_id"))
+    )
+    agg_weights: dict[str, float] = {cid: 1.0 for cid in agg_company_ids}
+
+    # Parse forward window
+    try:
+        win_months = _window_months(forward_window)
+    except ValueError:
+        win_months = 1
+
+    # --- Per-point evaluation ---
+    points: list[dict] = []
+    for as_of_str in as_of_dates_raw:
+        as_of_str = str(as_of_str).strip()
+        try:
+            as_of_pt = date.fromisoformat(as_of_str[:10])
+        except ValueError:
+            points.append({
+                "as_of": as_of_str,
+                "theme_basket_return": None,
+                "baseline_return": None,
+                "excess": None,
+                "skipped_reason": f"unparseable_date: {as_of_str!r}",
+            })
+            continue
+
+        window_end = _add_months(as_of_pt, win_months)
+
+        # Coverage gate per point (OI-7 applied per time point)
+        if not _check_forward_coverage(all_price_rows, as_of_pt, window_end):
+            points.append({
+                "as_of": as_of_str,
+                "theme_basket_return": None,
+                "baseline_return": None,
+                "excess": None,
+                "skipped_reason": "insufficient_forward_coverage",
+            })
+            continue
+
+        # Theme basket return: PIT enforced by _compute_basket_return
+        # (prices strictly after as_of_pt; see _apply_leakage_filter)
+        if agg_company_ids:
+            theme_ret, _, _, _ = _compute_basket_return(
+                agg_company_ids, agg_weights, all_price_rows, as_of_pt, window_end
+            )
+        else:
+            theme_ret = None
+
+        # Baseline return (same PIT discipline via _compute_basket_return internals)
+        if baseline_name == "equal_weight_universe":
+            baseline_ret, _ = _compute_equal_weight_universe_return(
+                all_price_rows, as_of_pt, window_end, universe_company_ids
+            )
+        elif baseline_name == "sector_equal_weight":
+            baseline_ret, _, _ = _compute_sector_equal_weight_return(
+                all_price_rows, as_of_pt, window_end, universe_company_ids, entities
+            )
+        elif baseline_name == "random_community_baseline":
+            baseline_ret, _ = _compute_random_community_baseline(
+                all_price_rows, as_of_pt, window_end,
+                universe_company_ids, basket_top_n, random_seed,
+            )
+        else:
+            baseline_ret = None
+
+        excess: Optional[float] = None
+        if theme_ret is not None and baseline_ret is not None:
+            excess = theme_ret - baseline_ret
+
+        points.append({
+            "as_of": as_of_str,
+            "theme_basket_return": theme_ret,
+            "baseline_return": baseline_ret,
+            "excess": excess,
+        })
+
+    # --- Pooled stats ---
+    valid_points = [p for p in points if p.get("excess") is not None]
+    n_points = len(valid_points)
+
+    mean_excess: Optional[float] = None
+    hit_rate: Optional[float] = None
+    if valid_points:
+        excesses = [p["excess"] for p in valid_points]
+        mean_excess = sum(excesses) / len(excesses)
+        hit_rate = sum(1 for e in excesses if e > 0) / len(excesses)
+
+    # OI-1 hard rule: claim requires n_points >= min_points_for_claim.
+    # A single-point call (n_points == 1) can never meet min_points_for_claim >= 3.
+    claim_supported: bool = n_points >= min_points_for_claim
+    illustrative: bool = not claim_supported
+
+    if claim_supported:
+        message = (
+            f"Walk-forward panel: {n_points}/{len(as_of_dates_raw)} valid points. "
+            f"Claim SUPPORTED (n_points={n_points} >= min_points_for_claim={min_points_for_claim}). "
+            f"mean_excess={mean_excess:.4f}, hit_rate={hit_rate:.2f}."
+            if mean_excess is not None else
+            f"Walk-forward panel: {n_points}/{len(as_of_dates_raw)} valid points. Claim SUPPORTED."
+        )
+    else:
+        message = (
+            f"Walk-forward panel: {n_points}/{len(as_of_dates_raw)} valid points — "
+            f"ILLUSTRATIVE ONLY. Requires n_points >= {min_points_for_claim} for a claim. "
+            "No excess-return or statistical-association claim is supported."
+        )
+
+    return {
+        "success": True,
+        "n_points": n_points,
+        "min_points_for_claim": min_points_for_claim,
+        "claim_supported": claim_supported,
+        "illustrative": illustrative,
+        "points": points,
+        "mean_excess": mean_excess,
+        "hit_rate": hit_rate,
+        "forward_window": forward_window,
+        "baseline": baseline_name,
+        "message": message,
+    }

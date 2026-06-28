@@ -49,14 +49,18 @@ Dispatch note:
 
 ## OI-1 Minimal walk-forward for a real research claim
 
-- Status: in_progress
+- Status: completed
 - Affects: sections 1, 22, 28; Milestone 6
 - Owner: Research / Quant Engineer (`agents/validation_agent.md`)
 - Conflict: The product goal (section 1) is to validate whether discovered communities relate to future outcomes, but the MVP uses a single `as_of_date`, which is a single cross-sectional draw and cannot support statistical association. Walk-forward (section 22) is currently "Later".
-- Proposed resolution: Pull a minimal walk-forward (3-4 monthly time points) into MVP scope so the core hypothesis is testable. Until then, validation output stays labeled illustrative (section 2 MVP Caveats).
-- Files: `theme_discovery_engine_v1.md` (sections 22, 27 Milestone 6), `configs/validation.example.yml`, `agents/validation_agent.md`.
-- Acceptance: spec defines a minimal walk-forward (>= 3 time points) with explicit sweep semantics; validation config carries the time-point list; no excess-return claim is presented from a single snapshot.
-- Decision needed by: Milestone 6 planning.
+- Resolution:
+  - `theme_discovery_engine_v1.md` §22 now defines the MINIMAL WALK-FORWARD (>= 3 monthly as-of time points), explicit SWEEP SEMANTICS (per-point forward return vs baseline, then pooled hit-rate / mean excess across points), and a hard MVP CAVEAT: a single-snapshot result is ILLUSTRATIVE and must NOT be reported as an excess-return or statistical-association claim.
+  - `theme_discovery_engine_v1.md` §27 M6 acceptance now requires the illustrative guard and walk-forward panel.
+  - `configs/validation.example.yml` carries `walk_forward.as_of_dates` (3 monthly dates) and `sweep` section (`forward_window`, `baseline`, `min_points_for_claim`).
+  - `validation.py` implements `run_walk_forward_validation()` (panel runner) and enforces `illustrative=true, claim_supported=false` on all single-snapshot `run_validation()` results. `claim_supported=true` requires `n_points >= sweep.min_points_for_claim` from the walk-forward panel.
+  - `agents/validation_agent.md` updated to reflect walk-forward and illustrative discipline.
+  - Tests in `tests/backend/test_oi1_walk_forward.py` prove: panel computes correctly; single-snapshot is always illustrative; no code path emits `claim_supported=true` from single snapshot; PIT per point respected.
+- Files modified: `theme_discovery_engine_v1.md` (§22, §27 M6), `configs/validation.example.yml`, `app/backend/theme_engine/validation.py`, `agents/validation_agent.md`, `tests/backend/test_oi1_walk_forward.py`.
 
 ## OI-2 Discipline for interpretive edges (`benefits` / `hurts` / `exposed_to` / `causes`)
 
