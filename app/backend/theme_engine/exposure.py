@@ -63,7 +63,6 @@ Point-in-time:
 
 from __future__ import annotations
 
-import json
 import math
 from collections import defaultdict
 from datetime import date, datetime
