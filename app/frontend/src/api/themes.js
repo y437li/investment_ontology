@@ -95,3 +95,32 @@ export function getThemeTrajectories(runId) {
 export function getChunkSource(runId, chunkId) {
   return service.get(`/api/themes/${runId}/chunks/${chunkId}`)
 }
+
+/**
+ * EG-C: Per-company detail page data.
+ * Returns {
+ *   company_id, name, ticker, entity_type, as_of_date,
+ *   themes: [{community_id, theme_name, theme_snapshot_id, exposure_score}],
+ *   fundamentals: {available: bool, as_of_date, rows: [...], message?},
+ *   financial_facts: [{metric_name, value, unit, period, direction, is_guidance,
+ *                       confidence, evidence_chunk_id, source}]
+ * }
+ */
+export function getCompanyDetail(runId, companyId) {
+  return service.get(`/api/themes/${runId}/companies/${companyId}`)
+}
+
+/**
+ * EG-C/D: Company-level evidence grouped by theme.
+ * Returns [{
+ *   community_id, theme_name, theme_snapshot_id, chunk_count,
+ *   chunks: [{chunk_id, text, document_id, available_at, section_title, block_type,
+ *              financial_fact: {metric_name,value,unit,period,direction,is_guidance} | null,
+ *              fact_label: string | null,
+ *              document: {title, source, document_type, published_at}}]
+ * }]
+ * Requires /api/provenance/materialize to have been run.
+ */
+export function getCompanyEvidence(runId, companyId) {
+  return service.get(`/api/themes/${runId}/companies/${companyId}/evidence`)
+}

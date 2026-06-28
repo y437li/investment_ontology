@@ -107,8 +107,11 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in communityExposures" :key="row.company_id">
-                  <td>{{ row.company_id }}</td>
+                <tr v-for="row in communityExposures" :key="row.company_id" class="exposure-row-link" @click="navigateToCompany(row.company_id)" title="View company detail page">
+                  <td class="company-cell">
+                    <span class="company-id-text">{{ row.ticker || row.company_id }}</span>
+                    <span class="company-link-hint">&#8599;</span>
+                  </td>
                   <td>{{ Number(row.exposure_score || 0).toFixed(3) }}</td>
                   <td>{{ row.evidence_edge_count || 0 }}</td>
                 </tr>
@@ -294,7 +297,7 @@
                   <span class="subgraph-hint">Click a node to view its profile</span>
                 </div>
                 <div class="subgraph-container" ref="subgraphContainer">
-                  <LayeredGraph :nodes="sgNodes" :edges="sgEdges" :active-hop="hopHighlight" @node-click="(d) => fetchNodeProfile(d.id)" />
+                  <LayeredGraph :nodes="sgNodes" :edges="sgEdges" :active-hop="hopHighlight" @node-click="(d) => onGraphNodeClick(d)" />
                 </div>
               </div>
               <!-- ── END SUBGRAPH ─────────────────────────────────────────── -->
@@ -419,7 +422,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import * as d3 from 'd3'
 import RunNav from '../components/RunNav.vue'
 import { getCommunitiesJson, getThemeSnapshots, getThemeMetrics, getCompanyThemeExposure } from '../api/artifacts.js'
@@ -428,6 +431,7 @@ import LayeredGraph from '../components/LayeredGraph.vue'
 
 const props = defineProps({ runId: String })
 const route = useRoute()
+const router = useRouter()
 
 const loading = ref(false)
 const error = ref('')
@@ -962,6 +966,30 @@ const closeNodeProfile = () => {
   lastProfileEntityId = null
 }
 
+// ─── Company navigation (EG-C) ───────────────────────────────────────────────
+/**
+ * Navigate to the per-company detail page.
+ * companyId must be the entity id (ent_...) from the exposure table.
+ */
+const navigateToCompany = (companyId) => {
+  if (!companyId) return
+  router.push({ name: 'Company', params: { runId: props.runId, companyId } })
+}
+
+/**
+ * Handle a node click from the relationship subgraph (LayeredGraph).
+ * Company nodes navigate to the company detail page (EG-C).
+ * All other node types open the entity profile panel (existing behaviour).
+ */
+const onGraphNodeClick = (nodeData) => {
+  if (!nodeData) return
+  if (nodeData.entity_type === 'Company') {
+    navigateToCompany(nodeData.id)
+  } else {
+    fetchNodeProfile(nodeData.id)
+  }
+}
+
 // ─── Date formatting ──────────────────────────────────────────────────────────
 const formatDate = (dateStr) => {
   if (!dateStr) return ''
@@ -1319,6 +1347,34 @@ onMounted(loadData)
   text-transform: uppercase;
   color: #888;
   border-bottom: 1px solid #E5E5E5;
+}
+
+/* EG-C: clickable exposure rows navigate to company detail page */
+.exposure-row-link {
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.exposure-row-link:hover td {
+  background: #EEF2FF;
+}
+
+.company-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.company-id-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent, #1a56db);
+  font-weight: 600;
+}
+
+.company-link-hint {
+  font-size: 10px;
+  color: #aaa;
 }
 
 .exposure-table td {
