@@ -141,6 +141,177 @@
               </div>
             </section>
 
+            <!-- ── SENT-D: Management-sentiment panel ────────────────── -->
+            <section class="card">
+              <div class="card-header">
+                <span class="card-title">Management Sentiment</span>
+                <span class="source-note">SENT-D</span>
+                <span
+                  v-if="sentimentData?.fused_tone_summary"
+                  class="sent-tone-badge"
+                  :class="`sent-tone-${sentimentData.fused_tone_summary.dominant_tone_severity}`"
+                >
+                  {{ sentimentData.fused_tone_summary.dominant_tone_label }}
+                </span>
+              </div>
+
+              <!-- Loading -->
+              <div v-if="sentimentLoading" class="center-msg small">
+                <div class="spinner small"></div>
+                <span>Loading sentiment…</span>
+              </div>
+
+              <!-- Error -->
+              <div v-else-if="sentimentError" class="evidence-error">
+                <span class="error-icon-small">⚠</span>
+                <span>{{ sentimentError }}</span>
+              </div>
+
+              <!-- Not available (artifact absent / no rows) -->
+              <div v-else-if="!sentimentData?.available" class="empty-state">
+                <div class="empty-icon">ℹ</div>
+                <div class="empty-msg-text">
+                  {{ sentimentData?.message || 'No management-sentiment data available. Run sentiment fusion first.' }}
+                </div>
+              </div>
+
+              <!-- Sentiment panel content -->
+              <div v-else>
+                <!-- ── Summary bar ── -->
+                <div class="sent-summary-bar">
+                  <div class="sent-summary-tones">
+                    <span
+                      v-for="(count, tone) in sentimentData.fused_tone_summary.tone_counts"
+                      :key="tone"
+                      class="sent-tone-pill"
+                      :class="`sent-tone-${tone}`"
+                    >
+                      {{ tone }} <strong>{{ count }}</strong>
+                    </span>
+                  </div>
+                  <!-- Conflict / hedged alert flags — visually explicit, never hidden -->
+                  <div class="sent-alert-flags">
+                    <span
+                      v-if="sentimentData.fused_tone_summary.has_conflict"
+                      class="sent-flag sent-flag-conflict"
+                      title="At least one reading shows a direct signal conflict between LLM and LM assessments."
+                    >
+                      ⚡ Signal conflict
+                    </span>
+                    <span
+                      v-if="sentimentData.fused_tone_summary.has_hedged"
+                      class="sent-flag sent-flag-hedged"
+                      title="At least one reading shows hedged language — positive framing with uncertainty in the text."
+                    >
+                      ⚠ Hedged language
+                    </span>
+                  </div>
+                </div>
+
+                <!-- ── Per-reading list ── -->
+                <div class="sent-reading-list">
+                  <div
+                    v-for="reading in sentimentData.readings"
+                    :key="reading.fusion_id"
+                    class="sent-reading"
+                    :class="`sent-reading-${reading.agreement_severity}`"
+                  >
+                    <!-- Reading header row (always visible) -->
+                    <div
+                      class="sent-reading-header"
+                      @click="toggleReading(reading.fusion_id)"
+                    >
+                      <!-- Fused tone badge — PRIMARY signal -->
+                      <span
+                        class="sent-reading-tone"
+                        :class="`sent-tone-${reading.fused_tone_severity}`"
+                      >{{ reading.fused_tone_label }}</span>
+
+                      <!-- Agreement badge — EXPLICITLY shown for hedged/conflict -->
+                      <span
+                        class="sent-reading-agreement"
+                        :class="`sent-agreement-${reading.agreement_severity}`"
+                      >{{ reading.agreement_label }}</span>
+
+                      <!-- Confidence -->
+                      <span class="sent-reading-conf mono">
+                        {{ (reading.fused_confidence * 100).toFixed(0) }}%
+                      </span>
+
+                      <!-- Date -->
+                      <span class="sent-reading-date mono">{{ reading.available_at }}</span>
+
+                      <!-- Expand chevron -->
+                      <span class="sent-chevron">
+                        {{ expandedReadings.has(reading.fusion_id) ? '▼' : '▶' }}
+                      </span>
+                    </div>
+
+                    <!-- Reading detail (expanded) -->
+                    <div v-if="expandedReadings.has(reading.fusion_id)" class="sent-reading-detail">
+
+                      <!-- LLM vs LM signal breakdown -->
+                      <div class="sent-signals">
+                        <div class="sent-signal-row">
+                          <span class="sent-signal-label">LLM read</span>
+                          <span class="sent-signal-val">{{ reading.direction || '—' }}</span>
+                          <span v-if="reading.forward_stance" class="sent-signal-sub">
+                            {{ reading.forward_stance }}
+                          </span>
+                          <span v-if="reading.hedging" class="sent-hedging-flag">hedge</span>
+                        </div>
+                        <div class="sent-signal-row">
+                          <span class="sent-signal-label">LM tone</span>
+                          <span class="sent-signal-val">{{ reading.lm_direction || '—' }}</span>
+                          <span class="sent-signal-sub mono">
+                            +{{ (reading.tone_positive * 100).toFixed(1) }}%
+                            −{{ (reading.tone_negative * 100).toFixed(1) }}%
+                            ~{{ (reading.tone_uncertainty * 100).toFixed(1) }}%
+                          </span>
+                        </div>
+                      </div>
+
+                      <!-- Lexicon matched words -->
+                      <div v-if="lexiconWords(reading.lexicon_hits).length" class="sent-lexicon">
+                        <span class="sent-lexicon-label">Matched words</span>
+                        <span
+                          v-for="entry in lexiconWords(reading.lexicon_hits)"
+                          :key="entry.cat"
+                          class="sent-lexicon-cat"
+                        >
+                          <em class="sent-lex-cat-name">{{ entry.cat }}:</em>
+                          {{ entry.words.join(', ') }}
+                        </span>
+                      </div>
+
+                      <!-- Chunk text preview -->
+                      <div v-if="reading.chunk_text" class="sent-chunk-text">
+                        {{ reading.chunk_text }}
+                      </div>
+
+                      <!-- Source attribution + "read full source" -->
+                      <div class="sent-chunk-meta">
+                        <span v-if="reading.section_title" class="chunk-section">
+                          {{ reading.section_title }}
+                        </span>
+                        <span v-if="reading.document?.title" class="chunk-source">
+                          {{ reading.document.title }}
+                        </span>
+                        <span v-if="reading.document?.published_at" class="chunk-date mono">
+                          {{ reading.document.published_at }}
+                        </span>
+                      </div>
+                      <div class="chunk-actions" v-if="reading.evidence_chunk_id">
+                        <a class="source-link" @click="openSource(reading.evidence_chunk_id)">
+                          read full source →
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
           </div><!-- /left-col -->
 
           <!-- ── Right column: evidence by theme ─────────────────── -->
@@ -246,7 +417,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import RunNav from '../components/RunNav.vue'
-import { getCompanyDetail, getCompanyEvidence, getChunkSource } from '../api/themes.js'
+import { getCompanyDetail, getCompanyEvidence, getChunkSource, getCompanySentiment } from '../api/themes.js'
 
 const props = defineProps({
   runId: { type: String, required: true },
@@ -270,6 +441,12 @@ const activeTheme = ref(null)
 // ── Source modal state ─────────────────────────────────────────────────────
 const sourceDoc = ref(null)
 const sourceLoading = ref(false)
+
+// ── SENT-D: Management-sentiment panel state ───────────────────────────────
+const sentimentLoading = ref(false)
+const sentimentError = ref('')
+const sentimentData = ref(null)
+const expandedReadings = ref(new Set())
 
 // ── Computed ───────────────────────────────────────────────────────────────
 const initials = computed(() => {
@@ -359,12 +536,33 @@ const closeSource = () => {
   sourceLoading.value = false
 }
 
+// ── SENT-D: Sentiment helpers ──────────────────────────────────────────────
+const toggleReading = (fusionId) => {
+  const s = new Set(expandedReadings.value)
+  if (s.has(fusionId)) {
+    s.delete(fusionId)
+  } else {
+    s.add(fusionId)
+  }
+  expandedReadings.value = s
+}
+
+const lexiconWords = (hits) => {
+  if (!hits || typeof hits !== 'object') return []
+  return Object.entries(hits)
+    .filter(([, words]) => Array.isArray(words) && words.length)
+    .map(([cat, words]) => ({ cat, words }))
+}
+
 // ── Data loading ───────────────────────────────────────────────────────────
 const loadData = async () => {
   loading.value = true
   error.value = ''
   profile.value = null
   evidenceGroups.value = []
+  sentimentData.value = null
+  sentimentError.value = ''
+  expandedReadings.value = new Set()
   try {
     profile.value = await getCompanyDetail(props.runId, props.companyId)
   } catch (err) {
@@ -392,6 +590,18 @@ const loadData = async () => {
   } finally {
     evidenceLoading.value = false
   }
+
+  // SENT-D: Load management-sentiment panel (graceful: available=false is not an error)
+  sentimentLoading.value = true
+  sentimentError.value = ''
+  try {
+    sentimentData.value = await getCompanySentiment(props.runId, props.companyId)
+  } catch (err) {
+    // 404 from missing run is a real error; other failures degrade gracefully
+    sentimentError.value = err?.response?.data?.detail || err.message || 'Failed to load sentiment data'
+  } finally {
+    sentimentLoading.value = false
+  }
 }
 
 onMounted(loadData)
@@ -400,6 +610,7 @@ onMounted(loadData)
 watch(() => props.companyId, () => {
   activeTheme.value = null
   expandedGroups.value = new Set()
+  expandedReadings.value = new Set()
   loadData()
 })
 </script>
@@ -1035,5 +1246,264 @@ watch(() => props.companyId, () => {
   line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ── SENT-D: Management-sentiment panel ── */
+
+/* Tone badge in card header */
+.sent-tone-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+/* Fused-tone colour tokens — must be visually distinct */
+.sent-tone-positive  { background: #DCFCE7; color: #166534; border: 1px solid #BBF7D0; }
+.sent-tone-negative  { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
+.sent-tone-neutral   { background: #F3F4F6; color: #374151; border: 1px solid #E5E7EB; }
+/* hedged: amber — CLEARLY not a clean positive */
+.sent-tone-hedged    { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
+
+/* Summary bar */
+.sent-summary-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #F0F0F0;
+  flex-wrap: wrap;
+}
+
+.sent-summary-tones {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.sent-tone-pill {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* Alert flags for conflict / hedged — ALWAYS shown when present */
+.sent-alert-flags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.sent-flag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* conflict: red background — unmistakable warning */
+.sent-flag-conflict {
+  background: #FEE2E2;
+  color: #991B1B;
+  border: 1px solid #FECACA;
+}
+
+/* hedged: amber — clearly distinct from positive */
+.sent-flag-hedged {
+  background: #FEF3C7;
+  color: #92400E;
+  border: 1px solid #FDE68A;
+}
+
+/* Reading list */
+.sent-reading-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.sent-reading {
+  border-bottom: 1px solid #F5F5F5;
+}
+
+.sent-reading:last-child { border-bottom: none; }
+
+/* Left-border colour by agreement severity — visual scan affordance */
+.sent-reading-conflict { border-left: 3px solid #EF4444; }
+.sent-reading-hedged   { border-left: 3px solid #F59E0B; }
+.sent-reading-agree    { border-left: 3px solid #10B981; }
+
+.sent-reading-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  cursor: pointer;
+  transition: background 0.12s;
+  flex-wrap: wrap;
+}
+
+.sent-reading-header:hover { background: #FAFBFF; }
+
+.sent-reading-tone {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.sent-reading-agreement {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+/* Agreement badge colours */
+.sent-agreement-agree    { background: #DCFCE7; color: #166534; }
+.sent-agreement-hedged   { background: #FEF3C7; color: #92400E; }
+/* conflict: bright red so it can never be mistaken for positive */
+.sent-agreement-conflict { background: #FEE2E2; color: #991B1B; font-weight: 700; }
+
+.sent-reading-conf {
+  font-size: 10px;
+  color: #888;
+  flex-shrink: 0;
+}
+
+.sent-reading-date {
+  font-size: 10px;
+  color: #aaa;
+  flex: 1;
+  text-align: right;
+  min-width: 70px;
+}
+
+.sent-chevron {
+  font-size: 10px;
+  color: #bbb;
+  flex-shrink: 0;
+}
+
+/* Reading detail (expanded) */
+.sent-reading-detail {
+  padding: 10px 14px 12px 14px;
+  background: #FAFBFF;
+  border-top: 1px solid #F0F0F0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Signal breakdown rows */
+.sent-signals {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sent-signal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.sent-signal-label {
+  font-size: 10px;
+  color: #888;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  width: 56px;
+  flex-shrink: 0;
+}
+
+.sent-signal-val {
+  font-weight: 600;
+  color: #222;
+  font-size: 12px;
+}
+
+.sent-signal-sub {
+  font-size: 10px;
+  color: #888;
+  font-family: var(--font-mono);
+}
+
+.sent-hedging-flag {
+  font-size: 10px;
+  background: #FEF3C7;
+  color: #92400E;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+/* Lexicon hits */
+.sent-lexicon {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #555;
+}
+
+.sent-lexicon-label {
+  font-size: 10px;
+  color: #bbb;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.sent-lexicon-cat {
+  background: #F0F4FF;
+  border: 1px solid #DDE5FA;
+  border-radius: 3px;
+  padding: 1px 7px;
+}
+
+.sent-lex-cat-name {
+  font-style: normal;
+  color: #888;
+  font-size: 10px;
+  margin-right: 3px;
+  font-family: var(--font-mono);
+}
+
+/* Chunk text preview in reading detail */
+.sent-chunk-text {
+  font-size: 12px;
+  color: #444;
+  line-height: 1.6;
+  word-break: break-word;
+  background: #FFF;
+  border: 1px solid #E8EDF8;
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+/* Source meta in reading detail — reuses chunk-meta classes */
+.sent-chunk-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 </style>
