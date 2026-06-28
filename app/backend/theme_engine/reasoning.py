@@ -15,9 +15,7 @@ import os
 import re
 from typing import Optional
 
-import pyarrow.parquet as pq
-
-from . import registry, runs
+from . import registry, run_cache, runs
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
@@ -67,8 +65,8 @@ def _parse_ids(v) -> list[str]:
 def _load(run_id: str, name: str):
     p = runs.get_run_dir(run_id) / "discovery" / name
     if name.endswith(".json"):
-        return json.loads(p.read_text())
-    return pq.read_table(p).to_pylist()
+        return run_cache.load_json(p)
+    return run_cache.load_parquet_rows(p)
 
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -150,7 +148,7 @@ def _load_fm_by_chunk(run_id: str) -> dict[str, dict]:
     p = runs.get_run_dir(run_id) / "discovery" / "financial_metrics.parquet"
     if not p.exists():
         return {}
-    rows = pq.read_table(p).to_pylist()
+    rows = run_cache.load_parquet_rows(p)
     index: dict[str, dict] = {}
     for fm in rows:
         cid = fm.get("evidence_chunk_id") or ""

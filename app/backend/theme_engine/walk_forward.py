@@ -14,9 +14,8 @@ import json
 from datetime import date
 
 import networkx as nx
-import pyarrow.parquet as pq
 
-from . import graph_build, runs
+from . import graph_build, run_cache, runs
 
 try:
     from networkx.algorithms.community import louvain_communities
@@ -60,12 +59,12 @@ def _month_ends(start: date, end: date) -> list[str]:
 def _monthly_snapshots(run_id: str) -> tuple[list[str], list[list[set]]]:
     rd = runs.get_run_dir(run_id)
     chunk_dates = {c["chunk_id"]: c.get("available_at")
-                   for c in pq.read_table(rd / "discovery" / "chunks.parquet").to_pylist()}
-    manifest = json.loads((rd / "run_manifest.json").read_text())
+                   for c in run_cache.load_parquet_rows(rd / "discovery" / "chunks.parquet")}
+    manifest = run_cache.load_json(rd / "run_manifest.json")
     as_of = _to_date(manifest["as_of_date"])
 
     timed_edges: list[tuple[date, str, str]] = []
-    for e in pq.read_table(rd / "discovery" / "edges.parquet").to_pylist():
+    for e in run_cache.load_parquet_rows(rd / "discovery" / "edges.parquet"):
         if e["edge_type"] not in graph_build.STRUCTURAL_EDGE_TYPES:
             continue
         if (e.get("extraction_method") or "document_stated") not in graph_build.COMMUNITY_INPUT_METHODS:
@@ -101,8 +100,8 @@ def theme_trajectories(run_id: str, min_size: int = _MIN_SIZE) -> dict:
     # name the final communities from the frozen communities.json (by entity overlap)
     rd = runs.get_run_dir(run_id)
     ent_name = {e["entity_id"]: (e.get("canonical_name") or e.get("name"))
-                for e in pq.read_table(rd / "discovery" / "entities.parquet").to_pylist()}
-    frozen = json.loads((rd / "discovery" / "communities.json").read_text())
+                for e in run_cache.load_parquet_rows(rd / "discovery" / "entities.parquet")}
+    frozen = run_cache.load_json(rd / "discovery" / "communities.json")
     frozen = frozen.get("communities", frozen)
 
     final = snapshots[-1]

@@ -11,11 +11,7 @@ Deterministic (no LLM).
 
 from __future__ import annotations
 
-import json
-
-import pyarrow.parquet as pq
-
-from . import registry, runs
+from . import registry, run_cache, runs
 
 # A theme must be at least this big AND have non-zero strength to be "substantive".
 _MIN_SIZE = 3
@@ -30,7 +26,7 @@ def _strength_by_community(rd) -> dict:
     if not p.exists():
         return {}
     out: dict[str, float] = {}
-    for row in pq.read_table(p).to_pylist():
+    for row in run_cache.load_parquet_rows(p):
         cid = row.get("community_id")
         if cid is None:
             continue
@@ -51,10 +47,10 @@ def compute_levels(run_id: str) -> dict:
     """Per-community level composition + dominant level + substantive flag."""
     rd = runs.get_run_dir(run_id)
     ent_level = {e["entity_id"]: registry.entity_level(e.get("entity_type"))
-                 for e in pq.read_table(rd / "discovery" / "entities.parquet").to_pylist()}
+                 for e in run_cache.load_parquet_rows(rd / "discovery" / "entities.parquet")}
     strength = _strength_by_community(rd)
 
-    comm_doc = json.loads((rd / "discovery" / "communities.json").read_text())
+    comm_doc = run_cache.load_json(rd / "discovery" / "communities.json")
     communities = comm_doc.get("communities", comm_doc)
 
     by_id: dict[str, dict] = {}
@@ -82,7 +78,7 @@ def compute_levels(run_id: str) -> dict:
     main_themes = []
     hier_path = rd / "discovery" / "theme_hierarchy.json"
     if hier_path.exists():
-        hier = json.loads(hier_path.read_text())
+        hier = run_cache.load_json(hier_path)
         for mt in hier.get("main_themes", []):
             subs = [by_id[s] for s in mt.get("sub_theme_ids", []) if s in by_id]
             if not subs:

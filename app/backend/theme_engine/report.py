@@ -30,16 +30,14 @@ Forbidden phrases:
 from __future__ import annotations
 
 import csv
-import json
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-import pyarrow.parquet as pq
 from fastapi import HTTPException
 
-from . import runs
+from . import run_cache, runs
 
 # ---------------------------------------------------------------------------
 # Illustrative caveat text (mirrors validation._SINGLE_SNAPSHOT_CAVEAT)
@@ -138,14 +136,14 @@ def _read_communities(run_dir: Path) -> dict:
     p = run_dir / "discovery" / "communities.json"
     if not p.exists():
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return run_cache.load_json(p)
 
 
 def _read_theme_snapshots(run_dir: Path) -> dict:
     p = run_dir / "discovery" / "theme_snapshots.json"
     if not p.exists():
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    return run_cache.load_json(p)
 
 
 def _read_theme_metrics(run_dir: Path) -> list[dict]:
@@ -153,7 +151,7 @@ def _read_theme_metrics(run_dir: Path) -> list[dict]:
     if not p.exists():
         return []
     try:
-        return pq.read_table(p).to_pylist()
+        return run_cache.load_parquet_rows(p)
     except Exception:
         return []
 
@@ -163,7 +161,7 @@ def _read_exposure(run_dir: Path) -> list[dict]:
     if not p.exists():
         return []
     try:
-        return pq.read_table(p).to_pylist()
+        return run_cache.load_parquet_rows(p)
     except Exception:
         return []
 

@@ -13,9 +13,7 @@ import json
 from datetime import date
 from typing import Optional
 
-import pyarrow.parquet as pq
-
-from . import runs
+from . import run_cache, runs
 
 _DEFAULT_WINDOW_DAYS = 90
 
@@ -63,15 +61,15 @@ def _score(dates: list[str], as_of: date, window_days: int) -> dict:
 def compute_relevance(run_id: str, window_days: int = _DEFAULT_WINDOW_DAYS) -> dict:
     """Per-community relevance at as_of (+ main-theme aggregation if a hierarchy exists)."""
     rd = runs.get_run_dir(run_id)
-    manifest = json.loads((rd / "run_manifest.json").read_text())
+    manifest = run_cache.load_json(rd / "run_manifest.json")
     as_of = _to_date(manifest["as_of_date"])
 
     chunk_dates = {c["chunk_id"]: c.get("available_at")
-                   for c in pq.read_table(rd / "discovery" / "chunks.parquet").to_pylist()}
+                   for c in run_cache.load_parquet_rows(rd / "discovery" / "chunks.parquet")}
     edge_ev = {ed["edge_id"]: _parse_ids(ed.get("evidence_chunk_ids"))
-               for ed in pq.read_table(rd / "discovery" / "edges.parquet").to_pylist()}
+               for ed in run_cache.load_parquet_rows(rd / "discovery" / "edges.parquet")}
 
-    comm_doc = json.loads((rd / "discovery" / "communities.json").read_text())
+    comm_doc = run_cache.load_json(rd / "discovery" / "communities.json")
     communities = comm_doc.get("communities", comm_doc)
 
     by_id: dict[str, dict] = {}
@@ -88,7 +86,7 @@ def compute_relevance(run_id: str, window_days: int = _DEFAULT_WINDOW_DAYS) -> d
     main_themes = []
     hier_path = rd / "discovery" / "theme_hierarchy.json"
     if hier_path.exists():
-        hier = json.loads(hier_path.read_text())
+        hier = run_cache.load_json(hier_path)
         for mt in hier.get("main_themes", []):
             subs = [by_id[s] for s in mt.get("sub_theme_ids", []) if s in by_id]
             if not subs:

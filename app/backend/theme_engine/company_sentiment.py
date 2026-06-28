@@ -22,10 +22,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
-import pyarrow.parquet as pq
 from fastapi import HTTPException
 
-from . import runs
+from . import run_cache, runs
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +38,7 @@ def _get_discovery_dir(run_id: str) -> Path:
 def _load_parquet(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    return pq.read_table(path).to_pylist()
+    return run_cache.load_parquet_rows(path)
 
 
 def _to_date_str(val: Any) -> str:
