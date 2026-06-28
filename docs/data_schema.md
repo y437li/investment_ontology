@@ -18,12 +18,32 @@ MiroFish can inform the upload and task-status workflow, but it does not define 
 | L0 | Raw unstructured inputs | Data Ingestion Agent | PDF, MD, TXT, HTML exports, transcript files | `raw_documents.parquet` |
 | L1 | Cleaned unstructured artifacts | Data Cleaning Agent | normalized text, document metadata, chunks, cleaning log | `documents.parquet`, `document_cleaning_log.parquet`, `chunks.parquet` |
 | L2 | Structured discovery artifacts | Extraction Agent, Graph Theme Agent | entities, aliases, edges, graph, communities, theme snapshots | `entities.parquet`, `edges.parquet`, `graph.json`, `theme_snapshots.json` |
+| L2-P | Provenance reverse-join artifacts (EG-E) | Provenance Agent | entity-chunk-document linkage; theme->documents; (company,theme)->documents | `entity_chunk_provenance.parquet`, `theme_document_evidence.parquet`, `company_theme_document_evidence.parquet` |
 | L3 | Structured validation artifacts | Data Engineering Agent, Validation Agent | prices, fundamentals, baskets, validation metrics | `market_prices.parquet`, `fundamentals.parquet`, `portfolio_baskets.parquet`, `validation.csv` |
 
 Rule:
 
 - No stage may skip from L0 raw files directly to L2 extraction.
 - L2 discovery artifacts must be frozen before L3 validation reads future outcomes.
+- L2-P provenance artifacts are computed from L2 artifacts and must be regenerated if upstream L2 artifacts change.
+
+### EG-E Provenance Layer (L2-P)
+
+EG-E materializes three reverse-join artifacts that answer provenance questions in
+one read, without requiring a client-side graph walk:
+
+| Artifact | Key | What it answers |
+|---|---|---|
+| `entity_chunk_provenance.parquet` | `(entity_id, chunk_id)` | Which document + subject company produced each entity mention? (E1) |
+| `theme_document_evidence.parquet` | `community_id` | Which documents form the evidence base for a theme? (E2) |
+| `company_theme_document_evidence.parquet` | `(company_id, theme_snapshot_id, community_id)` | Which documents back a specific company's exposure to a specific theme? (E3) |
+
+Critical correctness rule for E3:
+- `company_id` is the Company ENTITY id, not `document.company_id`.
+- A news article about CompanyX that mentions CompanyY only appears in CompanyY's
+  evidence group (because the structural edge that causes CompanyY's exposure was
+  extracted from that chunk with CompanyY as an endpoint).
+- Using `document.company_id` for this attribution would be wrong.
 
 ## 2. L0 Raw Unstructured Input Standard
 

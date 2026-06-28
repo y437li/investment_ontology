@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 
-from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod
+from . import artifacts as artifacts_mod, chunking, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -453,6 +453,75 @@ def validation_run(req: ValidationRunRequest) -> ValidationRunResponse:
         holding_window=result.get("holding_window"),
         required_end=result.get("required_end"),
     )
+
+
+@app.post("/api/provenance/materialize")
+def provenance_materialize(req: GraphBuildRequest):
+    """Materialize EG-E provenance artifacts (E2 + E3) for a run.
+
+    E2: theme_document_evidence.parquet — community_id -> chunk_ids / document_ids.
+        Requires: communities.json, theme_snapshots.json, edges.parquet, chunks.parquet.
+
+    E3: company_theme_document_evidence.parquet — (company_id, theme_snapshot_id,
+        community_id) -> chunk_ids / document_ids.
+        Requires: company_theme_exposure.parquet, chunks.parquet.
+
+    company_id in E3 is the Company ENTITY id (not document.company_id).
+
+    Must be called AFTER /api/exposure/compute.
+    """
+    try:
+        result = provenance_mod.materialize_provenance(req.run_id)
+    except HTTPException:
+        raise
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {
+        "success": True,
+        "run_id": req.run_id,
+        "artifacts": [
+            "discovery/theme_document_evidence.parquet",
+            "discovery/company_theme_document_evidence.parquet",
+        ],
+        "theme_rows": result["theme_rows"],
+        "company_theme_rows": result["company_theme_rows"],
+    }
+
+
+@app.get("/api/themes/{run_id}/communities/{community_id}/documents")
+def get_theme_documents(run_id: str, community_id: str):
+    """E2 provenance: source documents for a theme community (single read).
+
+    Returns chunk_ids and document_ids that form the evidence base for
+    this community.  Requires theme_document_evidence.parquet to exist;
+    call POST /api/provenance/materialize first.
+    """
+    try:
+        return provenance_mod.get_theme_documents(run_id, community_id)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/themes/{run_id}/companies/{company_id}/documents")
+def get_company_theme_documents(run_id: str, company_id: str):
+    """E3 provenance: per-theme source documents for a company (entity-based join).
+
+    Returns a list of records — one per (theme_snapshot_id, community_id) —
+    each with the DISTINCT chunk_ids and document_ids behind THAT specific
+    company-theme exposure.  Evidence groups never bleed across themes.
+
+    company_id must be a Company ENTITY id (ent_...); it is NOT document.company_id.
+    Requires company_theme_document_evidence.parquet; call
+    POST /api/provenance/materialize first.
+    """
+    try:
+        return provenance_mod.get_company_theme_documents(run_id, company_id)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.post("/api/report/generate", response_model=ReportGenerateResponse)

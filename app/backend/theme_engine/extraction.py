@@ -115,6 +115,20 @@ EDGE_EXPLANATIONS_COLUMNS: list[str] = [
     "created_at",
 ]
 
+# Section E1 — entity_chunk_provenance.parquet (EG-E Workstream E)
+# One row per (entity_id, chunk_id) occurrence; preserves originating
+# document_id and its company_id so provenance joins never require a
+# multi-hop graph walk.  company_id is the DOCUMENT's subject company
+# (i.e. documents.company_id), NOT the extracted entity's own identity.
+ENTITY_CHUNK_PROVENANCE_COLUMNS: list[str] = [
+    "schema_version",
+    "entity_id",
+    "chunk_id",
+    "document_id",
+    "company_id",
+    "available_at",
+]
+
 # ---------------------------------------------------------------------------
 # Data structures for extraction results
 # ---------------------------------------------------------------------------
@@ -606,6 +620,25 @@ def _read_chunks(run_id: str) -> list[dict]:
     return pq.read_table(artifact).to_pylist()
 
 
+def _read_documents_for_provenance(run_id: str) -> dict[str, Optional[str]]:
+    """Return document_id -> company_id mapping from documents.parquet.
+
+    Used by E1 (entity_chunk_provenance) to capture the originating document's
+    subject company per chunk occurrence.  Returns empty dict if documents.parquet
+    does not exist yet (the extractor is lenient so tests can call it without a
+    full pipeline).
+    """
+    artifact = runs.get_run_dir(run_id) / "discovery" / "documents.parquet"
+    if not artifact.exists():
+        return {}
+    rows = pq.read_table(artifact).to_pylist()
+    return {
+        row["document_id"]: row.get("company_id")
+        for row in rows
+        if row.get("document_id")
+    }
+
+
 # ---------------------------------------------------------------------------
 # Deterministic denoise + alias canonicalization (applied to every extraction)
 # ---------------------------------------------------------------------------
@@ -723,6 +756,13 @@ def run_extraction(
     run_dir = runs.get_run_dir(run_id)
     discovery_dir = run_dir / "discovery"
 
+    # E1 provenance: document_id -> company_id (subject company of originating document)
+    doc_company_id: dict[str, Optional[str]] = _read_documents_for_provenance(run_id)
+    # Fast chunk lookup for E1 provenance rows (built once, used in Phase 2)
+    chunk_by_id: dict[str, dict] = {
+        ch["chunk_id"]: ch for ch in chunks if ch.get("chunk_id")
+    }
+
     # Phase 1: extract per-chunk candidates.
     # entity_name -> (EntityCandidate, list[chunk_id], first_seen_date)
     entity_map: dict[str, tuple[EntityCandidate, list[str], str]] = {}
@@ -775,6 +815,8 @@ def run_extraction(
 
     # Phase 2: build entity rows with stable ids.
     entity_rows: list[dict] = []
+    # E1: one row per (entity_id, chunk_id) occurrence, preserving document lineage
+    provenance_rows: list[dict] = []
     # Build canonical_name -> entity_id lookup for edge resolution
     name_to_entity_id: dict[str, str] = {}
 
@@ -799,6 +841,26 @@ def run_extraction(
                 "review_status": "pending",
             }
         )
+
+        # E1: emit one provenance row per (entity, chunk) occurrence.
+        # company_id here is the ORIGINATING DOCUMENT's subject company
+        # (documents.company_id), NOT the extracted entity's own id — this is
+        # the correct field for "which company's filing mentioned this entity".
+        for cid in chunk_ids:
+            ch = chunk_by_id.get(cid, {})
+            doc_id = ch.get("document_id", "")
+            subj_company_id = doc_company_id.get(doc_id) if doc_id else None
+            avail = _to_date_str(ch.get("available_at"))
+            provenance_rows.append(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "entity_id": entity_id,
+                    "chunk_id": cid,
+                    "document_id": doc_id,
+                    "company_id": subj_company_id,
+                    "available_at": avail,
+                }
+            )
 
     # Phase 3: build edge rows with stable ids, resolving entity references.
     edge_rows: list[dict] = []
@@ -853,6 +915,13 @@ def run_extraction(
         explanation_rows,
         EDGE_EXPLANATIONS_COLUMNS,
         discovery_dir / "edge_explanations.parquet",
+    )
+    # E1: entity_chunk_provenance — flat (entity_id, chunk_id) table with
+    # originating document_id + company_id.  No list columns; all nullable strings.
+    _write_table(
+        provenance_rows,
+        ENTITY_CHUNK_PROVENANCE_COLUMNS,
+        discovery_dir / "entity_chunk_provenance.parquet",
     )
 
     return len(entity_rows), len(edge_rows)

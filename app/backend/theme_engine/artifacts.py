@@ -35,6 +35,10 @@ _PARQUET_ARTIFACTS = frozenset(
     {
         "theme_metrics.parquet",
         "company_theme_exposure.parquet",
+        # EG-E provenance artifacts
+        "entity_chunk_provenance.parquet",
+        "theme_document_evidence.parquet",
+        "company_theme_document_evidence.parquet",
     }
 )
 
