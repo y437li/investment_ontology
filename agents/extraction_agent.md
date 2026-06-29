@@ -18,6 +18,21 @@ Outputs:
 - `edges.parquet`
 - `edge_explanations.parquet`
 
+Alias table discipline (OI-4 — PIT-vs-global):
+
+Two alias artifacts are written per run by `entity_resolution.resolve_entities()`:
+
+- `entity_aliases.parquet` — **point-in-time (PIT)** table.  Built from chunks
+  with `available_at <= as_of_date` only.  `alias_scope="point_in_time"`.
+  This is the ONLY alias table consumed by Graph(t), exposure, and community
+  detection.  Entities whose sole evidence is future-dated are excluded.
+
+- `entity_aliases_global.parquet` — **global companion** table.  Full corpus,
+  no `available_at` filter.  `alias_scope="global"`, `as_of_date=""`.
+  FOR INSPECTION / CURATION ONLY.  Must never be read by any discovery-stage
+  computation (graph_build, exposure, themes).  Violations are caught by the
+  OI-4 isolation test suite.
+
 Acceptance checks:
 
 - Entity types match the ontology.
@@ -26,4 +41,6 @@ Acceptance checks:
 - Low-confidence extractions are marked for review.
 - Alias joins for Graph(t) are point-in-time with `available_at <= as_of_date`.
 - Alias map entries include `alias_scope` and `as_of_date` in discovery artifacts.
+- Future-dated alias sources (available_at > as_of_date) appear in the global
+  table but are excluded from the PIT table.
 - Raw files are never read directly by extraction.

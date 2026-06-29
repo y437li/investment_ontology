@@ -852,6 +852,23 @@ Scope:
 - Point-in-time aliases drive discovery joins.
 - Global aliases are maintained in a separate non-production table for historical curation.
 
+Alias table discipline (OI-4):
+
+Two alias artifacts are written per run:
+
+1. `discovery/entity_aliases.parquet` — **point-in-time (PIT) table**.
+   Built using ONLY chunks with `available_at <= as_of_date`.  Every row
+   records `as_of_date` and `alias_scope="point_in_time"`.  This table is the
+   one consumed by Graph(t), exposure computation, and community detection.
+   Entities from future-dated chunks (available_at > as_of_date) are excluded.
+
+2. `discovery/entity_aliases_global.parquet` — **global companion table**.
+   Built over the FULL corpus (all chunks regardless of `available_at`).
+   `alias_scope="global"`, `as_of_date=""` (not applicable).
+   FOR NON-TEMPORAL INSPECTION AND MANUAL CURATION ONLY.
+   This table MUST NOT be read by graph_build, exposure, community detection,
+   or any other discovery-stage computation.  Only the PIT table feeds the graph.
+
 Required output fields:
 
 ```text
@@ -868,8 +885,8 @@ source_record_ids
 
 `alias_scope` values:
 
-- `point_in_time` for run artifact joins.
-- `global` for optional cross-run diagnostics.
+- `point_in_time` for run artifact joins (entity_aliases.parquet).
+- `global` for optional cross-run diagnostics (entity_aliases_global.parquet).
 
 ---
 
@@ -1125,6 +1142,18 @@ MVP implementation:
 
 - Single `as_of_date` first.
 - Then monthly snapshots.
+
+Alias resolution temporal discipline (OI-4):
+
+- Alias resolution feeding `Graph(t)` is **point-in-time**: only documents
+  with `available_at <= t` shape the canonical entity set at `t`.  Entities
+  whose only evidence chunks are future-dated (available_at > t) are excluded
+  from `entity_aliases.parquet` for that run.
+- The global alias table (`entity_aliases_global.parquet`) covers the full
+  corpus across all dates.  It is a **separate, inspection-only, non-temporal
+  artifact** and is never consumed by Graph(t) construction, exposure
+  computation, or community detection.  The PIT table is always the input to
+  discovery-stage computation.
 
 ---
 

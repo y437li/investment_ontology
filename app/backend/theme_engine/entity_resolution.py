@@ -1,12 +1,20 @@
 """Entity resolution service (M3): canonicalize aliases.
 
 Reads ``discovery/entities.parquet`` and ``discovery/chunks.parquet``, then
-writes ``discovery/entity_aliases.parquet`` per io_contracts.md section 10.
+writes two alias artifacts per io_contracts.md section 10 / 10a:
 
-Point-in-time (OI-4):
-    The alias table is built using ONLY entities derived from chunks whose
+Point-in-time table — ``discovery/entity_aliases.parquet`` (OI-4):
+    Built using ONLY entities derived from chunks whose
     ``available_at <= run.as_of_date``.  The ``as_of_date`` used is recorded
-    in every alias row.
+    in every alias row.  alias_scope="point_in_time".
+    THIS IS THE TABLE CONSUMED BY Graph(t) / exposure / community detection.
+
+Global companion table — ``discovery/entity_aliases_global.parquet`` (OI-4):
+    Built over the FULL corpus (ALL entities/chunks regardless of
+    ``available_at`` — no PIT filter).  alias_scope="global",
+    as_of_date="" (not applicable).  FOR NON-TEMPORAL INSPECTION ONLY.
+    This table MUST NOT be read by graph_build, exposure, community
+    detection, or any other discovery-stage computation.
 
 Alias rules (deterministic, no LLM):
   1. Exact-match deduplication: entities with the same canonical_name (case-
@@ -15,8 +23,6 @@ Alias rules (deterministic, no LLM):
      canonical names (e.g. "rbc" -> "RBC", "amce" -> "Acme Corp").
   3. Ticker alias: Company entities whose ticker field is populated get an
      additional ticker -> canonical_name row.
-
-All rows have ``alias_scope="point_in_time"``.
 """
 
 from __future__ import annotations
@@ -33,6 +39,10 @@ from fastapi import HTTPException
 from . import runs
 
 SCHEMA_VERSION = "1.0"
+
+# Sentinel stored in entity_aliases_global.parquet as_of_date to make clear
+# the table has no PIT scope.  Consumers must never treat this as a real date.
+GLOBAL_AS_OF_SENTINEL: str = ""
 
 # io_contracts.md section 10 — entity_aliases.parquet
 ENTITY_ALIASES_COLUMNS: list[str] = [
@@ -129,19 +139,16 @@ def _read_chunks(run_id: str) -> list[dict]:
     return pq.read_table(artifact).to_pylist()
 
 
-def resolve_entities(run_id: str) -> int:
-    """Build the entity alias table for this run.
+def _filter_pit_entities(
+    entities: list[dict],
+    chunks: list[dict],
+    as_of_date: str,
+) -> list[dict]:
+    """Return entities that have at least one chunk with available_at <= as_of_date.
 
-    Point-in-time: only considers chunks with available_at <= as_of_date.
-    Returns the number of alias rows written.
+    This is the point-in-time gate: only entities whose evidence is available
+    at or before as_of_date are included in Graph(t).
     """
-    manifest = runs.load_manifest(run_id)
-    if manifest is None:
-        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date: str = manifest.as_of_date
-
-    # Build a set of chunk_ids that are point-in-time eligible
-    chunks = _read_chunks(run_id)
     eligible_chunk_ids: set[str] = set()
     for ch in chunks:
         available_at = _to_date_str(ch.get("available_at"))
@@ -150,23 +157,46 @@ def resolve_entities(run_id: str) -> int:
             if cid:
                 eligible_chunk_ids.add(cid)
 
-    entities = _read_entities(run_id)
-    created_at = _utc_now_iso()
-
-    # Filter entities to those that have at least one eligible source chunk
-    eligible_entities: list[dict] = []
+    eligible: list[dict] = []
     for ent in entities:
         source_chunk_ids = ent.get("source_chunk_ids") or []
         if isinstance(source_chunk_ids, pa.Array):
             source_chunk_ids = source_chunk_ids.to_pylist()
-        # Keep entity if any of its source chunks are eligible
         if any(cid in eligible_chunk_ids for cid in source_chunk_ids):
-            eligible_entities.append(ent)
+            eligible.append(ent)
+    return eligible
 
+
+def _build_alias_rows(
+    entities: list[dict],
+    as_of_date: str,
+    alias_scope: str,
+    created_at: str,
+) -> list[dict]:
+    """Apply alias rules to *entities* and return alias rows.
+
+    This is the shared alias-rule engine used for both the PIT table
+    (alias_scope="point_in_time") and the global table (alias_scope="global").
+
+    Rules applied (deterministic, no LLM):
+      1. Exact-match deduplication by (entity_type, canonical_name lower-case).
+      2. Known-abbreviation expansion (direction-agnostic; audit HIGH #75).
+      3. Ticker alias for Company entities.
+
+    Args:
+        entities:   Pre-filtered entity rows (already PIT-gated or full-corpus).
+        as_of_date: String stored in the as_of_date column of every row.
+                    Use run.as_of_date for PIT rows; GLOBAL_AS_OF_SENTINEL for global.
+        alias_scope: "point_in_time" or "global".
+        created_at: ISO-8601 UTC timestamp string.
+
+    Returns:
+        List of alias row dicts matching ENTITY_ALIASES_COLUMNS.
+    """
     # Rule 1: exact-match deduplication by canonical_name (case-insensitive) + entity_type
     # Map (entity_type, canonical_name_lower) -> canonical entity row
     canonical_map: dict[tuple[str, str], dict] = {}
-    for ent in eligible_entities:
+    for ent in entities:
         etype = ent.get("entity_type", "")
         cname = ent.get("canonical_name") or ent.get("name") or ""
         key = (etype, cname.lower())
@@ -179,8 +209,7 @@ def resolve_entities(run_id: str) -> int:
     for (etype, cname_lower), canonical_ent in canonical_map.items():
         canonical_entity_id = canonical_ent.get("entity_id", "")
         canonical_name = canonical_ent.get("canonical_name") or canonical_ent.get("name") or ""
-        entity_id = canonical_entity_id
-        source_ids = [entity_id]
+        source_ids = [canonical_entity_id]
 
         # Self-alias (canonical_name -> itself)
         alias_rows.append(
@@ -193,7 +222,7 @@ def resolve_entities(run_id: str) -> int:
                 "confidence": 1.0,
                 "method": "exact_match",
                 "review_status": "approved",
-                "alias_scope": "point_in_time",
+                "alias_scope": alias_scope,
                 "source_record_ids": source_ids,
                 "created_at": created_at,
             }
@@ -221,7 +250,7 @@ def resolve_entities(run_id: str) -> int:
                                 "confidence": 0.95,
                                 "method": "known_abbreviation",
                                 "review_status": "approved",
-                                "alias_scope": "point_in_time",
+                                "alias_scope": alias_scope,
                                 "source_record_ids": source_ids,
                                 "created_at": created_at,
                             }
@@ -242,16 +271,58 @@ def resolve_entities(run_id: str) -> int:
                         "confidence": 0.99,
                         "method": "ticker_alias",
                         "review_status": "approved",
-                        "alias_scope": "point_in_time",
+                        "alias_scope": alias_scope,
                         "source_record_ids": source_ids,
                         "created_at": created_at,
                     }
                 )
 
-    run_dir = runs.get_run_dir(run_id)
-    _write_aliases_table(
-        alias_rows,
-        run_dir / "discovery" / "entity_aliases.parquet",
-    )
+    return alias_rows
 
-    return len(alias_rows)
+
+def resolve_entities(run_id: str) -> int:
+    """Build the entity alias tables for this run.
+
+    Writes TWO artifacts (OI-4 discipline):
+
+    1. ``discovery/entity_aliases.parquet`` — point-in-time (PIT) table.
+       Uses ONLY entities derived from chunks with available_at <= as_of_date.
+       alias_scope="point_in_time", as_of_date=run.as_of_date.
+       THIS IS THE TABLE CONSUMED BY Graph(t) / exposure / community detection.
+
+    2. ``discovery/entity_aliases_global.parquet`` — global companion table.
+       Uses ALL entities/chunks regardless of available_at (full corpus).
+       alias_scope="global", as_of_date="" (GLOBAL_AS_OF_SENTINEL).
+       FOR NON-TEMPORAL INSPECTION ONLY — must never be read by discovery
+       computation (graph_build, exposure, themes, community detection).
+
+    The PIT table behavior is UNCHANGED from pre-OI-4: the same rules, the
+    same available_at <= as_of_date gate, the same output columns.
+
+    Returns the number of PIT alias rows written.
+    """
+    manifest = runs.load_manifest(run_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+    as_of_date: str = manifest.as_of_date
+
+    chunks = _read_chunks(run_id)
+    entities = _read_entities(run_id)
+    created_at = _utc_now_iso()
+
+    # --- PIT table: filter entities to those with available_at <= as_of_date ---
+    pit_entities = _filter_pit_entities(entities, chunks, as_of_date)
+    pit_rows = _build_alias_rows(pit_entities, as_of_date, "point_in_time", created_at)
+
+    run_dir = runs.get_run_dir(run_id)
+    discovery_dir = run_dir / "discovery"
+
+    _write_aliases_table(pit_rows, discovery_dir / "entity_aliases.parquet")
+
+    # --- Global companion table: full corpus, no PIT filter ---
+    global_rows = _build_alias_rows(
+        entities, GLOBAL_AS_OF_SENTINEL, "global", created_at
+    )
+    _write_aliases_table(global_rows, discovery_dir / "entity_aliases_global.parquet")
+
+    return len(pit_rows)
