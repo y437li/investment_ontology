@@ -79,6 +79,18 @@ Each phase is its own design-checkpoint + dispatch. Do NOT one-shot.
 2. **Endpoint point-selection — default-latest + optional `?as_of=`.** Endpoints that read discovery artifacts return the latest point by default; an optional `?as_of=<t_i>` selects a specific point. No-arg calls behave exactly as today (backward compatible).
 3. **R1 scope — layout + per-point freeze/leakage + point-aware run_cache only.** Make the pipeline runnable at an arbitrary single `t_i` and stored per point; defer the actual multi-period loop/orchestration to R2. (Do NOT one-shot the loop into R1.)
 
+**R1 SHIPPED** 2026-06-29 (PR #112). A walk-forward look-ahead leak (earlier points evaluated against the latest-point basket) was caught in adversarial review and hard-guarded: multi-point validation returns an illustrative "deferred to R2" result until R3 wires genuine per-point validation.
+
+### R2 — locked implementation decisions (user, 2026-06-29)
+
+R2 scope = **drive the multi-period loop + produce the cross-point panel artifact**. Per-point validation and panel UI remain R3.
+
+1. **Extraction across points — re-extract per point.** Each `t_i` runs its own LLM extraction independently (cost ≈ ×N points) rather than extract-once-then-PIT-filter. Chosen for full per-point isolation / zero leakage surface. Hermetic tests use the rule-based extractor (no network); the real-LLM cost is borne only by the operator-run driver.
+2. **Theme lineage matching — concept-spine (OI-5).** Track a theme across points by its OI-5 concept spine, not best-overlap company-membership. More stable and explainable for emergence/persistence.
+3. **Orchestration entrypoint — CLI driver + summary endpoint.** A script drives the per-point loop (clean→extract→graph→OI-5 projection→themes→exposure PIT to `t_i` → per-point freeze); a read endpoint returns the panel/status summary. Avoids HTTP timeouts on long multi-point runs.
+
+R2 also folds in the loop's enablers: bulk freeze (freeze all authored points) and DuckDB per-point globbing (views see `discovery/<as_of>/` artifacts). **Out of scope (R3):** per-point validation (lifting the R1 guard), panel UI, OI-7 window per point.
+
 **Acceptance (design):** spec §6/§22/§27 define the multi-period run, per-point PIT layout, and the panel; dependency on OI-5 (the per-point detection unit) and OI-8 (the `available_at` it filters on) stated.
 
 ---
