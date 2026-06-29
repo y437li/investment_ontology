@@ -15,7 +15,7 @@ from typing import Optional
 
 import pyarrow.parquet as pq
 
-from . import registry, runs
+from . import config, registry, runs
 
 
 def _load(run_id: str, name: str):
@@ -99,7 +99,7 @@ def explain_node(run_id: str, entity_id: str, refresh: bool = False,
         import os  # noqa: PLC0415
         from openai import OpenAI  # noqa: PLC0415
         client = OpenAI(api_key=os.environ["LLM_API_KEY"], base_url=os.environ["LLM_BASE_URL"])
-        model = os.environ["LLM_MODEL_NAME"]
+        model = config.model_for("explanation")
 
     system = registry.get_system_prompt("node_explanation") or (
         "Explain this node using ONLY the provided relationships and evidence. Answer what it is, "

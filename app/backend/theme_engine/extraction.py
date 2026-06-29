@@ -38,7 +38,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fastapi import HTTPException
 
-from . import runs
+from . import config, runs
 from .config import settings
 
 SCHEMA_VERSION = "1.0"
@@ -138,6 +138,22 @@ ENTITY_CHUNK_PROVENANCE_COLUMNS: list[str] = [
     "available_at",
 ]
 
+# Issue #29 — llm_calls.parquet (observability): one row per LLM completion call,
+# recorded even when the response is a tool-call. ``created_at`` is a generation
+# timestamp (NOT a point-in-time date) and is excluded from leakage checks.
+LLM_CALLS_COLUMNS: list[str] = [
+    "schema_version",
+    "run_id",
+    "task",
+    "model",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "latency_ms",
+    "cache_hit",
+    "created_at",
+]
+
 # ---------------------------------------------------------------------------
 # Data structures for extraction results
 # ---------------------------------------------------------------------------
@@ -232,6 +248,13 @@ class Extractor(ABC):
     Implementations must be stateless across calls (side-effect-free) so that
     deterministic ids remain stable for the same input + config.
     """
+
+    # Issue #29: per-call LLM token-usage records (one dict per completion call).
+    # Annotation only (no shared mutable class default): OpenAIExtractor sets a
+    # fresh list in __init__ and stamps a record after each chat.completions.create();
+    # the rule-based extractor never appends and run_extraction reads via
+    # getattr(extractor, "usage_log", []).
+    usage_log: list[dict]
 
     @abstractmethod
     def extract(self, chunk_id: str, chunk_text: str) -> ExtractionResult:
@@ -484,11 +507,20 @@ class OpenAIExtractor(Extractor):
     Reads the model name from config — never hardcodes it.
     """
 
-    def __init__(self, api_key: str, base_url: str, llm_model_name: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        llm_model_name: str,
+        task: str = "extraction",
+    ) -> None:
         self._api_key = api_key
         self._base_url = base_url
         self._llm_model_name = llm_model_name
+        self._task = task
         self._client = None  # lazy import to avoid import-time errors in tests
+        # Issue #29: per-call token usage; one record per completion call.
+        self.usage_log: list[dict] = []
 
     @property
     def name(self) -> str:
@@ -556,6 +588,7 @@ class OpenAIExtractor(Extractor):
         limit pretraining leakage, the prompt forbids using outside knowledge.
         """
         import json as _json  # noqa: PLC0415
+        from time import perf_counter  # noqa: PLC0415
 
         client = self._get_client()
         # Prompt is maintained in the agent registry (configs/agents.yml), generated
@@ -579,12 +612,14 @@ class OpenAIExtractor(Extractor):
         ]
         args: dict = {}
         for _attempt in range(3):
+            _t0 = perf_counter()
             response = client.chat.completions.create(
                 model=self._llm_model_name,
                 messages=messages,
                 tools=[self._tool],
                 temperature=0,
             )
+            self._record_usage(response, perf_counter() - _t0)
             tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
             if tool_calls:
                 try:
@@ -599,6 +634,27 @@ class OpenAIExtractor(Extractor):
                 "content": "Call emit_extraction with valid JSON arguments only.",
             })
         return self._to_result(args)
+
+    def _record_usage(self, response, elapsed_s: float) -> None:
+        """Issue #29: append one per-call token-usage record to ``usage_log``.
+
+        Uses ``getattr`` guards so a response without ``usage`` records zero
+        tokens. ``cache_hit`` is True when the provider reports cached prompt
+        tokens. Recorded for every completion call, including tool-call replies.
+        """
+        u = getattr(response, "usage", None)
+        details = getattr(u, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", 0) or 0
+        self.usage_log.append({
+            "task": self._task,
+            "model": self._llm_model_name,
+            "prompt_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(u, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(u, "total_tokens", 0) or 0),
+            "latency_ms": int(elapsed_s * 1000),
+            "cache_hit": bool(cached > 0),
+            "created_at": _utc_now_iso(),
+        })
 
     @staticmethod
     def _to_result(args: dict) -> ExtractionResult:
@@ -704,6 +760,42 @@ def _write_table(rows: list[dict], columns: list[str], out_path: Path) -> None:
     pydict: dict[str, list] = {col: [row.get(col) for row in rows] for col in columns}
     table = pa.Table.from_pydict(pydict)
     pq.write_table(table, out_path)
+
+
+# Issue #29: explicit schema for llm_calls.parquet. The generic _write_table
+# mis-types the int64/bool columns in its empty-file branch, so this dedicated
+# writer pins the schema (mirrors exposure._write_exposure_table).
+_LLM_CALLS_SCHEMA = pa.schema([
+    ("schema_version", pa.string()),
+    ("run_id", pa.string()),
+    ("task", pa.string()),
+    ("model", pa.string()),
+    ("prompt_tokens", pa.int64()),
+    ("completion_tokens", pa.int64()),
+    ("total_tokens", pa.int64()),
+    ("latency_ms", pa.int64()),
+    ("cache_hit", pa.bool_()),
+    ("created_at", pa.string()),
+])
+
+
+def _write_llm_calls(rows: list[dict], out_path: Path) -> None:
+    """Write llm_calls.parquet with the explicit Issue #29 schema.
+
+    Always called by run_extraction (an empty file with this exact schema when
+    no LLM calls occurred) so the DuckDB view + union_by_name schema stays
+    stable across runs.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        empty = {f.name: pa.array([], type=f.type) for f in _LLM_CALLS_SCHEMA}
+        pq.write_table(pa.table(empty, schema=_LLM_CALLS_SCHEMA), out_path)
+        return
+    arrays = {
+        f.name: pa.array([row.get(f.name) for row in rows], type=f.type)
+        for f in _LLM_CALLS_SCHEMA
+    }
+    pq.write_table(pa.table(arrays, schema=_LLM_CALLS_SCHEMA), out_path)
 
 
 # ---------------------------------------------------------------------------
@@ -876,7 +968,7 @@ def build_default_extractor() -> Extractor:
         return RuleBasedExtractor()
     key = os.environ.get("LLM_API_KEY")
     base = os.environ.get("LLM_BASE_URL")
-    model = os.environ.get("LLM_MODEL_NAME")
+    model = config.model_for("extraction")
     if key and base and model:
         return OpenAIExtractor(api_key=key, base_url=base, llm_model_name=model)
     return RuleBasedExtractor()
@@ -1077,6 +1169,25 @@ def run_extraction(
         ENTITY_CHUNK_PROVENANCE_COLUMNS,
         discovery_dir / "entity_chunk_provenance.parquet",
     )
+
+    # Issue #29: persist per-call LLM token usage. Always written (empty file in
+    # rule-based / no-LLM runs) so the DuckDB view + union_by_name schema stays
+    # stable across runs.
+    llm_call_rows = [
+        {"schema_version": SCHEMA_VERSION, "run_id": run_id, **rec}
+        for rec in getattr(extractor, "usage_log", []) or []
+    ]
+    _write_llm_calls(llm_call_rows, discovery_dir / "llm_calls.parquet")
+
+    # Record the effective per-task model in the manifest when an LLM extractor
+    # actually ran (only keys for executed tasks are written; extend as more
+    # call sites are wired).
+    if isinstance(extractor, OpenAIExtractor):
+        manifest.model_config_resolved = {
+            **(manifest.model_config_resolved or {}),
+            "extraction": extractor._llm_model_name,
+        }
+        runs.save_manifest(manifest)
 
     return len(entity_rows), len(edge_rows)
 
@@ -1969,7 +2080,7 @@ def build_default_fact_extractor() -> FactExtractor:
         return RuleBasedFactExtractor()
     key = _os.environ.get("LLM_API_KEY")
     base = _os.environ.get("LLM_BASE_URL")
-    model = _os.environ.get("LLM_MODEL_NAME")
+    model = config.model_for("extraction")
     if key and base and model:
         return OpenAIFactExtractor(api_key=key, base_url=base, llm_model_name=model)
     return RuleBasedFactExtractor()
@@ -2799,7 +2910,7 @@ def build_default_sentiment_extractor() -> SentimentExtractor:
         return RuleBasedSentimentExtractor()
     key = _os.environ.get("LLM_API_KEY")
     base = _os.environ.get("LLM_BASE_URL")
-    model = _os.environ.get("LLM_MODEL_NAME")
+    model = config.model_for("extraction")
     if key and base and model:
         return OpenAISentimentExtractor(api_key=key, base_url=base, llm_model_name=model)
     return RuleBasedSentimentExtractor()

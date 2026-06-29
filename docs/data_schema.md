@@ -17,7 +17,7 @@ MiroFish can inform the upload and task-status workflow, but it does not define 
 |---|---|---|---|---|
 | L0 | Raw unstructured inputs | Data Ingestion Agent | PDF, MD, TXT, HTML exports, transcript files | `raw_documents.parquet` |
 | L1 | Cleaned unstructured artifacts | Data Cleaning Agent | normalized text, document metadata, chunks, cleaning log | `documents.parquet`, `document_cleaning_log.parquet`, `chunks.parquet` |
-| L2 | Structured discovery artifacts | Extraction Agent, Graph Theme Agent | entities, aliases, edges, graph, communities, theme snapshots | `entities.parquet`, `edges.parquet`, `graph.json`, `theme_snapshots.json` |
+| L2 | Structured discovery artifacts | Extraction Agent, Graph Theme Agent | entities, aliases, edges, graph, communities, theme snapshots; per-call LLM token usage (observability, #29) | `entities.parquet`, `edges.parquet`, `graph.json`, `theme_snapshots.json`, `llm_calls.parquet` |
 | L2-P | Provenance reverse-join artifacts (EG-E) | Provenance Agent | entity-chunk-document linkage; theme->documents; (company,theme)->documents | `entity_chunk_provenance.parquet`, `theme_document_evidence.parquet`, `company_theme_document_evidence.parquet` |
 | L2-FI | Forward-inference derived artifacts (FI-C) | Propagation Agent | per-Event-trigger company impact rows with causal path + evidence | `projected_impacts.parquet` |
 | L3 | Structured validation artifacts | Data Engineering Agent, Validation Agent | prices, fundamentals, baskets, validation metrics | `market_prices.parquet`, `fundamentals.parquet`, `portfolio_baskets.parquet`, `validation.csv` |
@@ -185,6 +185,17 @@ Rules:
 - Entity ids and edge ids must be stable for the same run input and config.
 - `theme_name` is interpretation metadata, not a discovery input.
 - Low-confidence records should be included with confidence fields or routed to review, not silently dropped.
+
+### LLM Call Observability (#29)
+
+The extraction stage also emits `llm_calls.parquet` (one row per LLM completion
+call, recorded even for tool-call responses; an empty typed table when the run is
+rule-based). See `docs/io_contracts.md` § 12a for the column schema and the
+`v_disc_llm_calls` view. The effective per-task model for the run is recorded in
+`run_manifest.json` under `model_config_resolved` (e.g. `{"extraction": "<model>"}`),
+resolved from `pipeline.yml`'s `llm_models` block via `config.model_for(task)`
+(task override > `default` > env `LLM_MODEL_NAME`). No provider model string is
+hardcoded at any call site.
 
 ## 4a. As-Reported Fundamentals (Discovery-time, EG-B1)
 

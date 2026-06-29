@@ -272,6 +272,18 @@ def validate_ready_for_validation(run_id: str) -> RunManifest:
     return manifest
 
 
+def save_manifest(manifest: RunManifest) -> None:
+    """Persist a RunManifest to ``run_manifest.json`` (Issue #29).
+
+    Used by stages (e.g. run_extraction) to record updated fields such as
+    ``model_config_resolved`` without re-creating the run.
+    """
+    run_dir = get_run_dir(manifest.run_id)
+    (run_dir / MANIFEST_NAME).write_text(
+        json.dumps(manifest.model_dump(), indent=2), encoding="utf-8"
+    )
+
+
 def load_manifest(run_id: str) -> RunManifest | None:
     p = settings.run_output_dir / run_id / MANIFEST_NAME
     if not p.exists():

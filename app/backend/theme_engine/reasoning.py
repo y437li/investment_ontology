@@ -15,7 +15,7 @@ import os
 import re
 from typing import Optional
 
-from . import registry, run_cache, runs
+from . import config, registry, run_cache, runs
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
@@ -222,7 +222,7 @@ def _default_client_model():
         # endpoint handler can return 503 rather than 500.
         raise KeyError("openai package not installed") from exc
     client = OpenAI(api_key=os.environ["LLM_API_KEY"], base_url=os.environ["LLM_BASE_URL"])
-    return client, os.environ["LLM_MODEL_NAME"]
+    return client, config.model_for("theme_naming")
 
 
 def gather_main_dossier(run_id: str, community_ids: list[str]) -> dict:

@@ -10,7 +10,7 @@ import json
 import os
 from typing import Optional
 
-from . import registry, runs
+from . import config, registry, runs
 
 
 def _load_communities(run_id: str) -> list[dict]:
@@ -21,7 +21,7 @@ def _load_communities(run_id: str) -> list[dict]:
 
 def _default_client_model():
     from openai import OpenAI  # noqa: PLC0415
-    return OpenAI(api_key=os.environ["LLM_API_KEY"], base_url=os.environ["LLM_BASE_URL"]), os.environ["LLM_MODEL_NAME"]
+    return OpenAI(api_key=os.environ["LLM_API_KEY"], base_url=os.environ["LLM_BASE_URL"]), config.model_for("theme_naming")
 
 
 _TOOL = {

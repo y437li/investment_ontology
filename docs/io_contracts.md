@@ -38,6 +38,7 @@ Format:
   "validation_config": "configs/validation.example.yml",
   "input_hash": "sha256:...",
   "model_config_hash": "sha256:...",
+  "model_config_resolved": { "extraction": "<resolved model>" },
   "sweep_id": null,
   "sweep_parent_id": null,
   "validation_mode": "single_snapshot",
@@ -69,6 +70,7 @@ Required fields:
 - `sweep_id` (nullable for single-snapshot runs)
 - `sweep_parent_id` (nullable)
 - `sweep_position` (nullable)
+- `model_config_resolved` (#29; map of task → effective LLM model. Populated when any LLM stage runs — only keys for executed tasks appear, e.g. `{"extraction": "<model>"}`. Models resolve per task from `pipeline.yml`'s `llm_models` block via `config.model_for(task)`: task override > `default` > env `LLM_MODEL_NAME`. Absent/`null` for rule-based runs.)
 
 ## 2a. Sweep Manifest (walk-forward)
 
@@ -510,6 +512,46 @@ Rules:
 
 - Explanation must be grounded in evidence chunks.
 - Do not include unsupported LLM speculation.
+
+## 12a. `llm_calls.parquet` (#29, observability)
+
+Path:
+
+```text
+data/runs/<run_id>/discovery/llm_calls.parquet
+```
+
+One row per LLM completion call (`chat.completions.create`), recorded **even when
+the response is a tool-call** and even when the provider returns no `usage`
+(token counts default to 0). The file is **always written** by the extraction
+stage — an empty (but typed) table in rule-based / no-LLM runs — so the
+`union_by_name` schema and the DuckDB view stay stable across runs.
+
+Columns:
+
+```text
+schema_version: string
+run_id: string            # also stored in-file; the DuckDB view derives run_id
+                          # from the path and renames this copy to run_id_1
+task: string              # pipeline.yml llm_models task key, e.g. "extraction"
+model: string             # resolved model used for the call (never a literal)
+prompt_tokens: int64
+completion_tokens: int64
+total_tokens: int64
+latency_ms: int64         # wall-clock perf_counter delta for the call
+cache_hit: bool           # true when the provider reports cached prompt tokens
+created_at: string        # ISO 8601 UTC generation timestamp (NOT a PIT date)
+```
+
+Rules:
+
+- This is **optional observability** — not a freeze-gated required artifact, and
+  `created_at` is a generation timestamp, so it is **excluded** from point-in-time
+  leakage checks.
+- Auto-registered as the DuckDB view **`v_disc_llm_calls`** (derived from
+  `leakage.DISCOVERY_ARTIFACTS`).
+- The entity/edge extraction stage (M3) is the first consumer; other LLM stages
+  resolve their model via `config.model_for(task)` but defer usage logging.
 
 ## 13. `graph.json`
 

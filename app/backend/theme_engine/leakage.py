@@ -87,6 +87,8 @@ DISCOVERY_ARTIFACTS: frozenset[str] = frozenset({
     "management_sentiment_fused.parquet",
     # Forward inference (FI-C)
     "projected_impacts.parquet",
+    # Observability (#29)
+    "llm_calls.parquet",                   # optional; per-call LLM token usage
 })
 
 # Discovery artifacts that carry a ``available_at`` (or equivalent PIT date)
