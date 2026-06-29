@@ -91,6 +91,17 @@ R2 scope = **drive the multi-period loop + produce the cross-point panel artifac
 
 R2 also folds in the loop's enablers: bulk freeze (freeze all authored points) and DuckDB per-point globbing (views see `discovery/<as_of>/` artifacts). **Out of scope (R3):** per-point validation (lifting the R1 guard), panel UI, OI-7 window per point.
 
+**R2 SHIPPED** 2026-06-29 (PR #114).
+
+### R3 — locked implementation decisions (user, 2026-06-29)
+
+R3 (this phase, **R3a**) = **backend per-point validation** — the research finale of OI-6. Panel UI is split out to **R3b** (separate, later).
+
+1. **Scope — backend per-point validation only.** Panel UI (theme-emergence / exposure-trajectory time-series views wired to `panel/`) is deferred to R3b.
+2. **Validation semantics — genuine out-of-sample.** For a multi-point run, each point `t_i` is evaluated against **its OWN frozen `discovery/<t_i>/` basket** (themes/exposure built PIT to `t_i` by the R2 loop), with the OI-7 **3-month forward window, skip-not-shrink** (forward `price_date` strictly > `t_i`; a point lacking ≥3M coverage is skipped, not counted toward `n_points`). Pool per-point excess vs baseline → `mean_excess`, `hit_rate`, `n_points`; `claim_supported=true` iff `n_points >= sweep.min_points_for_claim` (≥3). This **LIFTS the R1 multi-point guard** (the "deferred to R2/R3" return): it must be REPLACED by genuine per-point evaluation, not merely deleted. Single-point / legacy runs keep the existing OI-1 single-snapshot behaviour (always illustrative).
+
+R3a records a per-point validation panel artifact (per-point results + skipped points + pooled stats); validation reads stay post-freeze (OI-3). **Out of scope (R3b):** the Vue panel UI.
+
 **Acceptance (design):** spec §6/§22/§27 define the multi-period run, per-point PIT layout, and the panel; dependency on OI-5 (the per-point detection unit) and OI-8 (the `available_at` it filters on) stated.
 
 ---
