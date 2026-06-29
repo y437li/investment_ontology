@@ -18,6 +18,23 @@ Outputs:
 - `edges.parquet`
 - `edge_explanations.parquet`
 
+OI-2 Stated-vs-Inferred Discipline (interpretive edges):
+
+Interpretive edge types (`benefits`, `hurts`, `exposed_to`, `causes`, `sensitive_to`) are LLM
+judgments that feed exposure -> baskets -> validation. These must be disciplined at extraction time:
+
+- Label edges **explicitly stated in the document text** as `extraction_method=document_stated`.
+  These edges MUST have at least one `evidence_chunk_ids` entry. A `document_stated` edge with no
+  evidence is rejected (dropped) and never written to `edges.parquet`.
+- Label edges that the LLM **inferred beyond what the text says** as `extraction_method=llm_inferred`.
+  These are excluded from community discovery and exposure by default.
+- Label deterministic metadata-derived signals as `extraction_method=metadata_inferred`.
+  Also excluded by default.
+- `extraction_method` is an **enum**: `{document_stated, llm_inferred, metadata_inferred}`.
+  Out-of-enum values are silently rejected at extraction time.
+
+See spec §7 (method constraints) and §17 (stated-vs-inferred discipline) for the authoritative rule.
+
 Alias table discipline (OI-4 — PIT-vs-global):
 
 Two alias artifacts are written per run by `entity_resolution.resolve_entities()`:
