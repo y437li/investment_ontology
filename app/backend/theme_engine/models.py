@@ -42,6 +42,11 @@ class RunManifest(BaseModel):
     # Forward-compatible: set by later milestones, present from creation.
     discovery_frozen: bool = False
     discovery_artifact_hashes: Optional[dict[str, str]] = None
+    # Issue #29: effective per-task LLM models used by this run (task -> model).
+    # NOTE: name MUST be 'model_config_resolved', NOT 'model_config' (pydantic v2
+    # reserves 'model_config' as the ConfigDict ClassVar). Plain dict, verified
+    # warning-free under pydantic 2.12.5.
+    model_config_resolved: Optional[dict[str, str]] = None
     sweep_parent_id: Optional[str] = None
     # M5: set by freeze endpoint
     frozen_at: Optional[str] = None
