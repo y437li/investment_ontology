@@ -79,6 +79,7 @@ to ``run_id_1`` so there is no ambiguity.
 from __future__ import annotations
 
 import contextlib
+import glob
 from pathlib import Path
 from typing import Generator
 
@@ -136,13 +137,20 @@ def _val_view_name(artifact: str) -> str:
     return f"v_val_{artifact[:-len('.parquet')]}"
 
 
+# Regex to extract the per-point as_of date from a discovery artifact path:
+#   .../discovery/<YYYY-MM-DD>/<artifact>  → 'YYYY-MM-DD'  (flat → '')
+_AS_OF_FROM_DISCOVERY = r".*/discovery/(\d{4}-\d{2}-\d{2})/"
+
+
 def _register_parquet_view(
     conn: duckdb.DuckDBPyConnection,
     view_name: str,
-    glob_pattern: str,
+    glob_patterns: str | list[str],
     run_id_regex: str,
+    *,
+    with_as_of: bool = False,
 ) -> bool:
-    """Register a DuckDB VIEW over a Parquet glob pattern.
+    """Register a DuckDB VIEW over one or more Parquet glob patterns.
 
     Extracts ``run_id`` from the file path using ``regexp_extract``.
     The ``run_id`` column is always first; any existing ``run_id`` column in
@@ -154,12 +162,18 @@ def _register_parquet_view(
         In-memory DuckDB connection to register the view on.
     view_name:
         SQL identifier for the view (e.g. ``v_disc_chunks``).
-    glob_pattern:
-        Glob pattern passed to ``read_parquet``.  May match zero files if no
-        runs have produced that artifact yet.
+    glob_patterns:
+        One glob pattern, or a list of them, passed to ``read_parquet``.  A
+        list lets a single view span both the flat ``discovery/<artifact>``
+        layout and the per-point ``discovery/<as_of>/<artifact>`` layout
+        (OI-6 R2).  May match zero files if no runs have produced that artifact
+        yet.
     run_id_regex:
         Regexp used with ``regexp_extract(filename, run_id_regex, 1)`` to
         extract the run_id component from the full file path.
+    with_as_of:
+        When True, emit an ``as_of`` column derived from the per-point
+        ``discovery/<YYYY-MM-DD>/`` path segment ('' for the flat layout).
 
     Returns
     -------
@@ -167,12 +181,28 @@ def _register_parquet_view(
         ``True`` if the view was registered, ``False`` if no files matched the
         glob (the view is not created, but no exception is raised).
     """
+    if isinstance(glob_patterns, str):
+        glob_patterns = [glob_patterns]
+    # DuckDB's read_parquet([...]) raises if ANY listed pattern matches zero
+    # files.  Pre-filter to only the patterns that currently match on disk so a
+    # mixed flat/per-point layout (or an all-flat corpus) never errors.
+    matched = [g for g in glob_patterns if glob.glob(g)]
+    if not matched:
+        return False
+    globs_sql = ", ".join(f"'{g}'" for g in matched)
+
+    as_of_select = (
+        f"    regexp_extract(filename, '{_AS_OF_FROM_DISCOVERY}', 1) AS as_of,\n"
+        if with_as_of
+        else ""
+    )
     sql = (
         f"CREATE OR REPLACE VIEW {view_name} AS\n"
         f"  SELECT\n"
         f"    regexp_extract(filename, '{run_id_regex}', 1) AS run_id,\n"
+        f"{as_of_select}"
         f"    * EXCLUDE (filename)\n"
-        f"  FROM read_parquet('{glob_pattern}', filename=true, union_by_name=true)"
+        f"  FROM read_parquet([{globs_sql}], filename=true, union_by_name=true)"
     )
     try:
         conn.execute(sql)
@@ -214,19 +244,29 @@ def _register_all_views(
     if run_id is not None:
         # Single-run: point at the specific run directory
         run_dir = runs_dir / run_id
-        disc_glob_tmpl = str(run_dir / DISCOVERY_DIR / "{artifact}")
+        # OI-6 R2: cover BOTH the flat discovery/<artifact> layout and the
+        # per-point discovery/<as_of>/<artifact> layout in one view.
+        disc_glob_tmpls = [
+            str(run_dir / DISCOVERY_DIR / "{artifact}"),
+            str(run_dir / DISCOVERY_DIR / "*" / "{artifact}"),
+        ]
         val_glob_tmpl = str(run_dir / VALIDATION_DIR / "{artifact}")
     else:
         # All-runs: glob over every run sub-directory
-        disc_glob_tmpl = str(runs_dir / "*" / DISCOVERY_DIR / "{artifact}")
+        disc_glob_tmpls = [
+            str(runs_dir / "*" / DISCOVERY_DIR / "{artifact}"),
+            str(runs_dir / "*" / DISCOVERY_DIR / "*" / "{artifact}"),
+        ]
         val_glob_tmpl = str(runs_dir / "*" / VALIDATION_DIR / "{artifact}")
 
     registered: dict[str, list[str]] = {"discovery": [], "validation": []}
 
     for artifact in sorted(DISCOVERY_PARQUET):
         vname = _disc_view_name(artifact)
-        glob = disc_glob_tmpl.format(artifact=artifact)
-        if _register_parquet_view(conn, vname, glob, _RUN_ID_FROM_DISCOVERY):
+        globs = [t.format(artifact=artifact) for t in disc_glob_tmpls]
+        if _register_parquet_view(
+            conn, vname, globs, _RUN_ID_FROM_DISCOVERY, with_as_of=True
+        ):
             registered["discovery"].append(vname)
 
     for artifact in sorted(VALIDATION_PARQUET):

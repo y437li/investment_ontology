@@ -162,6 +162,33 @@ class ValidationRunResponse(BaseModel):
     required_end: Optional[str] = None
 
 
+class PanelPoint(BaseModel):
+    """OI-6 R2: per-point summary inside a PanelSummary."""
+
+    as_of: str
+    discovery_present: bool
+    discovery_frozen: bool
+    theme_count: int
+    company_theme_pair_count: int
+
+
+class PanelSummary(BaseModel):
+    """OI-6 R2: read-only run-level multi-period panel summary.
+
+    Returned by GET /api/runs/{run_id}/panel/summary.  Mirrors the cached
+    panel/panel_summary.json artifact written by discovery_panel.build_panel.
+    """
+
+    run_id: str
+    as_of_dates: list[str]
+    discovery_frozen: bool
+    frozen_at: Optional[str] = None
+    panel_built: bool
+    points: list[PanelPoint]
+    theme_lineage_summary: Optional[dict] = None
+    exposure_trajectory_company_count: int
+
+
 class ExtractionRunRequest(BaseModel):
     """Request body for POST /api/extraction/run."""
 

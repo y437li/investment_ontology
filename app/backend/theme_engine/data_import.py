@@ -222,8 +222,12 @@ def import_manifest(
     accepted_rows: list[dict[str, str]] = []
     quarantine_reasons: list[str] = []
 
+    # OI-6 R2: the OI-8 future-doc gate is point-in-time to t_i for a per-point
+    # import (as_of explicit); falls back to the run-level as_of_date otherwise.
+    gate_date = as_of if as_of is not None else manifest.as_of_date
+
     for row_num, row in enumerate(manifest_rows, start=1):
-        ok, reason = _validate_row(row, documents_root, manifest.as_of_date)
+        ok, reason = _validate_row(row, documents_root, gate_date)
         if not ok:
             quarantine_reasons.append(f"row {row_num}: {reason}")
             continue
