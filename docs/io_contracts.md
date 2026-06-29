@@ -217,6 +217,10 @@ Rules:
 - `raw_document_id` must be stable for the same `source`, `source_id`, and `raw_content_hash`.
 - `included_in_discovery` must be false when `available_at > as_of_date`.
 - Extraction failures must be explicit in `extraction_status` and `extraction_error`.
+- `raw_path` is stored as an **absolute path** by the import stage (resolved from
+  `documents_dir` at import time) so that the cleaning stage can locate files
+  regardless of which `documents_dir` is passed to `/api/data/clean`.  The source
+  manifest CSV may still use relative paths; they are resolved at import.
 
 ## 6. `documents.parquet`
 

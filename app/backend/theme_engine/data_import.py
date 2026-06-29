@@ -134,8 +134,14 @@ def _row_to_parquet_row(row: dict[str, str], idx: int, documents_root: Path) -> 
     raw_path = Path(row["raw_path"])
     abs_raw_path = raw_path if raw_path.is_absolute() else documents_root / raw_path
     document_id = f"{row['source_id']}::{row['company_id']}::{idx}"
+    # Store the resolved absolute path so the cleaning stage can locate the
+    # file regardless of what documents_dir is passed (or not passed) to clean.
+    # _resolve_raw_path in data_cleaning already handles absolute paths by
+    # returning them directly, so this is backward-compatible.
+    row_copy = {k: row.get(k, "") for k in REQUIRED_MANIFEST_COLUMNS}
+    row_copy["raw_path"] = str(abs_raw_path)
     return {
-        **{k: row.get(k, "") for k in REQUIRED_MANIFEST_COLUMNS},
+        **row_copy,
         "document_id": document_id,
         "content_hash": _content_sha256(abs_raw_path),
         "ingested_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
