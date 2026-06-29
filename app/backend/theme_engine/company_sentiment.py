@@ -31,8 +31,8 @@ from . import run_cache, runs
 # Shared helpers (mirrors company_profile.py style)
 # ---------------------------------------------------------------------------
 
-def _get_discovery_dir(run_id: str) -> Path:
-    return runs.get_run_dir(run_id) / "discovery"
+def _get_discovery_dir(run_id: str, as_of: str | None = None) -> Path:
+    return runs.discovery_point_dir(run_id, as_of)
 
 
 def _load_parquet(path: Path) -> list[dict]:
@@ -50,12 +50,13 @@ def _to_date_str(val: Any) -> str:
     return s[:10] if len(s) >= 10 else s
 
 
-def _require_run(run_id: str) -> str:
-    """Return run's as_of_date or raise 404."""
+def _require_run(run_id: str, as_of: str | None = None) -> str:
+    """Return the effective PIT date (the selected point or the run's as_of_date)
+    or raise 404 when the run is unknown."""
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    return str(manifest.as_of_date)
+    return as_of if as_of is not None else str(manifest.as_of_date)
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +113,7 @@ def _parse_lexicon_hits(raw: Any) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def get_company_sentiment(run_id: str, company_id: str) -> dict[str, Any]:
+def get_company_sentiment(run_id: str, company_id: str, as_of: str | None = None) -> dict[str, Any]:
     """Return the management-sentiment panel payload for a company page.
 
     Schema
@@ -165,8 +166,8 @@ def get_company_sentiment(run_id: str, company_id: str) -> dict[str, Any]:
     PIT: only rows with available_at <= as_of_date are included.
     Sorted: conflict first, then hedged, then by available_at descending.
     """
-    as_of = _require_run(run_id)
-    ddir = _get_discovery_dir(run_id)
+    as_of = _require_run(run_id, as_of)
+    ddir = _get_discovery_dir(run_id, as_of)
 
     # ── Load fused artifact ───────────────────────────────────────────────────
     fused_path = ddir / "management_sentiment_fused.parquet"

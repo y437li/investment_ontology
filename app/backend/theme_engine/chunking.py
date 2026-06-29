@@ -290,8 +290,8 @@ def _parse_structured_blocks(text: str) -> list[dict]:
 # Parquet helpers
 # ---------------------------------------------------------------------------
 
-def _read_documents(run_id: str) -> list[dict]:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "documents.parquet"
+def _read_documents(run_id: str, as_of: str | None = None) -> list[dict]:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "documents.parquet"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -314,15 +314,14 @@ def _empty_table() -> pa.Table:
     return pa.table({col: pa.array([], type=pa.string()) for col in CHUNKS_COLUMNS})
 
 
-def chunk_documents(run_id: str) -> int:
+def chunk_documents(run_id: str, as_of: str | None = None) -> int:
     """Chunk cleaned documents into ``chunks.parquet``. Returns chunk count."""
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
 
-    docs = _read_documents(run_id)
-    run_dir = runs.get_run_dir(run_id)
-    out_path = run_dir / "discovery" / "chunks.parquet"
+    docs = _read_documents(run_id, as_of)
+    out_path = runs.discovery_point_dir(run_id, as_of, for_write=True) / "chunks.parquet"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     chunk_rows: list[dict] = []

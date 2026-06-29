@@ -21,8 +21,8 @@ _FACTOR_LEVELS = ("macro", "industry", "company", "idiosyncratic")
 _PRIORITY = {"macro": 0, "industry": 1, "company": 2, "idiosyncratic": 3}
 
 
-def _strength_by_community(rd) -> dict:
-    p = rd / "discovery" / "theme_metrics.parquet"
+def _strength_by_community(dd) -> dict:
+    p = dd / "theme_metrics.parquet"
     if not p.exists():
         return {}
     out: dict[str, float] = {}
@@ -43,14 +43,14 @@ def _dominant(level_counts: dict) -> str:
     return sorted((lv for lv, n in factor.items() if n == top), key=lambda lv: _PRIORITY[lv])[0]
 
 
-def compute_levels(run_id: str) -> dict:
+def compute_levels(run_id: str, as_of: str | None = None) -> dict:
     """Per-community level composition + dominant level + substantive flag."""
-    rd = runs.get_run_dir(run_id)
+    dd = runs.discovery_point_dir(run_id, as_of)
     ent_level = {e["entity_id"]: registry.entity_level(e.get("entity_type"))
-                 for e in run_cache.load_parquet_rows(rd / "discovery" / "entities.parquet")}
-    strength = _strength_by_community(rd)
+                 for e in run_cache.load_parquet_rows(dd / "entities.parquet")}
+    strength = _strength_by_community(dd)
 
-    comm_doc = run_cache.load_json(rd / "discovery" / "communities.json")
+    comm_doc = run_cache.load_json(dd / "communities.json")
     communities = comm_doc.get("communities", comm_doc)
 
     by_id: dict[str, dict] = {}
@@ -76,7 +76,7 @@ def compute_levels(run_id: str) -> dict:
         themes.append(row)
 
     main_themes = []
-    hier_path = rd / "discovery" / "theme_hierarchy.json"
+    hier_path = dd / "theme_hierarchy.json"
     if hier_path.exists():
         hier = run_cache.load_json(hier_path)
         for mt in hier.get("main_themes", []):
@@ -98,6 +98,6 @@ def compute_levels(run_id: str) -> dict:
             "themes": themes, "main_themes": main_themes}
 
 
-def substantive_ids(run_id: str) -> set:
+def substantive_ids(run_id: str, as_of: str | None = None) -> set:
     """community_ids that are real narratives (used to filter PM view + hierarchy input)."""
-    return {t["community_id"] for t in compute_levels(run_id)["themes"] if t["substantive"]}
+    return {t["community_id"] for t in compute_levels(run_id, as_of)["themes"] if t["substantive"]}

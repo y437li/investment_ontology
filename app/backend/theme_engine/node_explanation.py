@@ -18,8 +18,8 @@ import pyarrow.parquet as pq
 from . import config, registry, runs
 
 
-def _load(run_id: str, name: str):
-    p = runs.get_run_dir(run_id) / "discovery" / name
+def _load(run_id: str, name: str, as_of: str | None = None):
+    p = runs.discovery_point_dir(run_id, as_of) / name
     if name.endswith(".json"):
         return json.loads(p.read_text())
     return pq.read_table(p).to_pylist()
@@ -40,21 +40,21 @@ def _name(ent: dict) -> str:
     return ent.get("canonical_name") or ent.get("name") or ent.get("entity_id", "")
 
 
-def node_profile(run_id: str, entity_id: str) -> dict:
+def node_profile(run_id: str, entity_id: str, as_of: str | None = None) -> dict:
     """Deterministic node profile (no LLM): what it is + why it is in the graph."""
-    entities = {e["entity_id"]: e for e in _load(run_id, "entities.parquet")}
+    entities = {e["entity_id"]: e for e in _load(run_id, "entities.parquet", as_of)}
     ent = entities.get(entity_id)
     if ent is None:
         raise ValueError(f"entity not found: {entity_id}")
 
     etype = ent.get("entity_type")
-    expl = {x["edge_id"]: x.get("explanation", "") for x in _load(run_id, "edge_explanations.parquet")}
+    expl = {x["edge_id"]: x.get("explanation", "") for x in _load(run_id, "edge_explanations.parquet", as_of)}
 
     relationships: list[dict] = []
     evidence_chunks: set[str] = set()
     neighbours: set[str] = set()
     first_seen: Optional[str] = None
-    for ed in _load(run_id, "edges.parquet"):
+    for ed in _load(run_id, "edges.parquet", as_of):
         s, t = ed["source_entity_id"], ed["target_entity_id"]
         if entity_id not in (s, t):
             continue
@@ -88,13 +88,13 @@ def node_profile(run_id: str, entity_id: str) -> dict:
 
 
 def explain_node(run_id: str, entity_id: str, refresh: bool = False,
-                 client=None, model: Optional[str] = None) -> dict:
+                 client=None, model: Optional[str] = None, as_of: str | None = None) -> dict:
     """Node profile + an optional cached LLM prose explanation of why it matters."""
-    cache = runs.get_run_dir(run_id) / "discovery" / "node_explanations" / f"{entity_id}.json"
+    cache = runs.discovery_point_dir(run_id, as_of) / "node_explanations" / f"{entity_id}.json"
     if cache.exists() and not refresh:
         return json.loads(cache.read_text())
 
-    profile = node_profile(run_id, entity_id)
+    profile = node_profile(run_id, entity_id, as_of)
     if client is None:
         import os  # noqa: PLC0415
         from openai import OpenAI  # noqa: PLC0415

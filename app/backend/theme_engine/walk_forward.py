@@ -56,15 +56,17 @@ def _month_ends(start: date, end: date) -> list[str]:
     return out
 
 
-def _monthly_snapshots(run_id: str) -> tuple[list[str], list[list[set]]]:
+def _monthly_snapshots(run_id: str, as_of: str | None = None) -> tuple[list[str], list[list[set]]]:
     rd = runs.get_run_dir(run_id)
+    dd = runs.discovery_point_dir(run_id, as_of)
     chunk_dates = {c["chunk_id"]: c.get("available_at")
-                   for c in run_cache.load_parquet_rows(rd / "discovery" / "chunks.parquet")}
+                   for c in run_cache.load_parquet_rows(dd / "chunks.parquet")}
     manifest = run_cache.load_json(rd / "run_manifest.json")
-    as_of = _to_date(manifest["as_of_date"])
+    pit_date = as_of if as_of is not None else manifest["as_of_date"]
+    as_of = _to_date(pit_date)
 
     timed_edges: list[tuple[date, str, str]] = []
-    for e in run_cache.load_parquet_rows(rd / "discovery" / "edges.parquet"):
+    for e in run_cache.load_parquet_rows(dd / "edges.parquet"):
         if e["edge_type"] not in graph_build.STRUCTURAL_EDGE_TYPES:
             continue
         if (e.get("extraction_method") or "document_stated") not in graph_build.COMMUNITY_INPUT_METHODS:
@@ -91,17 +93,18 @@ def _monthly_snapshots(run_id: str) -> tuple[list[str], list[list[set]]]:
     return months, snapshots
 
 
-def theme_trajectories(run_id: str, min_size: int = _MIN_SIZE) -> dict:
+def theme_trajectories(run_id: str, min_size: int = _MIN_SIZE,
+                       as_of: str | None = None) -> dict:
     """Each current (final-month) theme's size trajectory + emergence month + momentum."""
-    months, snapshots = _monthly_snapshots(run_id)
+    months, snapshots = _monthly_snapshots(run_id, as_of=as_of)
     if not months:
         return {"months": [], "themes": []}
 
     # name the final communities from the frozen communities.json (by entity overlap)
-    rd = runs.get_run_dir(run_id)
+    dd = runs.discovery_point_dir(run_id, as_of)
     ent_name = {e["entity_id"]: (e.get("canonical_name") or e.get("name"))
-                for e in run_cache.load_parquet_rows(rd / "discovery" / "entities.parquet")}
-    frozen = run_cache.load_json(rd / "discovery" / "communities.json")
+                for e in run_cache.load_parquet_rows(dd / "entities.parquet")}
+    frozen = run_cache.load_json(dd / "communities.json")
     frozen = frozen.get("communities", frozen)
 
     final = snapshots[-1]
@@ -135,5 +138,5 @@ def theme_trajectories(run_id: str, min_size: int = _MIN_SIZE) -> dict:
         })
     themes.sort(key=lambda x: (-x["momentum"], -x["size"]))
     doc = {"months": months, "themes": themes}
-    (rd / "discovery" / "theme_trajectories.json").write_text(json.dumps(doc, indent=2))
+    (dd / "theme_trajectories.json").write_text(json.dumps(doc, indent=2))
     return doc

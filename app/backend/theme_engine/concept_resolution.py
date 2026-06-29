@@ -74,10 +74,11 @@ def group_synonyms(names: list[str], client, model: str) -> list[dict]:
     return []
 
 
-def canonicalize_concepts(run_id: str, client=None, model: Optional[str] = None) -> dict:
+def canonicalize_concepts(run_id: str, client=None, model: Optional[str] = None,
+                          as_of: str | None = None) -> dict:
     """Merge synonym concept/event nodes in a run's entities + remap edges."""
-    rd = runs.get_run_dir(run_id)
-    ent_tbl = pq.read_table(rd / "discovery" / "entities.parquet")
+    dd = runs.discovery_point_dir(run_id, as_of, for_write=True)
+    ent_tbl = pq.read_table(dd / "entities.parquet")
     ents = ent_tbl.to_pylist()
     name_to_id = {(e.get("canonical_name") or e.get("name")): e["entity_id"]
                   for e in ents if e.get("entity_type") in _MERGEABLE_TYPES}
@@ -120,10 +121,10 @@ def canonicalize_concepts(run_id: str, client=None, model: Optional[str] = None)
         if e["entity_id"] in rep_name:
             e = {**e, "canonical_name": rep_name[e["entity_id"]]}
         new_ents.append(e)
-    pq.write_table(pa.Table.from_pylist(new_ents, schema=ent_tbl.schema), rd / "discovery" / "entities.parquet")
+    pq.write_table(pa.Table.from_pylist(new_ents, schema=ent_tbl.schema), dd / "entities.parquet")
 
     # Remap edges: replace merged endpoints, drop self-loops, dedup.
-    edge_tbl = pq.read_table(rd / "discovery" / "edges.parquet")
+    edge_tbl = pq.read_table(dd / "edges.parquet")
     seen, new_edges = set(), []
     for ed in edge_tbl.to_pylist():
         s = merge.get(ed["source_entity_id"], ed["source_entity_id"])
@@ -135,7 +136,7 @@ def canonicalize_concepts(run_id: str, client=None, model: Optional[str] = None)
             continue
         seen.add(key)
         new_edges.append({**ed, "source_entity_id": s, "target_entity_id": t})
-    pq.write_table(pa.Table.from_pylist(new_edges, schema=edge_tbl.schema), rd / "discovery" / "edges.parquet")
+    pq.write_table(pa.Table.from_pylist(new_edges, schema=edge_tbl.schema), dd / "edges.parquet")
 
     return {"groups": sum(1 for g in groups if len([m for m in g.get("members", []) if m in name_to_id]) >= 2),
             "merged": merged, "entities_after": len(new_ents)}

@@ -433,8 +433,8 @@ def _check_forward_coverage(
 # ---------------------------------------------------------------------------
 
 
-def _load_exposure(run_id: str) -> list[dict]:
-    path = runs.get_run_dir(run_id) / runs.DISCOVERY_DIR / "company_theme_exposure.parquet"
+def _load_exposure(run_id: str, as_of: str | None = None) -> list[dict]:
+    path = runs.discovery_point_dir(run_id, as_of) / "company_theme_exposure.parquet"
     if not path.exists():
         return []
     try:
@@ -443,9 +443,9 @@ def _load_exposure(run_id: str) -> list[dict]:
         raise ValueError(f"corrupt frozen artifact {path.name}: {exc}")
 
 
-def _load_theme_snapshots(run_id: str) -> dict[str, dict]:
+def _load_theme_snapshots(run_id: str, as_of: str | None = None) -> dict[str, dict]:
     """Returns {theme_snapshot_id: snapshot_dict}."""
-    path = runs.get_run_dir(run_id) / runs.DISCOVERY_DIR / "theme_snapshots.json"
+    path = runs.discovery_point_dir(run_id, as_of) / "theme_snapshots.json"
     if not path.exists():
         return {}
     try:
@@ -455,9 +455,9 @@ def _load_theme_snapshots(run_id: str) -> dict[str, dict]:
         raise ValueError(f"corrupt frozen artifact {path.name}: {exc}")
 
 
-def _load_communities(run_id: str) -> dict[str, dict]:
+def _load_communities(run_id: str, as_of: str | None = None) -> dict[str, dict]:
     """Returns {community_id: community_dict}."""
-    path = runs.get_run_dir(run_id) / runs.DISCOVERY_DIR / "communities.json"
+    path = runs.discovery_point_dir(run_id, as_of) / "communities.json"
     if not path.exists():
         return {}
     try:
@@ -467,8 +467,8 @@ def _load_communities(run_id: str) -> dict[str, dict]:
         raise ValueError(f"corrupt frozen artifact {path.name}: {exc}")
 
 
-def _load_entities(run_id: str) -> list[dict]:
-    path = runs.get_run_dir(run_id) / runs.DISCOVERY_DIR / "entities.parquet"
+def _load_entities(run_id: str, as_of: str | None = None) -> list[dict]:
+    path = runs.discovery_point_dir(run_id, as_of) / "entities.parquet"
     if not path.exists():
         return []
     try:
@@ -998,7 +998,12 @@ def run_walk_forward_validation(run_id: str) -> dict:
     wf_config = config.get("walk_forward", {}) or {}
     sweep_config = config.get("sweep", {}) or {}
 
-    as_of_dates_raw: list[str] = wf_config.get("as_of_dates", []) or []
+    # OI-6 R1: prefer the manifest's authored point-list when present; the
+    # walk_forward config remains the fallback for legacy single-config runs.
+    as_of_dates_raw: list[str] = (
+        list(manifest.as_of_dates) if manifest.as_of_dates
+        else (wf_config.get("as_of_dates", []) or [])
+    )
     # min_points_for_claim from sweep section; fall back to walk_forward.min_snapshots.
     # OI-1 hard rule (defense-in-depth): never below 3 — a claim must rest on a
     # >=3-point panel regardless of config hygiene, so a misconfigured value of 1

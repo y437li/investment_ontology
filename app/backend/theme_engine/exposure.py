@@ -145,8 +145,8 @@ def _days_before(date_str: str, reference_str: str) -> float:
         return _RECENCY_WINDOW_DAYS
 
 
-def _read_graph(run_id: str) -> dict:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "graph.json"
+def _read_graph(run_id: str, as_of: str | None = None) -> dict:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "graph.json"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -155,8 +155,8 @@ def _read_graph(run_id: str) -> dict:
     return run_cache.load_json(artifact)
 
 
-def _read_communities(run_id: str) -> dict:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "communities.json"
+def _read_communities(run_id: str, as_of: str | None = None) -> dict:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "communities.json"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -165,8 +165,8 @@ def _read_communities(run_id: str) -> dict:
     return run_cache.load_json(artifact)
 
 
-def _read_theme_snapshots(run_id: str) -> dict:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "theme_snapshots.json"
+def _read_theme_snapshots(run_id: str, as_of: str | None = None) -> dict:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "theme_snapshots.json"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -175,8 +175,8 @@ def _read_theme_snapshots(run_id: str) -> dict:
     return run_cache.load_json(artifact)
 
 
-def _read_entities(run_id: str) -> list[dict]:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "entities.parquet"
+def _read_entities(run_id: str, as_of: str | None = None) -> list[dict]:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "entities.parquet"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -185,8 +185,8 @@ def _read_entities(run_id: str) -> list[dict]:
     return run_cache.load_parquet_rows(artifact)
 
 
-def _read_edges(run_id: str) -> list[dict]:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "edges.parquet"
+def _read_edges(run_id: str, as_of: str | None = None) -> list[dict]:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "edges.parquet"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -200,7 +200,7 @@ def _read_edges(run_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def compute_exposure(run_id: str, include_weak_signals: bool = False) -> int:
+def compute_exposure(run_id: str, include_weak_signals: bool = False, as_of: str | None = None) -> int:
     """Compute company-theme exposure and write company_theme_exposure.parquet.
 
     Args:
@@ -215,13 +215,13 @@ def compute_exposure(run_id: str, include_weak_signals: bool = False) -> int:
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date: str = manifest.as_of_date
+    as_of_date: str = as_of if as_of is not None else manifest.as_of_date
 
-    graph_doc = _read_graph(run_id)
-    communities_doc = _read_communities(run_id)
-    snapshots_doc = _read_theme_snapshots(run_id)
-    entities = _read_entities(run_id)
-    edges_raw = _read_edges(run_id)
+    graph_doc = _read_graph(run_id, as_of)
+    communities_doc = _read_communities(run_id, as_of)
+    snapshots_doc = _read_theme_snapshots(run_id, as_of)
+    entities = _read_entities(run_id, as_of)
+    edges_raw = _read_edges(run_id, as_of)
 
     # Build entity lookups
     entity_by_id: dict[str, dict] = {}
@@ -507,7 +507,7 @@ def compute_exposure(run_id: str, include_weak_signals: bool = False) -> int:
     output_rows.sort(key=lambda r: (r["community_id"], r["company_id"]))
 
     # Write parquet
-    _write_exposure_table(output_rows, runs.get_run_dir(run_id) / "discovery" / "company_theme_exposure.parquet")
+    _write_exposure_table(output_rows, runs.discovery_point_dir(run_id, as_of, for_write=True) / "company_theme_exposure.parquet")
 
     return len(output_rows)
 

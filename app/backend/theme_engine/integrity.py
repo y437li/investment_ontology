@@ -92,8 +92,9 @@ ARTIFACT_SCHEMA: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 
-def _discovery_path(run_dir: Path, name: str) -> Path:
-    return run_dir / "discovery" / f"{name}.parquet"
+def _discovery_path(discovery_dir: Path, name: str) -> Path:
+    # OI-6 R1: callers pass the resolved discovery dir (flat or per-point).
+    return discovery_dir / f"{name}.parquet"
 
 
 def _load(run_dir: Path, name: str) -> Optional[list[dict]]:
@@ -493,7 +494,7 @@ def _check_non_null(run_dir: Path) -> CheckResult:
 # ---------------------------------------------------------------------------
 
 
-def validate_run(run_id: str) -> IntegrityReport:
+def validate_run(run_id: str, as_of: str | None = None) -> IntegrityReport:
     """Validate a run's discovery artifacts for integrity.
 
     Runs all checks for artifacts that exist in the run.
@@ -502,6 +503,7 @@ def validate_run(run_id: str) -> IntegrityReport:
 
     Args:
         run_id: The run identifier (must have a run_manifest.json).
+        as_of: Optional per-point selector (OI-6 R1); defaults to latest/flat.
 
     Returns:
         IntegrityReport with ok=True iff all present checks passed.
@@ -510,24 +512,25 @@ def validate_run(run_id: str) -> IntegrityReport:
     if manifest is None:
         raise ValueError(f"run not found or manifest missing: {run_id!r}")
 
-    run_dir = runs.get_run_dir(run_id)
-    as_of_date: str = manifest.as_of_date
+    # OI-6 R1: the _check_* helpers consume the resolved discovery dir.
+    discovery_dir = runs.discovery_point_dir(run_id, as_of)
+    as_of_date: str = as_of if as_of is not None else manifest.as_of_date
     checks: list[CheckResult] = []
 
     # 1. PIT / No-leakage
-    checks.append(_check_pit_no_leakage(run_dir, as_of_date))
+    checks.append(_check_pit_no_leakage(discovery_dir, as_of_date))
 
     # 2. Referential integrity
-    checks.append(_check_referential_integrity(run_dir))
+    checks.append(_check_referential_integrity(discovery_dir))
 
     # 3. Schema conformance
-    checks.append(_check_schema_conformance(run_dir))
+    checks.append(_check_schema_conformance(discovery_dir))
 
     # 4. Reconciliation
-    checks.append(_check_reconciliation(run_dir))
+    checks.append(_check_reconciliation(discovery_dir))
 
     # 5. Non-null required fields
-    checks.append(_check_non_null(run_dir))
+    checks.append(_check_non_null(discovery_dir))
 
     ok = all(c.passed for c in checks)
     return IntegrityReport(run_id=run_id, ok=ok, checks=checks)

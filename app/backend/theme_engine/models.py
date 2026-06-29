@@ -21,12 +21,25 @@ class RunCreateRequest(BaseModel):
     pipeline_config: Optional[str] = None
     validation_config: Optional[str] = None
     sweep_parent_id: Optional[str] = None
+    # OI-6 R1: optional ordered multi-point list. When supplied, the run is a
+    # multi-point run and as_of_date is set to the latest point.
+    as_of_dates: Optional[list[str]] = None
 
     @field_validator("as_of_date")
     @classmethod
     def _valid_date(cls, v: str) -> str:
         if not _DATE_RE.match(v):
             raise ValueError("as_of_date must be YYYY-MM-DD")
+        return v
+
+    @field_validator("as_of_dates")
+    @classmethod
+    def _valid_dates(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        if v is None:
+            return v
+        for d in v:
+            if not _DATE_RE.match(d):
+                raise ValueError("as_of_dates entries must be YYYY-MM-DD")
         return v
 
 
@@ -50,6 +63,11 @@ class RunManifest(BaseModel):
     sweep_parent_id: Optional[str] = None
     # M5: set by freeze endpoint
     frozen_at: Optional[str] = None
+    # OI-6 R1: ordered point-list (None for single-point/legacy runs).
+    as_of_dates: Optional[list[str]] = None
+    # OI-6 R1: per-point freeze record, as_of -> frozen_at ISO timestamp.
+    # Presence of a key means that point is frozen.
+    discovery_frozen_points: Optional[dict[str, str]] = None
 
 
 class RunStatus(BaseModel):
@@ -109,6 +127,9 @@ class DataChunkResponse(BaseModel):
 
 class FreezeRequest(BaseModel):
     run_id: str
+    # OI-6 R1: freeze only this point. None on a legacy run freezes flat (today's
+    # behavior); None on a multi-point run is rejected (bulk freeze is R2).
+    as_of: Optional[str] = None
 
 
 class FreezeResponse(BaseModel):
@@ -116,6 +137,8 @@ class FreezeResponse(BaseModel):
     discovery_frozen: bool
     discovery_artifact_hashes: dict[str, str]
     manifest_path: str
+    # OI-6 R1: echoes the frozen point (None for legacy flat freeze).
+    as_of: Optional[str] = None
 
 
 class ValidationRunRequest(BaseModel):

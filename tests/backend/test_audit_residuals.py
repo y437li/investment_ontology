@@ -723,7 +723,7 @@ class TestReportSilentSwallows:
         self._write_corrupt(disc / "theme_metrics.parquet")
 
         with caplog.at_level(logging.WARNING, logger="theme_engine.report"):
-            result = _read_theme_metrics(run_dir)
+            result = _read_theme_metrics(disc)
 
         assert result == [], "Corrupt file must return []"
         assert any("theme_metrics" in r.message for r in caplog.records), (
@@ -738,7 +738,7 @@ class TestReportSilentSwallows:
         self._write_corrupt(disc / "company_theme_exposure.parquet")
 
         with caplog.at_level(logging.WARNING, logger="theme_engine.report"):
-            result = _read_exposure(run_dir)
+            result = _read_exposure(disc)
 
         assert result == []
         assert any("company_theme_exposure" in r.message or "exposure" in r.message.lower()
@@ -768,10 +768,11 @@ class TestReportSilentSwallows:
         """Absent (not-yet-created) files silently return [] — only corrupt files log warnings."""
         from theme_engine.report import _read_theme_metrics, _read_exposure
         run_id, run_dir = _make_run()  # disc/ exists but files not written
+        disc = run_dir / "discovery"
 
         with caplog.at_level(logging.WARNING, logger="theme_engine.report"):
-            result_m = _read_theme_metrics(run_dir)
-            result_e = _read_exposure(run_dir)
+            result_m = _read_theme_metrics(disc)
+            result_e = _read_exposure(disc)
 
         assert result_m == [] and result_e == []
         # No warnings for absent files — this is normal operation

@@ -803,8 +803,8 @@ def _write_llm_calls(rows: list[dict], out_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _read_chunks(run_id: str) -> list[dict]:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "chunks.parquet"
+def _read_chunks(run_id: str, as_of: str | None = None) -> list[dict]:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "chunks.parquet"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -813,7 +813,7 @@ def _read_chunks(run_id: str) -> list[dict]:
     return pq.read_table(artifact).to_pylist()
 
 
-def _read_documents_for_provenance(run_id: str) -> dict[str, Optional[str]]:
+def _read_documents_for_provenance(run_id: str, as_of: str | None = None) -> dict[str, Optional[str]]:
     """Return document_id -> company_id mapping from documents.parquet.
 
     Used by E1 (entity_chunk_provenance) to capture the originating document's
@@ -821,7 +821,7 @@ def _read_documents_for_provenance(run_id: str) -> dict[str, Optional[str]]:
     does not exist yet (the extractor is lenient so tests can call it without a
     full pipeline).
     """
-    artifact = runs.get_run_dir(run_id) / "discovery" / "documents.parquet"
+    artifact = runs.discovery_point_dir(run_id, as_of) / "documents.parquet"
     if not artifact.exists():
         return {}
     rows = pq.read_table(artifact).to_pylist()
@@ -977,6 +977,7 @@ def build_default_extractor() -> Extractor:
 def run_extraction(
     run_id: str,
     extractor: Optional[Extractor] = None,
+    as_of: str | None = None,
 ) -> tuple[int, int]:
     """Extract entities, edges, and explanations from chunks.
 
@@ -994,14 +995,13 @@ def run_extraction(
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date = manifest.as_of_date
+    as_of_date = as_of if as_of is not None else manifest.as_of_date
 
-    chunks = _read_chunks(run_id)
-    run_dir = runs.get_run_dir(run_id)
-    discovery_dir = run_dir / "discovery"
+    chunks = _read_chunks(run_id, as_of)
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
 
     # E1 provenance: document_id -> company_id (subject company of originating document)
-    doc_company_id: dict[str, Optional[str]] = _read_documents_for_provenance(run_id)
+    doc_company_id: dict[str, Optional[str]] = _read_documents_for_provenance(run_id, as_of)
     # Fast chunk lookup for E1 provenance rows (built once, used in Phase 2)
     chunk_by_id: dict[str, dict] = {
         ch["chunk_id"]: ch for ch in chunks if ch.get("chunk_id")
@@ -1771,12 +1771,12 @@ def _normalize_period_to_iso(period: str) -> Optional[str]:
     return None
 
 
-def _load_b1_fundamentals(run_id: str) -> dict[tuple[str, str, str], dict]:
+def _load_b1_fundamentals(run_id: str, as_of: str | None = None) -> dict[tuple[str, str, str], dict]:
     """Load B1 XBRL discovery fundamentals keyed by (company_id, period_end, metric_name).
 
     Returns an empty dict if the B1 artifact does not exist yet (B1 runs in parallel).
     """
-    artifact = runs.get_run_dir(run_id) / "discovery" / _B1_ARTIFACT_NAME
+    artifact = runs.discovery_point_dir(run_id, as_of) / _B1_ARTIFACT_NAME
     if not artifact.exists():
         return {}
     try:
@@ -1827,9 +1827,9 @@ def _company_entity_id_from_name(company_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_doc_company_index(run_id: str) -> dict[str, str]:
+def _read_doc_company_index(run_id: str, as_of: str | None = None) -> dict[str, str]:
     """Return {document_id: company_id} from documents.parquet, or empty dict."""
-    artifact = runs.get_run_dir(run_id) / "discovery" / "documents.parquet"
+    artifact = runs.discovery_point_dir(run_id, as_of) / "documents.parquet"
     if not artifact.exists():
         return {}
     try:
@@ -1846,6 +1846,7 @@ def _read_doc_company_index(run_id: str) -> dict[str, str]:
 def run_fact_extraction(
     run_id: str,
     fact_extractor: Optional[FactExtractor] = None,
+    as_of: str | None = None,
 ) -> int:
     """Extract quantified claims from chunks; write FinancialMetric parquet artifacts.
 
@@ -1871,17 +1872,16 @@ def run_fact_extraction(
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date: str = manifest.as_of_date
+    as_of_date: str = as_of if as_of is not None else manifest.as_of_date
 
-    chunks = _read_chunks(run_id)
-    b1_index = _load_b1_fundamentals(run_id)
+    chunks = _read_chunks(run_id, as_of)
+    b1_index = _load_b1_fundamentals(run_id, as_of)
 
     # Build document_id -> company_id lookup from documents.parquet (if available).
-    doc_company_index = _read_doc_company_index(run_id)
+    doc_company_index = _read_doc_company_index(run_id, as_of)
 
     created_at = _utc_now_iso()
-    run_dir = runs.get_run_dir(run_id)
-    discovery_dir = run_dir / "discovery"
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
 
     # Accumulate claims; key = (company_id, metric_name, period, is_guidance).
     # Multiple chunks can contribute evidence for the same claim — keep the
@@ -2616,14 +2616,14 @@ def _stable_sentiment_edge_id(
 # ---------------------------------------------------------------------------
 
 
-def _read_chunk_tone_index(run_id: str) -> dict[str, dict]:
+def _read_chunk_tone_index(run_id: str, as_of: str | None = None) -> dict[str, dict]:
     """Load chunk_tone.parquet (SENT-A) keyed by chunk_id.
 
     Returns empty dict if the artifact doesn't exist yet (SENT-A not yet run).
     The management-sentiment pass degrades gracefully: it processes all chunks
     when no pre-computed tone is available (lexicon_evidence will be empty).
     """
-    artifact = runs.get_run_dir(run_id) / "discovery" / "chunk_tone.parquet"
+    artifact = runs.discovery_point_dir(run_id, as_of) / "chunk_tone.parquet"
     if not artifact.exists():
         return {}
     try:
@@ -2681,6 +2681,7 @@ def _is_management_chunk(chunk: dict, attribution_cfg: Optional[list]) -> bool:
 def run_sentiment_extraction(
     run_id: str,
     sentiment_extractor: Optional[SentimentExtractor] = None,
+    as_of: str | None = None,
 ) -> int:
     """Extract management-sentiment records from management-attributable chunks.
 
@@ -2705,20 +2706,19 @@ def run_sentiment_extraction(
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date: str = manifest.as_of_date
+    as_of_date: str = as_of if as_of is not None else manifest.as_of_date
 
-    chunks = _read_chunks(run_id)
+    chunks = _read_chunks(run_id, as_of)
     # Load SENT-A chunk_tone artifact (for pre-computed speaker_role + lexicon hits)
-    tone_index = _read_chunk_tone_index(run_id)
+    tone_index = _read_chunk_tone_index(run_id, as_of)
     # Build document_id -> company_id lookup from documents.parquet if available
-    doc_company_index = _read_doc_company_index(run_id)
+    doc_company_index = _read_doc_company_index(run_id, as_of)
 
     # Load SENT-A attribution config (used as fallback when tone_index is empty)
     attribution_cfg: Optional[list] = None
 
     created_at = _utc_now_iso()
-    run_dir = runs.get_run_dir(run_id)
-    discovery_dir = run_dir / "discovery"
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
 
     # Accumulate records keyed by (company_id, chunk_id) to deduplicate
     # multiple calls on the same chunk.

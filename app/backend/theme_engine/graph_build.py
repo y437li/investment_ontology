@@ -185,8 +185,8 @@ def _to_date_str(val: Any) -> str:
     return s[:10]
 
 
-def _read_entities(run_id: str) -> list[dict]:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "entities.parquet"
+def _read_entities(run_id: str, as_of: str | None = None) -> list[dict]:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "entities.parquet"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -195,8 +195,8 @@ def _read_entities(run_id: str) -> list[dict]:
     return pq.read_table(artifact).to_pylist()
 
 
-def _read_edges(run_id: str) -> list[dict]:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "edges.parquet"
+def _read_edges(run_id: str, as_of: str | None = None) -> list[dict]:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "edges.parquet"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -205,7 +205,7 @@ def _read_edges(run_id: str) -> list[dict]:
     return pq.read_table(artifact).to_pylist()
 
 
-def build_graph(run_id: str) -> tuple[int, int]:
+def build_graph(run_id: str, as_of: str | None = None) -> tuple[int, int]:
     """Build ``graph.json`` from entities and edges.
 
     Returns (node_count, edge_count) where edge_count counts all edges
@@ -223,10 +223,10 @@ def build_graph(run_id: str) -> tuple[int, int]:
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date = manifest.as_of_date
+    as_of_date = as_of if as_of is not None else manifest.as_of_date
 
-    raw_entities = _read_entities(run_id)
-    raw_edges = _read_edges(run_id)
+    raw_entities = _read_entities(run_id, as_of)
+    raw_edges = _read_edges(run_id, as_of)
 
     # --- Point-in-time filter + OI-5: include only non-Document entities ---
     structural_entity_ids: set[str] = set()
@@ -360,8 +360,7 @@ def build_graph(run_id: str) -> tuple[int, int]:
     }
 
     # Write graph.json
-    discovery_dir = runs.get_run_dir(run_id) / "discovery"
-    discovery_dir.mkdir(parents=True, exist_ok=True)
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
     graph_path = discovery_dir / "graph.json"
     graph_path.write_text(json.dumps(graph_doc, indent=2), encoding="utf-8")
 

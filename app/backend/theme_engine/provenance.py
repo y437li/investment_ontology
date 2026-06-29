@@ -78,8 +78,8 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _get_discovery_dir(run_id: str) -> Path:
-    return runs.get_run_dir(run_id) / "discovery"
+def _get_discovery_dir(run_id: str, as_of: str | None = None) -> Path:
+    return runs.discovery_point_dir(run_id, as_of)
 
 
 def _require_artifact(path: Path, name: str, run_id: str) -> None:
@@ -135,7 +135,7 @@ def _write_list_parquet(rows: list[dict], columns: list[str], out_path: Path) ->
 # ---------------------------------------------------------------------------
 
 
-def materialize_theme_document_evidence(run_id: str) -> int:
+def materialize_theme_document_evidence(run_id: str, as_of: str | None = None) -> int:
     """Build theme_document_evidence.parquet (E2).
 
     For each community, collects all evidence chunks from ALL structural edges
@@ -148,9 +148,9 @@ def materialize_theme_document_evidence(run_id: str) -> int:
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date: str = manifest.as_of_date
+    as_of_date: str = as_of if as_of is not None else manifest.as_of_date
 
-    ddir = _get_discovery_dir(run_id)
+    ddir = _get_discovery_dir(run_id, as_of)
 
     # Load required artifacts
     for fname in ("communities.json", "theme_snapshots.json", "edges.parquet", "chunks.parquet"):
@@ -242,7 +242,7 @@ def materialize_theme_document_evidence(run_id: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def materialize_company_theme_evidence(run_id: str) -> int:
+def materialize_company_theme_evidence(run_id: str, as_of: str | None = None) -> int:
     """Build company_theme_document_evidence.parquet (E3).
 
     Joins company_theme_exposure.parquet on company_id (which is a Company
@@ -261,9 +261,9 @@ def materialize_company_theme_evidence(run_id: str) -> int:
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date: str = manifest.as_of_date
+    as_of_date: str = as_of if as_of is not None else manifest.as_of_date
 
-    ddir = _get_discovery_dir(run_id)
+    ddir = _get_discovery_dir(run_id, as_of)
 
     for fname in ("company_theme_exposure.parquet", "chunks.parquet"):
         _require_artifact(ddir / fname, fname, run_id)
@@ -325,14 +325,14 @@ def materialize_company_theme_evidence(run_id: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def get_theme_documents(run_id: str, community_id: str) -> dict[str, Any]:
+def get_theme_documents(run_id: str, community_id: str, as_of: str | None = None) -> dict[str, Any]:
     """Return the E2 provenance record for a community (single read, no graph walk).
 
     Returns a dict with:
       community_id, theme_snapshot_id, chunk_ids, document_ids, as_of_date
     Raises HTTPException 404 if the artifact or community is not found.
     """
-    ddir = _get_discovery_dir(run_id)
+    ddir = _get_discovery_dir(run_id, as_of)
     artifact = ddir / "theme_document_evidence.parquet"
     _require_artifact(artifact, "theme_document_evidence.parquet", run_id)
 
@@ -354,7 +354,7 @@ def get_theme_documents(run_id: str, community_id: str) -> dict[str, Any]:
     }
 
 
-def get_company_theme_documents(run_id: str, company_id: str) -> list[dict[str, Any]]:
+def get_company_theme_documents(run_id: str, company_id: str, as_of: str | None = None) -> list[dict[str, Any]]:
     """Return E3 provenance records for all themes a company is exposed to.
 
     Each item in the returned list corresponds to one (theme, community) pair;
@@ -363,7 +363,7 @@ def get_company_theme_documents(run_id: str, company_id: str) -> list[dict[str, 
 
     Raises HTTPException 404 if the artifact is missing.
     """
-    ddir = _get_discovery_dir(run_id)
+    ddir = _get_discovery_dir(run_id, as_of)
     artifact = ddir / "company_theme_document_evidence.parquet"
     _require_artifact(artifact, "company_theme_document_evidence.parquet", run_id)
 
@@ -390,14 +390,14 @@ def get_company_theme_documents(run_id: str, company_id: str) -> list[dict[str, 
 # ---------------------------------------------------------------------------
 
 
-def materialize_provenance(run_id: str) -> dict[str, int]:
+def materialize_provenance(run_id: str, as_of: str | None = None) -> dict[str, int]:
     """Materialize E2 and E3 provenance artifacts in one call.
 
     Returns dict with keys 'theme_rows' and 'company_theme_rows'.
     E3 requires exposure to be computed first.
     """
-    theme_rows = materialize_theme_document_evidence(run_id)
-    company_theme_rows = materialize_company_theme_evidence(run_id)
+    theme_rows = materialize_theme_document_evidence(run_id, as_of)
+    company_theme_rows = materialize_company_theme_evidence(run_id, as_of)
     return {
         "theme_rows": theme_rows,
         "company_theme_rows": company_theme_rows,

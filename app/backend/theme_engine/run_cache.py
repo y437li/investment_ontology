@@ -88,10 +88,12 @@ _DEFAULT_MAX_ENTRIES: int = 256
 # Pre-freeze validation guard                                                 #
 # --------------------------------------------------------------------------- #
 
-# Per-run frozen status cache.  Keys are run_id strings; values are True once
-# a run is confirmed frozen.  ``discovery_frozen`` is a one-way transition
-# (False → True, never back), so we only store True permanently.
-_frozen_status_cache: dict[str, bool] = {}
+# Per-(run, point) frozen status cache.  Keys are (run_id, as_of_or_None);
+# values are True once that scope is confirmed frozen.  Freeze is a one-way
+# transition (False → True, never back), so we only store True permanently.
+# Per-point freeze means one run can have point A frozen and point B not, so a
+# run-keyed permanent-True is unsafe — the key carries the point.
+_frozen_status_cache: dict[tuple[str, Optional[str]], bool] = {}
 
 
 def _get_run_id_from_path(path: Path) -> Optional[str]:
@@ -110,15 +112,41 @@ def _get_run_id_from_path(path: Path) -> Optional[str]:
         return None
 
 
-def _is_frozen(run_id: str) -> bool:
-    """Return whether *run_id*'s discovery is frozen.
+def _point_from_path(path: Path) -> Optional[str]:
+    """Return the as_of point for a per-point discovery artifact, else None.
 
-    Consults the module-level cache first.  On a cache miss, loads the run
-    manifest.  If the manifest is missing or ``discovery_frozen`` is ``False``,
-    returns ``False`` without caching (so the next call re-checks).  Once
-    ``True`` is determined it is cached permanently (freeze is irreversible).
+    For ``<run>/discovery/<X>/<...>/<file>`` (a per-point subtree) returns ``X``.
+    For flat ``<run>/discovery/<file>`` returns None.  For validation paths and
+    non-run paths returns None.
     """
-    if _frozen_status_cache.get(run_id) is True:
+    from .config import settings  # local import to avoid load-time side-effects
+
+    try:
+        run_output = settings.run_output_dir.resolve()
+        rel = path.resolve().relative_to(run_output)
+    except (ValueError, IndexError):
+        return None
+    parts = rel.parts  # (run_id, 'discovery', <maybe point>, ..., file)
+    if len(parts) < 3 or parts[1] != "discovery":
+        return None
+    # parts[2] is a point only if there is a further path component beneath it
+    # (i.e. it is a directory level above the filename), not the filename itself.
+    if len(parts) >= 4:
+        return parts[2]
+    return None
+
+
+def _is_frozen(run_id: str, as_of: Optional[str] = None) -> bool:
+    """Return whether *run_id*'s discovery is frozen for the given scope.
+
+    ``as_of=None`` (validation/flat paths): run-level ``discovery_frozen``.
+    ``as_of`` set: membership in ``discovery_frozen_points``.
+
+    Consults the module-level cache first.  Once ``True`` is determined for a
+    given ``(run_id, as_of)`` scope it is cached permanently (freeze is one-way).
+    """
+    key = (run_id, as_of)
+    if _frozen_status_cache.get(key) is True:
         return True
 
     # Cache miss — load manifest
@@ -127,8 +155,14 @@ def _is_frozen(run_id: str) -> bool:
     manifest = _runs.load_manifest(run_id)
     if manifest is None:
         return False  # unknown run; don't enforce
-    if manifest.discovery_frozen:
-        _frozen_status_cache[run_id] = True
+
+    if as_of is None:
+        frozen = bool(manifest.discovery_frozen)
+    else:
+        frozen = as_of in (manifest.discovery_frozen_points or {})
+
+    if frozen:
+        _frozen_status_cache[key] = True
         return True
     return False
 
@@ -139,8 +173,12 @@ def _check_prefreeeze_guard(path: Path) -> None:
     This is the read-time enforcement for OI-3: validation/ data must not be
     read until discovery is frozen (io_contracts §16).
 
-    The check is O(1) for frozen runs (cache hit) and one manifest read for
-    unfrozen runs.  Non-run paths (e.g. test tmp dirs) are skipped silently.
+    The validation read-gate still keys on the run-level frozen flag (as_of=None);
+    validation/ artifacts are future data gated by run-level discovery_frozen.
+    Per-point freeze status is computed (for cache correctness) but does NOT
+    block discovery reads — discovery reads remain never-blocked.
+
+    Non-run paths (e.g. test tmp dirs) are skipped silently.
 
     Raises
     ------
@@ -151,7 +189,9 @@ def _check_prefreeeze_guard(path: Path) -> None:
     if run_id is None:
         return  # not a run artifact path — no enforcement
 
-    frozen = _is_frozen(run_id)
+    # Validation gate is run-level (as_of=None).  Per-point status is tracked via
+    # a distinct cache key so per-point freezes never poison the run-level entry.
+    frozen = _is_frozen(run_id, as_of=None)
     assert_read_allowed(path, frozen)
 
 

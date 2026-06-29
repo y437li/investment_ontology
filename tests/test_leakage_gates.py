@@ -158,6 +158,58 @@ def test_forward_window_gate_fails_when_price_series_is_short():
     assert "forward coverage missing" in reason
 
 
+# --------------------------------------------------------------------------- #
+# OI-6 R1 companion: per-point freeze hash-key shape                           #
+# --------------------------------------------------------------------------- #
+
+
+def validate_per_point_hash_keys(
+    hash_map: dict[str, str],
+    as_of: str,
+) -> tuple[bool, list[str]]:
+    """Validate that a per-point run's required hash keys are of the form
+    ``discovery/<as_of>/<name>`` (not the flat ``discovery/<name>`` form).
+
+    Returns ``(ok, missing_keys)``.
+    """
+    required_names = {
+        "raw_documents.parquet",
+        "documents.parquet",
+        "document_cleaning_log.parquet",
+        "chunks.parquet",
+        "entities.parquet",
+        "entity_aliases.parquet",
+        "edges.parquet",
+        "graph.json",
+    }
+    expected = {f"discovery/{as_of}/{n}" for n in required_names}
+    missing = sorted(expected - set(hash_map))
+    return not missing, missing
+
+
+def test_per_point_hash_keys_use_as_of_segment():
+    as_of = "2024-06-30"
+    hash_map = {
+        f"discovery/{as_of}/raw_documents.parquet": "sha256:a",
+        f"discovery/{as_of}/documents.parquet": "sha256:b",
+        f"discovery/{as_of}/document_cleaning_log.parquet": "sha256:c",
+        f"discovery/{as_of}/chunks.parquet": "sha256:d",
+        f"discovery/{as_of}/entities.parquet": "sha256:e",
+        f"discovery/{as_of}/entity_aliases.parquet": "sha256:f",
+        f"discovery/{as_of}/edges.parquet": "sha256:g",
+        f"discovery/{as_of}/graph.json": "sha256:h",
+        # a sibling point's keys must not be confused for this point's keys
+        "discovery/2024-03-31/graph.json": "sha256:other",
+    }
+    ok, missing = validate_per_point_hash_keys(hash_map, as_of)
+    assert ok is True, f"missing per-point keys: {missing}"
+    # The flat key form must NOT satisfy a per-point gate.
+    flat_map = {"discovery/graph.json": "sha256:flat"}
+    ok2, missing2 = validate_per_point_hash_keys(flat_map, as_of)
+    assert ok2 is False
+    assert f"discovery/{as_of}/graph.json" in missing2
+
+
 def test_forward_window_gate_passes_with_coverage():
     market_rows = [
         ("AAPL", "2024-05-01"),

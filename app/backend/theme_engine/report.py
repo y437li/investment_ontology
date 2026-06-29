@@ -135,22 +135,22 @@ _DEFAULT_NARRATOR: NarratorInterface = DeterministicNarrator()
 # ---------------------------------------------------------------------------
 
 
-def _read_communities(run_dir: Path) -> dict:
-    p = run_dir / "discovery" / "communities.json"
+def _read_communities(discovery_dir: Path) -> dict:
+    p = discovery_dir / "communities.json"
     if not p.exists():
         return {}
     return run_cache.load_json(p)
 
 
-def _read_theme_snapshots(run_dir: Path) -> dict:
-    p = run_dir / "discovery" / "theme_snapshots.json"
+def _read_theme_snapshots(discovery_dir: Path) -> dict:
+    p = discovery_dir / "theme_snapshots.json"
     if not p.exists():
         return {}
     return run_cache.load_json(p)
 
 
-def _read_theme_metrics(run_dir: Path) -> list[dict]:
-    p = run_dir / "discovery" / "theme_metrics.parquet"
+def _read_theme_metrics(discovery_dir: Path) -> list[dict]:
+    p = discovery_dir / "theme_metrics.parquet"
     if not p.exists():
         return []
     try:
@@ -160,8 +160,8 @@ def _read_theme_metrics(run_dir: Path) -> list[dict]:
         return []
 
 
-def _read_exposure(run_dir: Path) -> list[dict]:
-    p = run_dir / "discovery" / "company_theme_exposure.parquet"
+def _read_exposure(discovery_dir: Path) -> list[dict]:
+    p = discovery_dir / "company_theme_exposure.parquet"
     if not p.exists():
         return []
     try:
@@ -248,6 +248,7 @@ def _build_snapshot_lookup(snapshots_doc: dict) -> dict[str, dict]:
 def generate_report(
     run_id: str,
     narrator: Optional[NarratorInterface] = None,
+    as_of: str | None = None,
 ) -> Path:
     """Assemble report.md from existing run artifacts.
 
@@ -270,12 +271,13 @@ def generate_report(
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
 
     run_dir = runs.get_run_dir(run_id)
+    discovery_dir = runs.discovery_point_dir(run_id, as_of)
 
     # --- Load artifacts ---
-    communities_doc = _read_communities(run_dir)
-    snapshots_doc = _read_theme_snapshots(run_dir)
-    metrics_rows = _read_theme_metrics(run_dir)
-    exposure_rows = _read_exposure(run_dir)
+    communities_doc = _read_communities(discovery_dir)
+    snapshots_doc = _read_theme_snapshots(discovery_dir)
+    metrics_rows = _read_theme_metrics(discovery_dir)
+    exposure_rows = _read_exposure(discovery_dir)
     validation_rows = _read_validation_csv(run_dir)
 
     communities = communities_doc.get("communities", [])

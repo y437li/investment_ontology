@@ -651,8 +651,8 @@ def _clean_text(raw_text: str, raw_path: str = "") -> tuple[str, list[dict]]:
     return step_text, actions
 
 
-def _read_raw_documents(run_id: str) -> list[dict]:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "raw_documents.parquet"
+def _read_raw_documents(run_id: str, as_of: str | None = None) -> list[dict]:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "raw_documents.parquet"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -680,6 +680,7 @@ def _write_table(rows: list[dict], columns: list[str], out_path: Path) -> None:
 def clean_documents(
     run_id: str,
     documents_dir: str | None = None,
+    as_of: str | None = None,
 ) -> tuple[int, int, list[str]]:
     """Clean raw documents into ``documents.parquet`` and write the cleaning log.
 
@@ -688,16 +689,16 @@ def clean_documents(
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date = manifest.as_of_date
+    as_of_date = as_of if as_of is not None else manifest.as_of_date
 
     documents_root: Path | None = None
     if documents_dir:
         dr = Path(documents_dir)
         documents_root = dr if dr.is_absolute() else (REPO_ROOT / dr)
 
-    raw_rows = _read_raw_documents(run_id)
+    raw_rows = _read_raw_documents(run_id, as_of)
     run_dir = runs.get_run_dir(run_id)
-    discovery_dir = run_dir / "discovery"
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
     clean_text_dir = discovery_dir / "clean_text"
 
     document_rows: list[dict] = []

@@ -47,10 +47,9 @@ _SIGN_BLIND_EDGE_TYPES: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 
 
-def _read_projected_impacts(run_id: str) -> list[dict]:
+def _read_projected_impacts(run_id: str, as_of: str | None = None) -> list[dict]:
     """Read projected_impacts.parquet or raise 404/409."""
-    run_dir = runs.get_run_dir(run_id)
-    p = run_dir / "discovery" / "projected_impacts.parquet"
+    p = runs.discovery_point_dir(run_id, as_of) / "projected_impacts.parquet"
     if not p.exists():
         raise HTTPException(
             status_code=404,
@@ -62,10 +61,9 @@ def _read_projected_impacts(run_id: str) -> list[dict]:
     return run_cache.load_parquet_rows(p)
 
 
-def _read_graph(run_id: str) -> dict:
+def _read_graph(run_id: str, as_of: str | None = None) -> dict:
     """Read graph.json or return an empty graph structure (graceful)."""
-    run_dir = runs.get_run_dir(run_id)
-    p = run_dir / "discovery" / "graph.json"
+    p = runs.discovery_point_dir(run_id, as_of) / "graph.json"
     if not p.exists():
         return {"nodes": [], "edges": []}
     try:
@@ -161,7 +159,7 @@ def _sign_blind_flag(
 # ---------------------------------------------------------------------------
 
 
-def list_projection_triggers(run_id: str) -> dict:
+def list_projection_triggers(run_id: str, as_of: str | None = None) -> dict:
     """Return the set of Event triggers present in projected_impacts.parquet.
 
     Each trigger entry carries:
@@ -174,12 +172,12 @@ def list_projection_triggers(run_id: str) -> dict:
 
     Raises 404 if projected_impacts.parquet does not exist yet.
     """
-    rows = _read_projected_impacts(run_id)
-    graph = _read_graph(run_id)
+    rows = _read_projected_impacts(run_id, as_of)
+    graph = _read_graph(run_id, as_of)
     node_index = _build_node_index(graph)
 
     manifest = runs.load_manifest(run_id)
-    as_of_date = manifest.as_of_date if manifest else ""
+    as_of_date = as_of if as_of is not None else (manifest.as_of_date if manifest else "")
 
     # Aggregate: trigger_id -> {kind, companies set}
     seen: dict[str, dict] = {}
@@ -217,7 +215,7 @@ def list_projection_triggers(run_id: str) -> dict:
     }
 
 
-def get_projections(run_id: str, trigger_id: str) -> dict:
+def get_projections(run_id: str, trigger_id: str, as_of: str | None = None) -> dict:
     """Return ranked projected impacts for a single trigger.
 
     Each impact in the response carries:
@@ -240,13 +238,13 @@ def get_projections(run_id: str, trigger_id: str) -> dict:
     is not present in the artifact (no-reach triggers produce empty list with
     empty_reason, not 404).
     """
-    all_rows = _read_projected_impacts(run_id)
-    graph = _read_graph(run_id)
+    all_rows = _read_projected_impacts(run_id, as_of)
+    graph = _read_graph(run_id, as_of)
     node_index = _build_node_index(graph)
     edge_index = _build_edge_index(graph)
 
     manifest = runs.load_manifest(run_id)
-    as_of_date = manifest.as_of_date if manifest else ""
+    as_of_date = as_of if as_of is not None else (manifest.as_of_date if manifest else "")
 
     # Filter to requested trigger
     rows = [r for r in all_rows if r.get("trigger_id") == trigger_id]

@@ -58,18 +58,22 @@ def _score(dates: list[str], as_of: date, window_days: int) -> dict:
             "evidence_count": len(dates)}
 
 
-def compute_relevance(run_id: str, window_days: int = _DEFAULT_WINDOW_DAYS) -> dict:
+def compute_relevance(run_id: str, window_days: int = _DEFAULT_WINDOW_DAYS,
+                      as_of: str | None = None) -> dict:
     """Per-community relevance at as_of (+ main-theme aggregation if a hierarchy exists)."""
     rd = runs.get_run_dir(run_id)
+    dd = runs.discovery_point_dir(run_id, as_of)
     manifest = run_cache.load_json(rd / "run_manifest.json")
-    as_of = _to_date(manifest["as_of_date"])
+    # PIT cutoff: the selected point when given, else the manifest's as_of_date.
+    pit_date = as_of if as_of is not None else manifest["as_of_date"]
+    as_of_dt = _to_date(pit_date)
 
     chunk_dates = {c["chunk_id"]: c.get("available_at")
-                   for c in run_cache.load_parquet_rows(rd / "discovery" / "chunks.parquet")}
+                   for c in run_cache.load_parquet_rows(dd / "chunks.parquet")}
     edge_ev = {ed["edge_id"]: _parse_ids(ed.get("evidence_chunk_ids"))
-               for ed in run_cache.load_parquet_rows(rd / "discovery" / "edges.parquet")}
+               for ed in run_cache.load_parquet_rows(dd / "edges.parquet")}
 
-    comm_doc = run_cache.load_json(rd / "discovery" / "communities.json")
+    comm_doc = run_cache.load_json(dd / "communities.json")
     communities = comm_doc.get("communities", comm_doc)
 
     by_id: dict[str, dict] = {}
@@ -77,14 +81,14 @@ def compute_relevance(run_id: str, window_days: int = _DEFAULT_WINDOW_DAYS) -> d
     for c in communities:
         dates = [d for eid in c.get("edge_ids", []) for cid in edge_ev.get(eid, [])
                  if (d := chunk_dates.get(cid))]
-        row = {"community_id": c["community_id"], **_score(dates, as_of, window_days)}
+        row = {"community_id": c["community_id"], **_score(dates, as_of_dt, window_days)}
         by_id[c["community_id"]] = row
         themes.append(row)
     themes.sort(key=lambda x: x["relevance_score"], reverse=True)
 
     # Aggregate to main themes when a hierarchy exists (max-relevance, latest evidence).
     main_themes = []
-    hier_path = rd / "discovery" / "theme_hierarchy.json"
+    hier_path = dd / "theme_hierarchy.json"
     if hier_path.exists():
         hier = run_cache.load_json(hier_path)
         for mt in hier.get("main_themes", []):
@@ -101,7 +105,7 @@ def compute_relevance(run_id: str, window_days: int = _DEFAULT_WINDOW_DAYS) -> d
             })
         main_themes.sort(key=lambda x: x["relevance_score"], reverse=True)
 
-    doc = {"run_id": run_id, "as_of_date": manifest["as_of_date"], "window_days": window_days,
+    doc = {"run_id": run_id, "as_of_date": pit_date, "window_days": window_days,
            "themes": themes, "main_themes": main_themes}
-    (rd / "discovery" / "theme_relevance.json").write_text(json.dumps(doc, indent=2))
+    (dd / "theme_relevance.json").write_text(json.dumps(doc, indent=2))
     return doc

@@ -6,7 +6,7 @@ data/extraction/graph/exposure/validation/report routers under the same app.
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 
 from . import artifacts as artifacts_mod, chunking, company_profile as company_profile_mod, company_sentiment as company_sentiment_mod, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, projection_ui as projection_ui_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
 from .models import (
@@ -48,13 +48,30 @@ def _guard_not_frozen(run_id: str) -> None:
             detail=f"discovery is frozen for {run_id}; cannot regenerate discovery artifacts")
 
 
+def _resolve_as_of(run_id: str, as_of: str | None) -> str | None:
+    """OI-6 R1: validate an explicit ?as_of= against the run's point-list.
+
+    Returns ``as_of`` unchanged (None default → latest/flat).  Raises 404 when an
+    explicit point is not one of the run's authored as_of points.
+    """
+    if as_of is None:
+        return None
+    points = runs.list_as_of_points(run_id)
+    if as_of not in points:
+        raise HTTPException(
+            status_code=404,
+            detail=f"as_of {as_of!r} not in run points {points!r}",
+        )
+    return as_of
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
 
 
 @app.get("/api/artifacts/{run_id}/{artifact_name:path}")
-def get_artifact(run_id: str, artifact_name: str):
+def get_artifact(run_id: str, artifact_name: str, as_of: str | None = Query(None)):
     """Serve an allowlisted run artifact.
 
     Artifact names in the allowlist:
@@ -71,7 +88,8 @@ def get_artifact(run_id: str, artifact_name: str):
       - Path traversal ('..') or absolute paths get 400.
       - Missing run or artifact gets 404.
     """
-    return artifacts_mod.serve_artifact(run_id=run_id, artifact_name=artifact_name)
+    as_of = _resolve_as_of(run_id, as_of)
+    return artifacts_mod.serve_artifact(run_id=run_id, artifact_name=artifact_name, as_of=as_of)
 
 
 @app.get("/api/runs")
@@ -239,9 +257,10 @@ def themes_discover_endpoint(req: ThemeDiscoverRequest) -> ThemeDiscoverResponse
 
 
 @app.get("/api/themes/{run_id}/hierarchy")
-def get_theme_hierarchy(run_id: str):
+def get_theme_hierarchy(run_id: str, as_of: str | None = Query(None)):
     """Main-theme hierarchy (macro->industry->company->idiosyncratic grouping)."""
-    h = theme_hierarchy_mod.load_hierarchy(run_id)
+    as_of = _resolve_as_of(run_id, as_of)
+    h = theme_hierarchy_mod.load_hierarchy(run_id, as_of=as_of)
     if h is None:
         raise HTTPException(status_code=404, detail="theme hierarchy not built; POST .../hierarchy/build")
     return h
@@ -257,23 +276,27 @@ def build_theme_hierarchy(run_id: str):
 
 
 @app.get("/api/themes/{run_id}/main-narrative")
-def get_main_narrative(run_id: str, communities: str = "", refresh: bool = False):
+def get_main_narrative(run_id: str, communities: str = "", refresh: bool = False,
+                       as_of: str | None = Query(None)):
     """One STORY for a whole main theme: connect-the-dots narrative + ordered 推演
     over the union of the given communities. `communities` = comma-separated ids."""
     ids = [c for c in communities.split(",") if c]
     if not ids:
         raise HTTPException(status_code=400, detail="provide ?communities=cid1,cid2,...")
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return reasoning_mod.synthesize_main_narrative(run_id, ids, refresh=refresh)
+        return reasoning_mod.synthesize_main_narrative(run_id, ids, refresh=refresh, as_of=as_of)
     except KeyError:
         raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
 
 
 @app.get("/api/themes/{run_id}/communities/{community_id}/narrative")
-def get_theme_narrative(run_id: str, community_id: str, refresh: bool = False):
+def get_theme_narrative(run_id: str, community_id: str, refresh: bool = False,
+                        as_of: str | None = Query(None)):
     """Connect-the-dots narrative + captured reasoning chain for a community (cached)."""
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return reasoning_mod.get_or_synthesize(run_id, community_id, refresh=refresh)
+        return reasoning_mod.get_or_synthesize(run_id, community_id, refresh=refresh, as_of=as_of)
     except KeyError:
         raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
     except ValueError as exc:
@@ -283,7 +306,8 @@ def get_theme_narrative(run_id: str, community_id: str, refresh: bool = False):
 @app.get("/api/themes/{run_id}/slice")
 def get_slice(run_id: str, anchor: str = "", depth: int = 2, direction: str = "both",
               edge_types: str = "", levels: str = "", methods: str = "",
-              min_weight: float = 0.0, max_nodes: int = 200):
+              min_weight: float = 0.0, max_nodes: int = 200,
+              as_of: str | None = Query(None)):
     """Anchored slice: the connected structural subgraph reachable from an anchor node
     (entity_id or name) within `depth` hops along selected edge types/levels."""
     if not anchor or not anchor.strip():
@@ -291,9 +315,11 @@ def get_slice(run_id: str, anchor: str = "", depth: int = 2, direction: str = "b
     et = [c for c in edge_types.split(",") if c.strip()] or None
     lv = [c for c in levels.split(",") if c.strip()] or None
     mth = [c for c in methods.split(",") if c.strip()] or None
+    as_of = _resolve_as_of(run_id, as_of)
     try:
         return slice_engine.extract_slice(run_id, anchor.strip(), depth=depth, direction=direction,
-            edge_types=et, levels=lv, extraction_methods=mth, min_weight=min_weight, max_nodes=max_nodes)
+            edge_types=et, levels=lv, extraction_methods=mth, min_weight=min_weight, max_nodes=max_nodes,
+            as_of=as_of)
     except slice_engine.AnchorAmbiguous as exc:
         raise HTTPException(status_code=409, detail={"message": str(exc), "candidates": getattr(exc, "candidates", [])})
     except slice_engine.AnchorNotFound as exc:
@@ -305,70 +331,78 @@ def get_slice(run_id: str, anchor: str = "", depth: int = 2, direction: str = "b
 
 
 @app.get("/api/themes/{run_id}/chunks/{chunk_id}")
-def get_chunk_source(run_id: str, chunk_id: str):
+def get_chunk_source(run_id: str, chunk_id: str, as_of: str | None = Query(None)):
     """Full-text source for an evidence chunk: full chunk + whole source document + attribution."""
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return source_mod.chunk_source(run_id, chunk_id)
+        return source_mod.chunk_source(run_id, chunk_id, as_of=as_of)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/api/themes/{run_id}/subgraph")
-def get_subgraph(run_id: str, communities: str = ""):
+def get_subgraph(run_id: str, communities: str = "", as_of: str | None = Query(None)):
     """Union structural subgraph for a set of communities (a whole main theme).
     `communities` is a comma-separated list of community_ids."""
     ids = [c for c in communities.split(",") if c]
     if not ids:
         raise HTTPException(status_code=400, detail="provide ?communities=cid1,cid2,...")
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return subgraph_mod.community_subgraph(run_id, ids)
+        return subgraph_mod.community_subgraph(run_id, ids, as_of=as_of)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/api/themes/{run_id}/levels")
-def get_theme_levels(run_id: str):
+def get_theme_levels(run_id: str, as_of: str | None = Query(None)):
     """Per-theme factor-level composition (macro/industry/company/idiosyncratic) +
     substantive flag, so themes can be filtered by level and 0-metric noise hidden."""
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return theme_levels_mod.compute_levels(run_id)
+        return theme_levels_mod.compute_levels(run_id, as_of=as_of)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/api/themes/{run_id}/trajectories")
-def get_trajectories(run_id: str):
+def get_trajectories(run_id: str, as_of: str | None = Query(None)):
     """Monthly walk-forward (§12): each theme's size trajectory over month-end PIT
     snapshots + emergence month + momentum. Deterministic (no LLM)."""
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return walk_forward_mod.theme_trajectories(run_id)
+        return walk_forward_mod.theme_trajectories(run_id, as_of=as_of)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/api/themes/{run_id}/relevance")
-def get_theme_relevance(run_id: str, window_days: int = 90):
+def get_theme_relevance(run_id: str, window_days: int = 90, as_of: str | None = Query(None)):
     """Temporal relevance/state per theme at as_of (recency of evidence). Deterministic."""
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return theme_relevance_mod.compute_relevance(run_id, window_days=window_days)
+        return theme_relevance_mod.compute_relevance(run_id, window_days=window_days, as_of=as_of)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/api/themes/{run_id}/nodes/{entity_id}/profile")
-def get_node_profile(run_id: str, entity_id: str):
+def get_node_profile(run_id: str, entity_id: str, as_of: str | None = Query(None)):
     """Node Explanation (§13): what it is, why it's in the graph, why it matters (deterministic)."""
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return node_explanation_mod.node_profile(run_id, entity_id)
+        return node_explanation_mod.node_profile(run_id, entity_id, as_of=as_of)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/api/themes/{run_id}/nodes/{entity_id}/explain")
-def explain_node_endpoint(run_id: str, entity_id: str, refresh: bool = False):
+def explain_node_endpoint(run_id: str, entity_id: str, refresh: bool = False,
+                          as_of: str | None = Query(None)):
     """Node profile + an optional cached LLM prose explanation (requires LLM config)."""
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return node_explanation_mod.explain_node(run_id, entity_id, refresh=refresh)
+        return node_explanation_mod.explain_node(run_id, entity_id, refresh=refresh, as_of=as_of)
     except KeyError:
         raise HTTPException(status_code=503, detail="LLM not configured (set LLM_API_KEY/BASE_URL/MODEL)")
     except ValueError as exc:
@@ -387,10 +421,9 @@ def exposure_compute(req: ExposureComputeRequest) -> ExposureComputeResponse:
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    # Count unique themes in the output artifact
-    run_dir = runs.get_run_dir(req.run_id)
+    # Count unique themes in the output artifact (same dir exposure wrote to)
     theme_count = 0
-    exposure_path = run_dir / "discovery" / "company_theme_exposure.parquet"
+    exposure_path = runs.discovery_point_dir(req.run_id, None, for_write=True) / "company_theme_exposure.parquet"
     if exposure_path.exists():
         import pyarrow.parquet as pq  # noqa: PLC0415
         tbl = pq.read_table(exposure_path)
@@ -416,7 +449,7 @@ def discovery_freeze(req: FreezeRequest) -> FreezeResponse:
     discovery_frozen=true. Idempotent.
     """
     try:
-        manifest = freeze_mod.freeze_discovery(req.run_id)
+        manifest = freeze_mod.freeze_discovery(req.run_id, as_of=req.as_of)
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except (FileNotFoundError, ValueError, PermissionError) as exc:
@@ -428,6 +461,7 @@ def discovery_freeze(req: FreezeRequest) -> FreezeResponse:
         discovery_frozen=manifest.discovery_frozen,
         discovery_artifact_hashes=manifest.discovery_artifact_hashes or {},
         manifest_path=manifest_path,
+        as_of=req.as_of,
     )
 
 
@@ -533,7 +567,7 @@ def get_company_theme_documents(run_id: str, company_id: str):
 
 
 @app.get("/api/themes/{run_id}/companies/{company_id}")
-def get_company_detail(run_id: str, company_id: str):
+def get_company_detail(run_id: str, company_id: str, as_of: str | None = Query(None)):
     """EG-C: Per-company detail page data.
 
     Returns company profile + B1 as-reported fundamentals (PIT-clean) +
@@ -544,8 +578,9 @@ def get_company_detail(run_id: str, company_id: str):
 
     company_id must be a Company ENTITY id (ent_...) — NOT document.company_id.
     """
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return company_profile_mod.get_company_profile(run_id, company_id)
+        return company_profile_mod.get_company_profile(run_id, company_id, as_of=as_of)
     except HTTPException:
         raise
     except (FileNotFoundError, RuntimeError) as exc:
@@ -553,7 +588,7 @@ def get_company_detail(run_id: str, company_id: str):
 
 
 @app.get("/api/themes/{run_id}/companies/{company_id}/evidence")
-def get_company_evidence(run_id: str, company_id: str):
+def get_company_evidence(run_id: str, company_id: str, as_of: str | None = Query(None)):
     """EG-C/D: Company-level evidence grouped by theme (E3 grain).
 
     Returns a list of theme groups — each with the chunk_ids specific to
@@ -567,8 +602,9 @@ def get_company_evidence(run_id: str, company_id: str):
     Requires company_theme_document_evidence.parquet to exist;
     call POST /api/provenance/materialize first.
     """
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return company_profile_mod.get_company_evidence_by_theme(run_id, company_id)
+        return company_profile_mod.get_company_evidence_by_theme(run_id, company_id, as_of=as_of)
     except HTTPException:
         raise
     except (FileNotFoundError, RuntimeError) as exc:
@@ -576,7 +612,7 @@ def get_company_evidence(run_id: str, company_id: str):
 
 
 @app.get("/api/themes/{run_id}/companies/{company_id}/sentiment")
-def get_company_sentiment(run_id: str, company_id: str):
+def get_company_sentiment(run_id: str, company_id: str, as_of: str | None = Query(None)):
     """SENT-D: Management-sentiment panel for the company detail page.
 
     Reads management_sentiment_fused.parquet (SENT-C artifact) and resolves
@@ -592,8 +628,9 @@ def get_company_sentiment(run_id: str, company_id: str):
     Returns available=False (not 404) when the artifact is absent or company
     has no readings, so the UI can render an explicit empty state.
     """
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return company_sentiment_mod.get_company_sentiment(run_id, company_id)
+        return company_sentiment_mod.get_company_sentiment(run_id, company_id, as_of=as_of)
     except HTTPException:
         raise
     except (FileNotFoundError, RuntimeError) as exc:
@@ -632,7 +669,7 @@ def report_generate(req: ReportGenerateRequest) -> ReportGenerateResponse:
 
 
 @app.get("/api/themes/{run_id}/projections/triggers")
-def get_projection_triggers(run_id: str):
+def get_projection_triggers(run_id: str, as_of: str | None = Query(None)):
     """FI-F: List data-driven Event triggers present in projected_impacts.parquet.
 
     Returns each trigger with its graph label and the count of companies it
@@ -644,8 +681,9 @@ def get_projection_triggers(run_id: str):
     PIT-clean: projected_impacts.parquet is already PIT-filtered by FI-C.
     Projections are HYPOTHETICAL — the UI must label them accordingly.
     """
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return projection_ui_mod.list_projection_triggers(run_id)
+        return projection_ui_mod.list_projection_triggers(run_id, as_of=as_of)
     except HTTPException:
         raise
     except (FileNotFoundError, RuntimeError) as exc:
@@ -653,7 +691,7 @@ def get_projection_triggers(run_id: str):
 
 
 @app.get("/api/themes/{run_id}/projections")
-def get_run_projections(run_id: str, trigger: str = ""):
+def get_run_projections(run_id: str, trigger: str = "", as_of: str | None = Query(None)):
     """FI-F: Ranked projected company impacts for a given Event trigger.
 
     Query params:
@@ -677,8 +715,9 @@ def get_run_projections(run_id: str, trigger: str = ""):
             status_code=400,
             detail="provide ?trigger=<trigger_id> (entity_id of an Event node)",
         )
+    as_of = _resolve_as_of(run_id, as_of)
     try:
-        return projection_ui_mod.get_projections(run_id, trigger.strip())
+        return projection_ui_mod.get_projections(run_id, trigger.strip(), as_of=as_of)
     except HTTPException:
         raise
     except (FileNotFoundError, RuntimeError) as exc:

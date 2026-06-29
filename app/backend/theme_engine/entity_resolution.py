@@ -119,8 +119,8 @@ def _write_aliases_table(rows: list[dict], out_path: Path) -> None:
     pq.write_table(pa.Table.from_pydict(pydict), out_path)
 
 
-def _read_entities(run_id: str) -> list[dict]:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "entities.parquet"
+def _read_entities(run_id: str, as_of: str | None = None) -> list[dict]:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "entities.parquet"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -129,8 +129,8 @@ def _read_entities(run_id: str) -> list[dict]:
     return pq.read_table(artifact).to_pylist()
 
 
-def _read_chunks(run_id: str) -> list[dict]:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "chunks.parquet"
+def _read_chunks(run_id: str, as_of: str | None = None) -> list[dict]:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "chunks.parquet"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -280,7 +280,7 @@ def _build_alias_rows(
     return alias_rows
 
 
-def resolve_entities(run_id: str) -> int:
+def resolve_entities(run_id: str, as_of: str | None = None) -> int:
     """Build the entity alias tables for this run.
 
     Writes TWO artifacts (OI-4 discipline):
@@ -304,18 +304,17 @@ def resolve_entities(run_id: str) -> int:
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date: str = manifest.as_of_date
+    as_of_date: str = as_of if as_of is not None else manifest.as_of_date
 
-    chunks = _read_chunks(run_id)
-    entities = _read_entities(run_id)
+    chunks = _read_chunks(run_id, as_of)
+    entities = _read_entities(run_id, as_of)
     created_at = _utc_now_iso()
 
     # --- PIT table: filter entities to those with available_at <= as_of_date ---
     pit_entities = _filter_pit_entities(entities, chunks, as_of_date)
     pit_rows = _build_alias_rows(pit_entities, as_of_date, "point_in_time", created_at)
 
-    run_dir = runs.get_run_dir(run_id)
-    discovery_dir = run_dir / "discovery"
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
 
     _write_aliases_table(pit_rows, discovery_dir / "entity_aliases.parquet")
 

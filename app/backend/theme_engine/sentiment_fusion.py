@@ -341,12 +341,12 @@ def apply_confidence_discount(confidence: float, agreement: str) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _read_chunk_tone(run_id: str) -> dict[str, dict]:
+def _read_chunk_tone(run_id: str, as_of: str | None = None) -> dict[str, dict]:
     """Load chunk_tone.parquet keyed by chunk_id.
 
     Returns empty dict if SENT-A artifact doesn't exist.
     """
-    artifact = runs.get_run_dir(run_id) / "discovery" / "chunk_tone.parquet"
+    artifact = runs.discovery_point_dir(run_id, as_of) / "chunk_tone.parquet"
     if not artifact.exists():
         return {}
     try:
@@ -356,12 +356,12 @@ def _read_chunk_tone(run_id: str) -> dict[str, dict]:
     return {str(r.get("chunk_id") or ""): r for r in rows if r.get("chunk_id")}
 
 
-def _read_management_sentiment(run_id: str) -> list[dict]:
+def _read_management_sentiment(run_id: str, as_of: str | None = None) -> list[dict]:
     """Load management_sentiment.parquet rows.
 
     Returns empty list if SENT-B artifact doesn't exist.
     """
-    artifact = runs.get_run_dir(run_id) / "discovery" / "management_sentiment.parquet"
+    artifact = runs.discovery_point_dir(run_id, as_of) / "management_sentiment.parquet"
     if not artifact.exists():
         return []
     try:
@@ -370,12 +370,12 @@ def _read_management_sentiment(run_id: str) -> list[dict]:
         return []
 
 
-def _get_as_of_date(run_id: str) -> str:
-    """Return the run's as_of_date from the manifest."""
+def _get_as_of_date(run_id: str, as_of: str | None = None) -> str:
+    """Return the effective PIT date (the selected point or the run's as_of_date)."""
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise ValueError(f"run not found: {run_id}")
-    return manifest.as_of_date
+    return as_of if as_of is not None else manifest.as_of_date
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +433,7 @@ def _write_fused(rows: list[dict], out_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_sentiment_fusion(run_id: str) -> int:
+def run_sentiment_fusion(run_id: str, as_of: str | None = None) -> int:
     """Fuse SENT-A and SENT-B sentiment signals into a reconciled artifact.
 
     Reads:
@@ -453,12 +453,11 @@ def run_sentiment_fusion(run_id: str) -> int:
     int
         Number of fused rows written.
     """
-    as_of_date = _get_as_of_date(run_id)
-    run_dir = runs.get_run_dir(run_id)
-    discovery_dir = run_dir / "discovery"
+    as_of_date = _get_as_of_date(run_id, as_of)
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
 
-    tone_index = _read_chunk_tone(run_id)
-    sentiment_rows = _read_management_sentiment(run_id)
+    tone_index = _read_chunk_tone(run_id, as_of)
+    sentiment_rows = _read_management_sentiment(run_id, as_of)
 
     created_at = _utc_now_iso()
     fused_rows: list[dict] = []
