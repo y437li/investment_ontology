@@ -250,9 +250,11 @@ class Extractor(ABC):
     """
 
     # Issue #29: per-call LLM token-usage records (one dict per completion call).
-    # The rule-based extractor never appends; OpenAIExtractor sets a fresh list in
-    # __init__ and stamps a record after each chat.completions.create().
-    usage_log: list[dict] = []
+    # Annotation only (no shared mutable class default): OpenAIExtractor sets a
+    # fresh list in __init__ and stamps a record after each chat.completions.create();
+    # the rule-based extractor never appends and run_extraction reads via
+    # getattr(extractor, "usage_log", []).
+    usage_log: list[dict]
 
     @abstractmethod
     def extract(self, chunk_id: str, chunk_text: str) -> ExtractionResult:

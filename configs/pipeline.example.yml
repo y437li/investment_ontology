@@ -6,7 +6,7 @@ as_of_date: "2024-06-30"
 # missing key means "not overridden" -> resolution falls through to `default`,
 # then env LLM_MODEL_NAME. No hardcoded provider model strings ship here.
 llm_models:
-  default: ${LLM_MODEL_NAME}     # documentary; runtime falls back to env if unset
+  default: ""                    # empty -> falls back to env LLM_MODEL_NAME (no env expansion in YAML)
   embedding: ""                  # reserved; no consumer yet
   extraction: ""                 # per-task override; empty -> use default/env
   disambiguation: ""

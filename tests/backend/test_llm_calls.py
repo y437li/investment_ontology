@@ -38,6 +38,10 @@ _THEME_ENGINE = _REPO_ROOT / "app" / "backend" / "theme_engine"
         ({}, "env-model", "env-model"),
         ({"extraction": "", "default": ""}, "env-model", "env-model"),
         ({}, None, None),
+        # nested {model: ...} form is coerced to the model string
+        ({"extraction": {"model": "nested-model"}}, "env-model", "nested-model"),
+        # unexpanded ${VAR} placeholder falls through to env (no YAML env expansion)
+        ({"default": "${LLM_MODEL_NAME}"}, "env-model", "env-model"),
     ],
 )
 def test_model_for_precedence(monkeypatch, block, env, expected):

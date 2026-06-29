@@ -80,18 +80,38 @@ def _load_llm_models() -> dict:
     return block if isinstance(block, dict) else {}
 
 
+def _coerce_model(val: object) -> Optional[str]:
+    """Normalize one ``llm_models`` entry to a usable model string, else None.
+
+    Accepts either a bare string (``"gpt-4o"``) or the issue's nested form
+    (``{model: gpt-4o, max_tokens: 4096}``) and extracts the model name. An
+    unexpanded ``${VAR}`` placeholder (config is read with plain ``yaml.safe_load``
+    — no env expansion) is treated as "not configured" so it falls through to the
+    env fallback rather than being sent to the API verbatim.
+    """
+    if isinstance(val, dict):
+        val = val.get("model")
+    if not isinstance(val, str):
+        return None
+    val = val.strip()
+    if not val or (val.startswith("${") and val.endswith("}")):
+        return None
+    return val
+
+
 def model_for(task: str) -> Optional[str]:
     """Resolve the LLM model for a task.
 
     Order: ``llm_models[task]`` > ``llm_models['default']`` > env
     ``LLM_MODEL_NAME`` > ``None``. ``None`` means 'no model configured' ->
-    caller falls back to rule-based / no-op.
+    caller falls back to rule-based / no-op. Entries may be a bare string or a
+    ``{model: ...}`` dict; unexpanded ``${VAR}`` placeholders fall through.
     """
     cfg = _load_llm_models()
-    val = cfg.get(task)
+    val = _coerce_model(cfg.get(task))
     if val:
         return val
-    default = cfg.get("default")
+    default = _coerce_model(cfg.get("default"))
     if default:
         return default
     return os.environ.get("LLM_MODEL_NAME") or None
