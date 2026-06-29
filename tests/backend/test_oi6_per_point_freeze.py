@@ -85,9 +85,19 @@ def test_per_point_freeze_idempotent():
     assert keys1 == keys2  # recomputes identical hashes
 
 
-def test_bulk_freeze_rejected_on_multi_point_run():
+def test_bulk_freeze_all_points_succeeds_on_multi_point_run():
+    """OI-6 R2: bulk freeze (freeze_all_points) freezes every authored point and
+    flips the run-level flag.  Direct freeze_discovery(as_of=None) still raises."""
     run = runs.create_run(RunCreateRequest(as_of_date=T1, as_of_dates=[T1, T2]))
     run_id = run.run_id
     _seed_point(run_id, T1)
+    _seed_point(run_id, T2)
+
+    # Direct flat freeze on a multi-point run is still rejected (R1 guard stays).
     with pytest.raises(ValueError, match="as_of required"):
         freeze_mod.freeze_discovery(run_id, as_of=None)
+
+    # Bulk freeze succeeds.
+    m = freeze_mod.freeze_all_points(run_id)
+    assert m.discovery_frozen is True
+    assert set(m.discovery_frozen_points or {}) == {T1, T2}

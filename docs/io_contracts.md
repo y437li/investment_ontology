@@ -730,6 +730,126 @@ Rules:
 - Multi-snapshot runs must make split, merge, revive, and decline events explicit.
 - Lineage is derived from graph/community continuity, not from future returns.
 
+### 16a. Multi-Period Panel Lineage — `panel/theme_lineage.json` (OI-6 R2)
+
+The run-level panel (see §16b) writes a richer lineage variant computed across
+all authored as_of points by the deterministic `concept_spine_jaccard_v1`
+matcher.  Theme identity is tracked by the community **concept spine** (OI-5
+concept node ids: EconomicConcept, Commodity, MacroIndicator, Event) — NOT by
+company membership.  No randomness, no LLM.
+
+```json
+{
+  "schema_version": "2.0",
+  "run_id": "run_20240630_120000",
+  "lineage_mode": "multi_point_concept_spine",
+  "method": "concept_spine_jaccard_v1",
+  "match_threshold": 0.5,
+  "points": ["2024-03-31", "2024-06-30"],
+  "families": [
+    {
+      "theme_family_id": "family_2dc0ae3b",
+      "theme_name": "...",
+      "first_seen": "2024-03-31",
+      "last_seen": "2024-06-30",
+      "concept_spine_union": ["ent_ec1", "ent_com1"],
+      "states_by_point": {"2024-03-31": "emerged", "2024-06-30": "persisted"},
+      "snapshots": [
+        {"as_of_date": "2024-03-31", "theme_snapshot_id": "theme_...", "community_id": "community_000_..."},
+        {"as_of_date": "2024-06-30", "theme_snapshot_id": "theme_...", "community_id": "community_001_..."}
+      ]
+    }
+  ],
+  "lineages": [
+    {
+      "theme_family_id": "family_2dc0ae3b",
+      "as_of_date": "2024-06-30",
+      "current_theme_snapshot_id": "theme_...",
+      "current_community_id": "community_001_...",
+      "prior_theme_snapshot_ids": ["theme_..."],
+      "lifecycle_event": "persisted",
+      "confidence": 1.0,
+      "method": "concept_spine_jaccard_v1"
+    }
+  ]
+}
+```
+
+Algorithm (deterministic):
+1. **Consecutive-point spine Jaccard.** For adjacent present points, link two
+   communities when `|spine(a)∩spine(b)| / |spine(a)∪spine(b)| >= 0.5` (`tau`).
+2. **Connected components → families.** `theme_family_id = "family_" +
+   sha256("family:"+run_id+":"+"|".join(sorted(member theme_snapshot_ids)))[:8]`
+   — content-hashed over the sorted member snapshot ids (traversal-independent).
+3. **Cross-gap revival.** A family reappearing after a true gap (≥1 absent
+   present point) is merged when `Jaccard(spine_last, spine_first) >= tau`; the
+   reappearance is `lifecycle_event="revived"` and gap points are `dormant`.
+4. **Lifecycle per (family, point)** from link degrees:
+   `emerged` (first appearance, confidence 1.0), `persisted` (one parent,
+   out-degree 1), `split` (one parent, out-degree ≥2), `merged` (≥2 parents,
+   confidence = max parent Jaccard), `revived` (post-gap reappearance).
+   `states_by_point` additionally records `dormant` (interior absence) and
+   `absent` (outside `[first_seen, last_seen]`).
+
+Communities with an empty concept spine become singleton families with no
+cross-point links.  The panel `theme_lineage.json` is derived & regenerable;
+it is NOT frozen in R2.
+
+### 16b. `panel/exposure_trajectories.parquet` (OI-6 R2)
+
+Run-level cross-point exposure, one row per `(theme_family_id, company_id,
+as_of_date)`.  Built by joining each `discovery/<as_of>/company_theme_exposure.parquet`
+to the panel lineage (`community_id` → `theme_family_id`).  Community ids with
+no lineage match get a synthetic singleton family so no exposure row is dropped.
+Consumers pivot `exposure_score` over `as_of_date` per `(theme_family_id,
+company_id)` to obtain a trajectory.
+
+Columns (exact order):
+
+```text
+schema_version: string        # "1.0"
+run_id: string
+theme_family_id: string
+company_id: string
+ticker: string | null
+as_of_date: string            # YYYY-MM-DD
+community_id: string          # point-local
+theme_snapshot_id: string
+exposure_score: float64
+evidence_count: int64
+lifecycle_event: string       # from lineage for family+point
+calculation_method: string    # exposure_v1_*
+```
+
+Rows are sorted by `(theme_family_id, company_id, as_of_date)`.
+
+### 16c. `panel/panel_summary.json` (OI-6 R2)
+
+Cached run-level summary, read by `GET /api/runs/{run_id}/panel/summary`.
+
+```text
+schema_version: string                 # "1.0"
+run_id: string
+as_of_dates: list[string]
+discovery_frozen: bool                 # run-level
+frozen_at: string | null               # ISO timestamp
+panel_built: bool
+points: list[{
+  as_of: string,
+  discovery_present: bool,
+  discovery_frozen: bool,
+  theme_count: int,
+  company_theme_pair_count: int
+}]
+theme_lineage_summary: {family_count, emerged, persisted, split, merged,
+                        revived, dormant} | null
+exposure_trajectory_company_count: int
+```
+
+The panel directory `panel/` is a sibling of `discovery/` and `validation/`,
+resolved by `runs.panel_dir(run_id)`.  It is derived and regenerable; it is NOT
+frozen or hashed in R2.
+
 ## 17. `theme_metrics.parquet`
 
 One row per theme/community.
@@ -2083,6 +2203,25 @@ For validation views, the regex uses `/validation/` instead of `/discovery/`.
 If the underlying Parquet schema already contains a ``run_id`` column, DuckDB
 automatically renames it to ``run_id_1``.  Users should always reference the
 path-derived ``run_id`` (column position 1) as the canonical run identifier.
+
+#### DB.3a `as_of` Column + Per-Point Glob Layout (OI-6 R2)
+
+Discovery views (`v_disc_*`) span BOTH the flat layout
+`runs/<run_id>/discovery/<artifact>` AND the per-point layout
+`runs/<run_id>/discovery/<as_of>/<artifact>` introduced by OI-6 R1.  The glob
+passed to `read_parquet` is a 2-element list covering both depths (single-run
+analogs for `open_run`); patterns matching zero files are filtered out before
+the call so a mixed or all-flat corpus never errors.
+
+Every discovery view exposes a second column `as_of` (after `run_id`):
+
+```sql
+regexp_extract(filename, '.*/discovery/(\d{4}-\d{2}-\d{2})/', 1) AS as_of
+```
+
+`as_of` is the per-point discovery date (`YYYY-MM-DD`), or the empty string
+`''` for artifacts written under the flat legacy layout.  Validation views are
+unchanged (no `as_of` column).
 
 ### DB.4 Read-Only Data Enforcement
 

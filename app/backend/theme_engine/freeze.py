@@ -202,3 +202,31 @@ def freeze_discovery(run_id: str, as_of: Optional[str] = None) -> RunManifest:
     updated = runs.load_manifest(run_id)
     assert updated is not None  # we just wrote it
     return updated
+
+
+def freeze_all_points(run_id: str) -> RunManifest:
+    """Bulk-freeze every authored point of a multi-point run (OI-6 R2).
+
+    Loops ``runs.list_as_of_points(run_id)`` calling the existing per-point
+    ``freeze_discovery(run_id, as_of=p)`` (which merges hashes and flips the
+    run-level flag once the last point freezes).  A legacy flat run (no
+    as_of_dates) delegates to a single flat ``freeze_discovery(as_of=None)``.
+
+    Idempotent: re-running recomputes identical hashes per point.
+
+    Raises:
+        RuntimeError: run not found.
+    """
+    manifest = runs.load_manifest(run_id)
+    if manifest is None:
+        raise RuntimeError(f"run not found: {run_id}")
+
+    points = runs.list_as_of_points(run_id)
+    if not manifest.as_of_dates:
+        # Legacy flat run: a single flat freeze (unchanged behavior).
+        return freeze_discovery(run_id, as_of=None)
+
+    updated = manifest
+    for p in points:
+        updated = freeze_discovery(run_id, as_of=p)
+    return updated

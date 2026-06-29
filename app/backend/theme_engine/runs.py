@@ -20,6 +20,9 @@ from .models import RunCreateRequest, RunManifest, RunStatus
 MANIFEST_NAME = "run_manifest.json"
 DISCOVERY_DIR = "discovery"
 VALIDATION_DIR = "validation"
+# OI-6 R2: run-level cross-point panel directory (sibling of discovery/ and
+# validation/).  Derived from frozen per-point discovery artifacts; NOT frozen.
+PANEL_DIR = "panel"
 REQUIRED_DISCOVERY_ARTIFACTS = {
     "raw_documents.parquet",
     "documents.parquet",
@@ -189,6 +192,18 @@ def discovery_point_dir(run_id: str, as_of: str | None = None,
     return (flat / target) if target is not None else flat
 
 
+def panel_dir(run_id: str, *, for_write: bool = False) -> Path:
+    """Run-level panel directory resolver (OI-6 R2).
+
+    Returns ``<run_dir>/panel/``.  Creates it on write.  The panel is derived
+    from the frozen per-point discovery artifacts and is NOT frozen in R2.
+    """
+    p = get_run_dir(run_id) / PANEL_DIR
+    if for_write:
+        p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def _discovery_dir(run_id: str) -> Path:
     return discovery_point_dir(run_id, as_of=None)
 
@@ -339,6 +354,13 @@ def freeze_discovery(run_id: str, as_of: str | None = None) -> RunManifest:
     from . import freeze as _freeze  # local import avoids circular dependency
 
     return _freeze.freeze_discovery(run_id, as_of=as_of)
+
+
+def freeze_all_points(run_id: str) -> RunManifest:
+    """Thin wrapper delegating to ``freeze.freeze_all_points`` (OI-6 R2)."""
+    from . import freeze as _freeze  # local import avoids circular dependency
+
+    return _freeze.freeze_all_points(run_id)
 
 
 def validate_ready_for_validation(run_id: str) -> RunManifest:

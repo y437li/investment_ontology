@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException, Query
 
-from . import artifacts as artifacts_mod, chunking, company_profile as company_profile_mod, company_sentiment as company_sentiment_mod, data_cleaning, data_import, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, projection_ui as projection_ui_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
+from . import artifacts as artifacts_mod, chunking, company_profile as company_profile_mod, company_sentiment as company_sentiment_mod, data_cleaning, data_import, discovery_panel as discovery_panel_mod, extraction, entity_resolution, exposure as exposure_mod, freeze as freeze_mod, graph_build, macro_adapter, altdata_adapter, concept_resolution, subgraph as subgraph_mod, slice_engine, source as source_mod, walk_forward as walk_forward_mod, node_explanation as node_explanation_mod, projection_ui as projection_ui_mod, reasoning as reasoning_mod, report as report_mod, runs, theme_hierarchy as theme_hierarchy_mod, theme_levels as theme_levels_mod, theme_relevance as theme_relevance_mod, themes, validation as validation_mod, provenance as provenance_mod
 from .models import (
     DataImportRequest,
     DataImportResponse,
@@ -23,6 +23,7 @@ from .models import (
     ValidationRunResponse,
     RunManifest,
     RunStatus,
+    PanelSummary,
     ExtractionRunRequest,
     ExtractionRunResponse,
     ExtractionResolveRequest,
@@ -109,6 +110,19 @@ def run_status(run_id: str) -> RunStatus:
     if status is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
     return status
+
+
+@app.get("/api/runs/{run_id}/panel/summary", response_model=PanelSummary)
+def run_panel_summary(run_id: str) -> PanelSummary:
+    """OI-6 R2: read-only multi-period panel summary (cached or recomputed live).
+
+    Pure read; never drives the discovery loop.  404 if the run is missing.
+    """
+    try:
+        data = discovery_panel_mod.panel_summary(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return PanelSummary(**data)
 
 
 @app.post("/api/data/import", response_model=DataImportResponse)
@@ -449,7 +463,13 @@ def discovery_freeze(req: FreezeRequest) -> FreezeResponse:
     discovery_frozen=true. Idempotent.
     """
     try:
-        manifest = freeze_mod.freeze_discovery(req.run_id, as_of=req.as_of)
+        # OI-6 R2: as_of=None on a multi-point run bulk-freezes every point
+        # (instead of the R1 409); flat/legacy + explicit-point paths unchanged.
+        m = runs.load_manifest(req.run_id)
+        if req.as_of is None and m is not None and m.as_of_dates:
+            manifest = freeze_mod.freeze_all_points(req.run_id)
+        else:
+            manifest = freeze_mod.freeze_discovery(req.run_id, as_of=req.as_of)
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except (FileNotFoundError, ValueError, PermissionError) as exc:
