@@ -250,10 +250,19 @@ class TestCommunityInputEdgesUnchanged:
             )
 
     def test_community_input_edges_unchanged_with_multiple_edge_types(self):
-        """Community input includes only structural, document_stated, non-Document.
+        """Community input: structural, document_stated, non-Document, AND bipartite (OI-5).
 
-        Verify that adding FI-A fields does not alter the filter logic that
-        selects community_input_edges.
+        OI-5 (bipartite projection): community_input_edges contains only structural edges
+        that cross the Company<->concept boundary.
+
+        - e1: Company->EconomicConcept (benefits)   -> bipartite, IN community_input_edges
+        - e2: EconomicConcept->MacroIndicator (hurts) -> concept-concept, NOT bipartite,
+          EXCLUDED from community_input_edges (remains in graph.json for provenance)
+        - e3: Company->MacroIndicator (co_occurs_with) -> non-structural, NOT included
+
+        Legitimate fixture update: e2 is now excluded because OI-5 requires the detection
+        input to be bipartite (Company<->concept only), not heterogeneous. e2 stays in
+        graph.json edges for evidence traceability.
         """
         run_id = _make_run()
         ents = [
@@ -262,9 +271,9 @@ class TestCommunityInputEdgesUnchanged:
             _ent("ec", "MacroIndicator"),
         ]
         edges = [
-            _edge("e1", "ea", "eb", "benefits",      confidence=0.9),  # structural
-            _edge("e2", "eb", "ec", "hurts",         confidence=0.8),  # structural
-            _edge("e3", "ea", "ec", "co_occurs_with", confidence=0.5), # non-structural
+            _edge("e1", "ea", "eb", "benefits",       confidence=0.9),  # bipartite structural
+            _edge("e2", "eb", "ec", "hurts",          confidence=0.8),  # structural but concept-concept
+            _edge("e3", "ea", "ec", "co_occurs_with", confidence=0.5),  # non-structural
         ]
         _write_fixture(run_id, ents, edges)
         graph_build.build_graph(run_id)
@@ -272,11 +281,21 @@ class TestCommunityInputEdgesUnchanged:
         g = json.loads((ddir / "graph.json").read_text())
 
         cie = set(g["community_input_edges"])
+        # e1: Company<->EconomicConcept bipartite edge — in community_input_edges
         assert "e1" in cie
-        assert "e2" in cie
+        # e2: EconomicConcept->MacroIndicator (concept-concept) — OI-5: NOT in community_input_edges
+        # (remains in graph.json edges for provenance, but excluded from bipartite detection)
+        assert "e2" not in cie, (
+            "OI-5 bipartite: concept-concept edge must NOT be in community_input_edges"
+        )
+        # e3: non-structural — never in community_input_edges
         assert "e3" not in cie
 
-        # FI-A polarity on the structural edges
+        # e2 is still in graph.json edges list for evidence traceability
+        all_edge_ids = {e["edge_id"] for e in g["edges"]}
+        assert "e2" in all_edge_ids, "e2 must remain in graph.json edges for provenance"
+
+        # FI-A polarity on the structural edges (unchanged by OI-5)
         edge_by_id = {e["edge_id"]: e for e in g["edges"]}
         assert edge_by_id["e1"]["polarity"] == 1   # benefits
         assert edge_by_id["e2"]["polarity"] == -1  # hurts

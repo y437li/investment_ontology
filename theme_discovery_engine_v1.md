@@ -915,20 +915,40 @@ Discovery algorithms:
 - Louvain for simple MVP.
 - Leiden for better community quality.
 
+## OI-5: Bipartite Company↔Concept Projection (locked, 2026-06-28)
+
+Community detection runs on a **bipartite projection**, not the raw heterogeneous graph. This is the authoritative definition of what a theme IS.
+
+**Bipartite structure:**
+- Left side: `Company` entities only.
+- Right side: "binding" concept nodes: `EconomicConcept`, `Commodity`, `MacroIndicator`, `Event`.
+- Edges: only structural edges that cross the Company↔concept boundary (PIT-filtered: `available_at/first_seen_at <= as_of`).
+- `Sector` and `Geography` nodes are present in `graph.json` for provenance but are excluded from the bipartite projection; they do not drive theme clustering.
+
+**What this means:**
+- Companies cluster together ONLY when they share a common binding concept (a shared commodity exposure, a common macro driver, an economic theme, or a co-exposed event).
+- A theme = a cluster of companies + the concept "spine" that binds them.
+- Every theme answers two questions: WHICH companies, and BECAUSE OF WHICH concepts.
+
+**PIT discipline:** The bipartite projection uses only edges with `first_seen_at <= as_of_date` (same fail-closed rule as the full structural graph). Future-dated edges are excluded.
+
 Structural projection rule:
 
-- Community discovery input graph MUST be entity-only.
+- Community discovery input graph MUST be entity-only (no Document nodes).
 - Document nodes and `mentioned_in` edges are allowed in `graph.json` for evidence traceability, but they are excluded from Louvain/Leiden inputs.
-- Community discovery input edges must be filtered to structural edge types (`causes`, `benefits`, `hurts`, `exposed_to`, `sensitive_to`) and non-weak source (`document_stated` or explicit config-approved `metadata_inferred`).
-- `communities.json` must record `edge_projection_mode` so lineage and audit can reconstruct excluded nodes/edges.
+- Community discovery input edges must be filtered to structural edge types (`causes`, `benefits`, `hurts`, `exposed_to`, `sensitive_to`) AND must cross the bipartite boundary (Company↔concept). Edges between two companies, or between two concepts, are excluded from detection input (they remain in graph.json for provenance).
+- Source policy: `document_stated` or explicit config-approved `metadata_inferred`.
 
 Build-time projection contract:
 
 - `graph.build` emits a precomputed community projection:
   - `projection.type="entity_only"`
+  - `projection.community_detection="bipartite"` (OI-5)
+  - `projection.bipartite_company_side="Company"`
+  - `projection.bipartite_concept_side=["EconomicConcept","Commodity","MacroIndicator","Event"]`
   - `projection.node_types_in_structural_graph` excludes `Document`.
   - `projection.excluded_node_types` includes evidence-only node classes.
-  - `community_input_edges` contains only structural edges that satisfy both type and source policy.
+  - `community_input_edges` contains only structural bipartite (Company↔concept) edges that satisfy both type and source policy.
 - The projection list used by community detection is immutable once the run is frozen, and the exact edge/node counts are logged for audit.
 
 Output:
@@ -952,10 +972,14 @@ size
 density
 top_entities
 top_companies
+company_members     (OI-5: Company entity IDs in this community)
+concept_spine       (OI-5: binding concept entity IDs that connect the companies)
 theme_name
 theme_summary
 naming_model
 ```
+
+`company_members` and `concept_spine` are the OI-5 additions. They carry both sides of the bipartite community so the UI/reasoning can explain WHY companies cluster (the concept spine) not just LIST which companies. A theme with ≥2 companies must have a non-empty `concept_spine`; if it is empty, detection ran on a non-bipartite input (bug).
 
 ## Definitions — Node and Theme
 

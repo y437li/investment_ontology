@@ -36,6 +36,7 @@ import pyarrow.parquet as pq
 from fastapi import HTTPException
 
 from . import runs
+from .graph_build import COMPANY_NODE_TYPE, CONCEPT_NODE_TYPES
 
 SCHEMA_VERSION = "1.0"
 
@@ -217,7 +218,19 @@ def discover_themes(run_id: str) -> int:
         density = _graph_density(size, len(community_edge_ids))
         strength = _community_strength(community_node_set, set(community_edge_ids), edge_lookup)
 
-        # top_entities: non-Company canonical names sorted alphabetically (up to 5)
+        # OI-5 bipartite: classify nodes into company_members and concept_spine
+        _concept_type_set = frozenset(CONCEPT_NODE_TYPES)
+        company_members: list[str] = sorted(
+            nid for nid in node_ids
+            if entity_type_lookup.get(nid) == COMPANY_NODE_TYPE
+        )
+        concept_spine: list[str] = sorted(
+            nid for nid in node_ids
+            if entity_type_lookup.get(nid) in _concept_type_set
+        )
+
+        # top_entities: concept-spine labels sorted alphabetically (up to 5)
+        # (non-Company, using the binding concept node types for the spine)
         non_company = sorted(
             entity_label_lookup[nid]
             for nid in node_ids
@@ -236,7 +249,7 @@ def discover_themes(run_id: str) -> int:
         theme_name = " + ".join(name_parts) if name_parts else f"Community_{idx}"
         theme_summary = (
             f"Community of {size} entities connected by {len(community_edge_ids)} "
-            f"structural edges. (deterministic placeholder)"
+            f"structural edges (bipartite projection). (deterministic placeholder)"
         )
 
         community_record: dict = {
@@ -247,6 +260,9 @@ def discover_themes(run_id: str) -> int:
             "density": density,
             "top_entities": non_company,
             "top_companies": top_companies,
+            # OI-5: explicit company_members and concept_spine for theme explanation
+            "company_members": company_members,
+            "concept_spine": concept_spine,
             "theme_name": theme_name,
             "theme_summary": theme_summary,
             "naming_model": "deterministic",
