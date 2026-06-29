@@ -22,6 +22,18 @@ Outputs:
 
 This agent also owns the Exposure role (spec section 9.7). Exposure inputs: graph distance, edge confidence, evidence count, recency, and company node centrality.
 
+OI-2 Stated-vs-Inferred Discipline (exposure default policy):
+
+- Community discovery uses **only** `document_stated` structural edges (Louvain/Leiden input).
+- Exposure (`company_theme_exposure.parquet`) includes **only** `document_stated` edges by default
+  (`include_weak_signals=False`). `llm_inferred` and `metadata_inferred` edges are excluded from
+  exposure scores unless the caller explicitly sets `include_weak_signals=True`.
+- Every exposure row must be traceable to `document_stated` edge evidence (chunk ids).
+- The `calculation_method` field records which policy was applied:
+  `exposure_v1_document_stated` (default) or `exposure_v1_include_weak_signals` (flagged).
+- Weak signals must NEVER be silently promoted to the default path — this is a load-bearing
+  constraint for validation integrity (spec §17).
+
 Acceptance checks:
 
 - Only information available by `as_of_date` is used.

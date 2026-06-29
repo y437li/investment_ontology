@@ -1224,6 +1224,32 @@ LLM not allowed for:
 - Backtest logic.
 - Validation conclusions without artifacts.
 
+## Stated-vs-Inferred Discipline for Interpretive Edges (OI-2)
+
+Interpretive edge types — `benefits`, `hurts`, `exposed_to`, `causes`, `sensitive_to` — are LLM
+judgments that feed exposure -> baskets -> validation.  Because these feed load-bearing downstream
+computation, they must be disciplined:
+
+- `extraction_method=document_stated`: the relationship is **explicitly stated in the document**.
+  Requires at least one `evidence_chunk_ids` entry.  These are the **only** edges that contribute
+  to community discovery and exposure by default.
+- `extraction_method=llm_inferred`: the LLM inferred the relationship beyond what the text
+  explicitly states.  Must be tagged `llm_inferred`.  **Excluded from exposure and community
+  discovery by default** (`include_weak_signals=False`).
+- `extraction_method=metadata_inferred`: a deterministic metadata signal (e.g. ticker lookup,
+  sector mapping).  Also excluded from exposure by default.
+
+Enum enforcement: `extraction_method` must be one of `{document_stated, llm_inferred,
+metadata_inferred}`.  Out-of-enum values are **rejected (dropped)** at extraction time and never
+reach `edges.parquet`.
+
+A `document_stated` interpretive edge with no `evidence_chunk_ids` is rejected — it cannot be
+stated in a document without a text chunk backing it.
+
+To include weak signals in exposure (for research or sensitivity analysis), set
+`include_weak_signals=True` explicitly.  This must never be the default path for any
+discovery-to-validation pipeline run.
+
 ---
 
 # 18. Discovery vs Validation
