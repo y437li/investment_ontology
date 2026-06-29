@@ -1012,7 +1012,12 @@ def run_walk_forward_validation(run_id: str) -> dict:
             )
         ),
     )
-    forward_window: str = str(sweep_config.get("forward_window", "1M"))
+    forward_window: str = str(sweep_config.get("forward_window", "3M"))
+    # OI-7 policy: when a point lacks >=3M forward price coverage, SKIP it (not shrink).
+    # "skip" is the only supported policy; any other value is treated as "skip".
+    coverage_policy: str = str(sweep_config.get("on_insufficient_coverage", "skip")).lower()
+    if coverage_policy != "skip":
+        coverage_policy = "skip"
     baseline_name: str = str(sweep_config.get("baseline", "equal_weight_universe"))
 
     basket_top_n: int = int(config.get("basket_top_n", 10))
@@ -1088,14 +1093,22 @@ def run_walk_forward_validation(run_id: str) -> dict:
 
         window_end = _add_months(as_of_pt, win_months)
 
-        # Coverage gate per point (OI-7 applied per time point)
+        # OI-7 coverage gate per point: skip-not-shrink.
+        # A point lacking >= forward_window months of price coverage is SKIPPED
+        # (the window is never clamped or shortened). The point is recorded with
+        # a reason and excluded from n_points / claim_supported.
         if not _check_forward_coverage(all_price_rows, as_of_pt, window_end):
             points.append({
                 "as_of": as_of_str,
                 "theme_basket_return": None,
                 "baseline_return": None,
                 "excess": None,
-                "skipped_reason": "insufficient_forward_coverage",
+                "skipped": True,
+                "skipped_reason": (
+                    f"insufficient_forward_coverage: requires max(price_date) >= "
+                    f"{window_end.isoformat()} for {forward_window} window; "
+                    f"coverage_policy={coverage_policy}"
+                ),
             })
             continue
 

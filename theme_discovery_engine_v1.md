@@ -1429,8 +1429,15 @@ Single-snapshot behavior:
 - `backtest_status` in run artifacts must be `disabled_not_enough_snapshots`.
 - Validation outputs must state: "backtesting requires temporal panel and is not meaningful for single-snapshot inputs."
 
+Forward window and coverage policy (OI-7 — LOCKED):
+
+- **Forward window: 3 months (3M).** `sweep.forward_window: 3M` in `configs/validation.example.yml`. Each walk-forward point is measured over a full 3-month window after its `as_of` date.
+- **Skip-not-shrink rule:** when a walk-forward point lacks sufficient forward price coverage (`max(price_date) < as_of + 3M`), that point is **SKIPPED** — it is excluded from the panel entirely. The window is **never clamped or shortened** to admit a point with partial coverage.
+- **Skipped points are excluded from `n_points`** and therefore do not contribute to `claim_supported`. Only fully-covered, measured points count.
+- Skipped points are recorded in the panel output with `skipped=True` and a `skipped_reason` describing the coverage gap (e.g., `insufficient_forward_coverage: requires max(price_date) >= <date> for 3M window`).
+- Coverage policy is configured as `sweep.on_insufficient_coverage: skip`; the engine enforces skip-not-shrink regardless of config value.
+
 Required minimum coverage:
-- 1M metrics require at least one month of market coverage after `as_of_date` for each snappoint.
 - 3M metrics require at least three months of market coverage after `as_of_date` for each snappoint.
 - Backtest execution should fail-fast with a typed validation error if any snappoint lacks required coverage and list exact missing date ranges.
 - Coverage check for a run is `max(available_date in market_prices for this run) >= as_of_date + holding_window` for every requested holding window.
