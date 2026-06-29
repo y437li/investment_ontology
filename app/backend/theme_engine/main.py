@@ -162,7 +162,12 @@ def extraction_resolve(req: ExtractionResolveRequest) -> ExtractionResolveRespon
     return ExtractionResolveResponse(
         success=True,
         run_id=req.run_id,
-        artifacts=["discovery/entity_aliases.parquet"],
+        # entity_aliases.parquet = PIT table (consumed by pipeline)
+        # entity_aliases_global.parquet = global inspection-only companion (OI-4)
+        artifacts=[
+            "discovery/entity_aliases.parquet",
+            "discovery/entity_aliases_global.parquet",
+        ],
         alias_count=alias_count,
     )
 

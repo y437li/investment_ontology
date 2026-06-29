@@ -367,7 +367,10 @@ def test_full_pipeline_end_to_end():
     assert resp.status_code == 200, resp.text
     res_body = resp.json()
     assert res_body["success"] is True
-    assert res_body["artifacts"] == ["discovery/entity_aliases.parquet"]
+    assert set(res_body["artifacts"]) == {
+        "discovery/entity_aliases.parquet",
+        "discovery/entity_aliases_global.parquet",
+    }
     assert res_body["alias_count"] >= 1
 
     run_dir = Path(settings.run_output_dir) / run_id

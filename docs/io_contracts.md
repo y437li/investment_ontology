@@ -401,7 +401,16 @@ Rules:
 
 ## 10a. `entity_aliases_global.parquet`
 
-Optional diagnostics artifact for non-temporal alias inspection.
+Global companion artifact for non-temporal alias inspection (OI-4).
+
+Written by `entity_resolution.resolve_entities()` alongside the PIT table.
+Covers the **full corpus** (all entities/chunks regardless of `available_at`).
+`alias_scope="global"`, `as_of_date=""` (sentinel — not a real date).
+
+**Isolation contract**: this artifact MUST NOT be read by `graph_build`,
+`exposure`, `themes`, community detection, or any discovery-stage computation.
+Only `entity_aliases.parquet` (PIT) feeds the discovery pipeline.
+Permitted consumers: manual curation tools, diagnostics, cross-run inspection.
 
 Required columns:
 
@@ -410,9 +419,11 @@ schema_version: string
 alias: string
 canonical_entity_id: string
 canonical_name: string
+as_of_date: string   (always "" — global sentinel, not a real date)
 confidence: float
 method: string
 review_status: string
+alias_scope: string  (always "global")
 source_record_ids: list[string]
 created_at: timestamp
 ```
