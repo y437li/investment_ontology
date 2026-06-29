@@ -15,9 +15,20 @@ Allowed actions (data_schema section 3):
 
 Forbidden actions (NOT performed here):
   - summarize, translate, paraphrase, or rewrite meaning
-  - infer a missing ``available_at``
+  - infer a missing ``available_at`` (OI-8: cleaning is READ-ONLY on this field)
   - merge different source documents
   - drop negative / contradictory / low-confidence evidence
+
+Source-Vintage Rule — ``available_at`` (OI-8)
+----------------------------------------------
+``available_at`` is set ONCE at ingest and is IMMUTABLE in this stage.
+Cleaning inherits ``available_at`` verbatim from ``raw_documents.parquet``
+and writes it unchanged to ``documents.parquet``.  This module must NEVER:
+  - replace ``available_at`` with the current time (``cleaned_at``),
+  - default a missing ``available_at`` to any date,
+  - or shift the value for any reason.
+A raw document whose ``available_at`` is absent is quarantined here as well
+(secondary fail-closed gate; the primary gate is at import).
 
 Quarantine (logged with a reason): unreadable files, missing metadata,
 duplicates, and future documents (``available_at > as_of_date``).
@@ -737,7 +748,11 @@ def clean_documents(
 
         available_at = raw.get("available_at")
 
-        # --- Quarantine: missing required metadata (do NOT infer available_at).
+        # --- OI-8 immutability gate: available_at is read verbatim from the
+        # raw artifact; cleaning must NEVER default or shift it.  If it is
+        # absent here, quarantine (secondary fail-closed gate; the primary is
+        # at import).  Do NOT substitute cleaned_at, datetime.now(), or any
+        # other date.
         missing = [
             f
             for f in ("source", "source_id", "available_at", "raw_path")

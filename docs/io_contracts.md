@@ -175,7 +175,8 @@ notes: string | null
 Rules:
 
 - `raw_path` must be relative to the document input root.
-- `available_at` is mandatory; missing values must be rejected or quarantined.
+- `available_at` is mandatory (OI-8). It must equal the source's actual publication timestamp — filing date for filings, article `published_at` for news, as-reported publication date for fundamentals. It must never be the import or download time. A row whose `available_at` or `published_at` is absent or undeterminable is quarantined at ingest (fail-closed, `no_determinable_publish_time`); it is not admitted with a guessed or default date.
+- `published_at` is also mandatory. It records the source's own date (e.g. period end for a 10-K, article date for news).
 - `source_vintage` must be preserved if available for replay and audit.
 - This manifest is local input data and should not be committed unless it is a tiny synthetic fixture.
 
@@ -221,6 +222,7 @@ Rules:
   `documents_dir` at import time) so that the cleaning stage can locate files
   regardless of which `documents_dir` is passed to `/api/data/clean`.  The source
   manifest CSV may still use relative paths; they are resolved at import.
+- **Source vintage (OI-8):** `available_at` = the source's publication timestamp (filing date, news `published_at`, fundamentals as-reported date). Ingest is read-only on this field: it reads the publish timestamp from the manifest and stamps `available_at`; it never invents, defaults to the current import time, or shifts the value. A source with no determinable publish time is quarantined at ingest (fail-closed) with reason `no_determinable_publish_time`. `available_at` is set once here and is immutable in all downstream artifacts. `ingested_at` records the pipeline import time and must never substitute for `available_at`.
 
 ## 6. `documents.parquet`
 
@@ -257,7 +259,7 @@ exclusion_reason: string | null
 
 Rules:
 
-- `available_at` is mandatory.
+- `available_at` is mandatory. **Source vintage (OI-8):** inherited verbatim from `raw_documents.parquet`; cleaning is read-only on this field and must never alter, default, or shift it. `cleaned_at` records the cleaning-stage clock time and must never substitute for `available_at`.
 - `included_in_discovery` must be false when `available_at > as_of_date`.
 - `raw_document_id` links back to `raw_documents.parquet`.
 - `content_hash` should equal `clean_content_hash` for the canonical cleaned text.

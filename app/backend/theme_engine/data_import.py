@@ -2,6 +2,23 @@
 
 Validates a source manifest and writes a normalized `raw_documents.parquet`
 artifact into the run directory.
+
+Source-Vintage Rule (OI-8)
+--------------------------
+``available_at`` = the source's *publication* timestamp, by source type:
+- Filings (SEC EDGAR / SEDAR+): the filing date (first public date, NOT period end).
+- News / press releases: the article ``published_at`` date.
+- Prices / fundamentals: the as-reported publication date.
+
+Enforcement:
+- Ingest is READ-ONLY on the timestamp: it reads the publish time from the
+  manifest and stamps ``available_at``; it never invents, defaults, or shifts it.
+- A source with NO determinable publish time is QUARANTINED (fail-closed).
+  It is not admitted with a guessed date, a default date, or the import time.
+- ``available_at`` is set ONCE at ingest and is IMMUTABLE downstream.
+  Cleaning, chunking, extraction, and all later stages inherit it without
+  modification.  The ``ingested_at`` column records when the file was imported;
+  that timestamp must never substitute for ``available_at``.
 """
 
 from __future__ import annotations
@@ -43,6 +60,10 @@ REQUIRED_RAW_COLUMNS = REQUIRED_MANIFEST_COLUMNS + [
 ]
 
 TIME_COLUMNS: tuple[str, str] = ("published_at", "available_at")
+
+# Quarantine reason emitted when a source has no determinable publish time.
+# Used in tests to assert the fail-closed behaviour explicitly.
+QUARANTINE_NO_PUBLISH_TIME = "no_determinable_publish_time"
 
 
 def _resolve_input_path(documents_dir: str) -> Path:
@@ -106,7 +127,28 @@ def _validate_row(
     documents_root: Path,
     as_of_date: str,
 ) -> tuple[bool, str]:
+    """Validate one manifest row.
+
+    Source-Vintage Rule (OI-8): ``published_at`` and ``available_at`` are
+    mandatory.  A row whose source has no determinable publish time must be
+    quarantined with reason ``QUARANTINE_NO_PUBLISH_TIME``; it is NEVER
+    admitted with a guessed date, a default date, or the current import time.
+    ``available_at`` must equal the source's actual publication timestamp as
+    supplied in the manifest; ingest is read-only on that field.
+    """
+    # --- OI-8 fail-closed: explicit check for missing source publish time.
+    # published_at is the source's own dated timestamp; available_at is when
+    # the document became publicly available.  Both are required; either being
+    # absent means no determinable publish time → quarantine.
+    if not row.get("published_at"):
+        return False, QUARANTINE_NO_PUBLISH_TIME
+    if not row.get("available_at"):
+        return False, QUARANTINE_NO_PUBLISH_TIME
+
+    # --- All other required fields.
     for col in REQUIRED_MANIFEST_COLUMNS:
+        if col in ("published_at", "available_at"):
+            continue  # already checked above with a specific reason
         if not row.get(col):
             return False, f"missing required field: {col}"
 

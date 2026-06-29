@@ -437,6 +437,22 @@ Recommended free sources whose native timestamps map to `available_at`:
 
 Deferred (no clean free point-in-time source for MVP): historical news with reliable `published_at`/`available_at`, and earnings-call transcripts. These are out of the MVP corpus until a vetted source exists; press releases (from filings) act as the interim narrative source.
 
+## Source Vintage Rule (OI-8)
+
+**Locked rule:** `available_at` = the source's **publication time**, authoritative by source type:
+
+- Filings (SEC EDGAR, SEDAR+): `available_at = filing_date` — the date the document first appeared publicly; NOT the period end date.
+- News and press releases: `available_at = published_at` — the article's publication date.
+- Prices and fundamentals: `available_at` = the as-reported publication date (e.g., the EDGAR filing date that carried the XBRL facts).
+
+**Enforcement (applies to `data_import.py` and `data_cleaning.py`):**
+
+- Ingest is **read-only on the timestamp**: the pipeline reads the source's publish timestamp from the manifest and stamps `available_at`; it never invents, defaults, or shifts it.
+- A source with **no determinable publish time is quarantined (fail-closed)**. It is not admitted with a guessed date, a default date, or the current import time (`ingested_at`). Quarantine reason: `no_determinable_publish_time`.
+- `available_at` is set **once at ingest** and is **immutable downstream**. Cleaning, chunking, extraction, and all later stages inherit it without modification. `cleaned_at` or `created_at` timestamps on those artifacts are distinct fields and must never replace `available_at`.
+
+See `docs/io_contracts.md` §5/§6 for the full contract on `raw_documents.parquet` and `documents.parquet`.
+
 ## Acquisition Agent Trigger
 
 For MVP, acquisition stays a responsibility inside `agents/data_engineering_agent.md` and no autonomous collection agent is built. Promote acquisition into a dedicated `agents/data_collection_agent.md` only when section 29 sources (alt-data, APIs, global markets) land, where scheduling, rate limits, and multi-source reconciliation justify a separate role.
@@ -1166,6 +1182,7 @@ Alias resolution temporal discipline (OI-4):
 - Future returns.
 - Future communities.
 - Future revised labels.
+- `available_at` fabrication: stamping `available_at` with the import time, a guessed date, or any date that does not equal the source's actual publication timestamp (OI-8). A source with no determinable publish time must be quarantined, not admitted with a surrogate date.
 
 ## Weak Leakage: Document and Monitor
 
