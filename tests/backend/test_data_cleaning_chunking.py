@@ -6,10 +6,14 @@ Asserts:
   (c) chunks inherit available_at and link to document_id (io_contracts sec 8),
   (d) a document whose available_at is after the run as_of_date is quarantined
       by the cleaning stage (point-in-time guard).
+  (e) import -> clean succeeds when documents_dir is a SEPARATE directory
+      (not repo root): no docs quarantined as 'unreadable raw file'.
 """
 
 from __future__ import annotations
 
+import csv
+import tempfile
 from pathlib import Path
 
 import pyarrow as pa
@@ -227,3 +231,135 @@ def test_cleaning_quarantines_future_and_missing_metadata():
     docs = pq.read_table(run_dir / "discovery" / "documents.parquet").to_pylist()
     assert len(docs) == 1
     assert docs[0]["available_at"] <= "2024-06-30"
+
+
+def _write_manifest_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    """Write a source_manifest.csv for use in tests."""
+    header = [
+        "source", "source_id", "title", "document_type", "company_id",
+        "raw_path", "published_at", "available_at", "vintage", "language",
+        "source_url", "license", "confidentiality", "notes",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=header, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def test_import_clean_with_separate_documents_dir_no_false_quarantine():
+    """(e) Issue #27: import -> clean must succeed when documents_dir is a
+    separate directory (NOT repo root).
+
+    Regression: before the fix the cleaning stage re-resolved raw_path against
+    REPO_ROOT when documents_dir was not passed to /api/data/clean, which caused
+    every document to be quarantined as 'unreadable raw file'.
+
+    After the fix the import stage stores an absolute raw_path in
+    raw_documents.parquet so cleaning can locate the file unconditionally.
+    """
+    run_id = _create_run("2024-06-30")
+
+    with tempfile.TemporaryDirectory(prefix="separate_docs_dir_") as tmp:
+        sep_dir = Path(tmp)
+
+        # Write a raw document into the *separate* directory.
+        doc_file = sep_dir / "report.txt"
+        doc_file.write_text("Quarterly revenue grew 12% year-over-year.", encoding="utf-8")
+
+        # Write a source manifest that references the file by relative path.
+        manifest_path = sep_dir / "source_manifest.csv"
+        _write_manifest_csv(
+            manifest_path,
+            [
+                {
+                    "source": "internal",
+                    "source_id": "sep-1",
+                    "title": "Separate-dir report",
+                    "document_type": "report",
+                    "company_id": "CORP",
+                    "raw_path": "report.txt",       # relative to sep_dir
+                    "published_at": "2024-03-01",
+                    "available_at": "2024-03-01",
+                    "vintage": "2024-03-02T00:00:00Z",
+                    "language": "en",
+                    "source_url": "https://example.com/sep-1",
+                    "license": "public",
+                    "confidentiality": "public",
+                    "notes": "issue-27 regression test",
+                },
+            ],
+        )
+
+        # --- Import with documents_dir = separate directory.
+        resp = client.post(
+            "/api/data/import",
+            json={
+                "run_id": run_id,
+                "documents_dir": str(sep_dir),
+                "source_manifest_path": str(manifest_path),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["raw_documents"] == 1, f"import quarantine: {body}"
+        assert body["quarantined"] == 0
+
+        # --- Clean WITHOUT passing documents_dir (the key regression scenario).
+        # Before the fix this quarantined the document as 'unreadable raw file'
+        # because raw_path was resolved against REPO_ROOT, not sep_dir.
+        resp = client.post(
+            "/api/data/clean",
+            json={"run_id": run_id},   # no documents_dir!
+        )
+        assert resp.status_code == 200, resp.text
+        cbody = resp.json()
+        assert cbody["success"] is True
+        assert cbody["included_documents"] == 1, (
+            f"expected 1 included doc, got {cbody['included_documents']}; "
+            f"quarantine reasons: {cbody.get('quarantine_reasons')}"
+        )
+
+        # Confirm no 'unreadable raw file' quarantine.
+        reasons = cbody.get("quarantine_reasons", [])
+        assert not any("unreadable raw file" in r for r in reasons), (
+            f"got unreadable-raw-file quarantine: {reasons}"
+        )
+
+        run_dir = Path(settings.run_output_dir) / run_id
+        docs = pq.read_table(run_dir / "discovery" / "documents.parquet").to_pylist()
+        assert len(docs) == 1
+        assert docs[0]["cleaning_status"] == "cleaned"
+        # Cleaned text must survive.
+        clean_text = (run_dir / docs[0]["clean_text_path"]).read_text(encoding="utf-8")
+        assert "revenue" in clean_text
+
+
+def test_import_clean_backward_compat_repo_root_relative_path():
+    """Backward compatibility: importing from fixtures (which uses repo-root-
+    relative-style paths resolved by the import stage) still works end-to-end.
+
+    The fixture FIXTURES dir is NOT the repo root; both import and clean receive
+    the same documents_dir so this also exercises the existing passing flow.
+    """
+    run_id = _create_run("2024-06-30")
+
+    resp = client.post(
+        "/api/data/import",
+        json={
+            "run_id": run_id,
+            "documents_dir": str(FIXTURES),
+            "source_manifest_path": str(FIXTURES / "source_manifest.csv"),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["raw_documents"] == 2
+
+    # Clean with explicit documents_dir (backward-compat path).
+    resp = client.post(
+        "/api/data/clean",
+        json={"run_id": run_id, "documents_dir": str(FIXTURES)},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["included_documents"] == 2
+    assert resp.json()["success"] is True
