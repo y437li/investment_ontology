@@ -73,6 +73,12 @@ Decided as a set (user, 2026-06-28) so the run model, theme definition, and vali
 
 Each phase is its own design-checkpoint + dispatch. Do NOT one-shot.
 
+### R1 — locked implementation decisions (user, 2026-06-29)
+
+1. **Artifact layout — per-point subdirs.** Each as_of point gets its own subtree `discovery/<as_of>/...` (and the per-point freeze/hash, provenance, exposure live under it). Chosen over a single file with an `as_of` partition column so the freeze/hash gate (OI-3) and leakage gate isolate cleanly per point.
+2. **Endpoint point-selection — default-latest + optional `?as_of=`.** Endpoints that read discovery artifacts return the latest point by default; an optional `?as_of=<t_i>` selects a specific point. No-arg calls behave exactly as today (backward compatible).
+3. **R1 scope — layout + per-point freeze/leakage + point-aware run_cache only.** Make the pipeline runnable at an arbitrary single `t_i` and stored per point; defer the actual multi-period loop/orchestration to R2. (Do NOT one-shot the loop into R1.)
+
 **Acceptance (design):** spec §6/§22/§27 define the multi-period run, per-point PIT layout, and the panel; dependency on OI-5 (the per-point detection unit) and OI-8 (the `available_at` it filters on) stated.
 
 ---
