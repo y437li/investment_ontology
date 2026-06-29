@@ -602,6 +602,8 @@ Format:
       "density": 0.34,
       "top_entities": ["Datacenter", "Electricity Demand"],
       "top_companies": ["Hydro One"],
+      "company_members": ["ent_001"],
+      "concept_spine": ["ent_002"],
       "theme_name": "Datacenter Power Demand",
       "theme_summary": "Evidence-backed summary.",
       "naming_model": "gpt-4.1-mini"
@@ -610,9 +612,19 @@ Format:
 }
 ```
 
-Rule:
+OI-5 fields (bipartite projection — added in OI-5):
+
+- `company_members`: list of Company entity IDs in this community. Derived from `node_ids` filtered to `entity_type == "Company"`. Allows downstream UI/reasoning to enumerate exactly which companies belong to this theme cluster without re-reading entities.parquet.
+- `concept_spine`: list of binding concept entity IDs in this community — the shared concepts (EconomicConcept, Commodity, MacroIndicator, Event) that structurally connect the companies. Derived from `node_ids` filtered to those concept types. The concept spine answers WHY companies cluster, not just which ones do. Must be non-empty for any multi-company theme (a theme with ≥2 companies that has no concept spine indicates a bug or data gap).
+
+Both fields are sorted for determinism.
+
+Rules:
 
 - `theme_name` is metadata only. The community is the research object.
+- `company_members` and `concept_spine` together describe the bipartite node set of the community. `node_ids` includes all community nodes (company_members ∪ concept_spine ∪ any other structural nodes present).
+- Exposure computation reads `node_ids`; reasoning/UI should prefer `company_members` and `concept_spine` for explainability.
+- Detection ran on the bipartite projection (Company↔concept edges only); `edge_ids` reflects only bipartite structural edges.
 
 ## 15. `theme_snapshots.json`
 

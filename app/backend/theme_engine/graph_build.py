@@ -139,6 +139,39 @@ STRUCTURAL_NODE_TYPES: list[str] = [
 # Node types excluded from the structural graph
 EXCLUDED_NODE_TYPES: list[str] = ["Document"]
 
+# ---------------------------------------------------------------------------
+# OI-5: Bipartite company<->concept projection for community detection
+#
+# Community detection runs on a BIPARTITE graph where:
+#   - One side = Company entities
+#   - Other side = "binding" concept nodes (EconomicConcept, Commodity,
+#     MacroIndicator, Event)
+#
+# Only edges that cross the bipartite boundary (Company<->concept) are
+# included in community_input_edges. Edges between two Companies, or
+# between two non-Company concept nodes, are EXCLUDED from community
+# detection — they remain in graph.json for evidence/provenance.
+#
+# This guarantees that companies cluster together ONLY when they share
+# a common binding concept, not merely because they co-appear in the
+# same sector or geography.
+#
+# Sector and Geography are excluded from the concept/binding side;
+# they remain in graph.json for provenance but do NOT drive themes.
+# ---------------------------------------------------------------------------
+
+COMPANY_NODE_TYPE: str = "Company"
+
+# "Binding" concept node types — the right side of the bipartite projection.
+# Sector and Geography are intentionally excluded: they do not define a theme's
+# concept spine; their edges remain in graph.json for evidence only.
+CONCEPT_NODE_TYPES: list[str] = [
+    "EconomicConcept",
+    "Commodity",
+    "MacroIndicator",
+    "Event",
+]
+
 
 def _to_date_str(val: Any) -> str:
     """Coerce a value to YYYY-MM-DD string for comparison."""
@@ -197,6 +230,8 @@ def build_graph(run_id: str) -> tuple[int, int]:
 
     # --- Point-in-time filter + OI-5: include only non-Document entities ---
     structural_entity_ids: set[str] = set()
+    # OI-5 bipartite: track entity types for the bipartite projection filter
+    entity_type_by_id: dict[str, str] = {}
     node_list: list[dict] = []
 
     for ent in raw_entities:
@@ -213,6 +248,7 @@ def build_graph(run_id: str) -> tuple[int, int]:
         if not entity_id:
             continue
         structural_entity_ids.add(entity_id)
+        entity_type_by_id[entity_id] = entity_type
         node_list.append(
             {
                 "entity_id": entity_id,
@@ -224,9 +260,12 @@ def build_graph(run_id: str) -> tuple[int, int]:
 
     # --- Build edge lists ---
     # All edges go into graph.json for traceability.
-    # community_input_edges contains only structural edges.
+    # community_input_edges contains only bipartite (Company<->concept) structural edges.
     all_edges: list[dict] = []
     community_input_edge_ids: list[str] = []
+
+    # OI-5: frozenset of concept node types for O(1) bipartite check inside the loop
+    _concept_type_set: frozenset = frozenset(CONCEPT_NODE_TYPES)
 
     for edge in raw_edges:
         # Point-in-time gate
@@ -275,11 +314,22 @@ def build_graph(run_id: str) -> tuple[int, int]:
         # 1. Both endpoints are structural (non-Document) entities
         # 2. Edge type is structural
         # 3. Extraction method is admitted (document_stated or approved metadata_inferred)
+        # 4. BIPARTITE: one endpoint is Company, other is a binding concept node
+        #    (EconomicConcept, Commodity, MacroIndicator, Event).
+        #    Edges between two Companies, or two concepts, are excluded from
+        #    community detection (they stay in graph.json for provenance).
+        src_type = entity_type_by_id.get(source_id, "")
+        tgt_type = entity_type_by_id.get(target_id, "")
+        is_bipartite_edge = (
+            (src_type == COMPANY_NODE_TYPE and tgt_type in _concept_type_set)
+            or (tgt_type == COMPANY_NODE_TYPE and src_type in _concept_type_set)
+        )
         if (
             edge_type in STRUCTURAL_EDGE_TYPES
             and source_id in structural_entity_ids
             and target_id in structural_entity_ids
             and extraction_method in COMMUNITY_INPUT_METHODS
+            and is_bipartite_edge
         ):
             community_input_edge_ids.append(edge_id)
 
@@ -292,6 +342,15 @@ def build_graph(run_id: str) -> tuple[int, int]:
             "type": "entity_only",
             "node_types_in_structural_graph": STRUCTURAL_NODE_TYPES,
             "excluded_node_types": EXCLUDED_NODE_TYPES,
+            # OI-5: bipartite projection metadata
+            "community_detection": "bipartite",
+            "bipartite_company_side": COMPANY_NODE_TYPE,
+            "bipartite_concept_side": CONCEPT_NODE_TYPES,
+            "bipartite_note": (
+                "community_input_edges contains only edges crossing the Company<->concept "
+                "boundary. Edges between two Companies or two concepts are in graph.json "
+                "for provenance but excluded from community detection."
+            ),
         },
         "structural_edge_types": STRUCTURAL_EDGE_TYPES,
         "evidence_edge_types": EVIDENCE_EDGE_TYPES,
