@@ -477,22 +477,106 @@ class TestE3CompanyThemeEvidence:
         )
 
     def test_company_documents_endpoint_returns_per_theme_groups(self):
-        """GET /api/themes/{run_id}/companies/{company_id}/documents returns per-theme list."""
-        run_id = _run_pipeline_to_exposure()
-        client.post("/api/provenance/materialize", json={"run_id": run_id})
+        """GET /api/themes/{run_id}/companies/{company_id}/documents returns per-theme list.
 
+        Deterministic seed (one company across two themes) so exposure rows are
+        GUARANTEED — the endpoint is always exercised, never skipped.
+        """
+        run = runs_mod.create_run(RunCreateRequest(as_of_date=AS_OF_DATE))
+        run_id = run.run_id
         ddir = Path(settings.run_output_dir) / run_id / "discovery"
-        # Get a company from exposure
-        exp_rows = pq.read_table(ddir / "company_theme_exposure.parquet").to_pylist()
-        if not exp_rows:
-            pytest.skip("No exposure rows in this run")
+        ddir.mkdir(parents=True, exist_ok=True)
 
-        company_id = exp_rows[0]["company_id"]
+        company_id = "ent_company_docs_endpoint"
+        concept_a_id = "ent_concept_docs_a"
+        concept_b_id = "ent_concept_docs_b"
+        chunk_a, chunk_b = "chunk_docs_a", "chunk_docs_b"
+        doc_a, doc_b = "doc_docs_a", "doc_docs_b"
+
+        ents = [
+            _make_ent_row(company_id, "Company", "DocsEndpointCo",
+                          source_chunk_ids=[chunk_a, chunk_b]),
+            _make_ent_row(concept_a_id, "EconomicConcept", "DocsThemeAConcept",
+                          source_chunk_ids=[chunk_a]),
+            _make_ent_row(concept_b_id, "EconomicConcept", "DocsThemeBConcept",
+                          source_chunk_ids=[chunk_b]),
+        ]
+        edges = [
+            _make_edge_row("edge_docs_a", company_id, concept_a_id, "exposed_to", [chunk_a]),
+            _make_edge_row("edge_docs_b", company_id, concept_b_id, "exposed_to", [chunk_b]),
+        ]
+        chunks = [
+            {
+                "schema_version": "1.0", "run_id": run_id,
+                "chunk_id": chunk_a, "document_id": doc_a,
+                "raw_document_id": "raw_docs_a", "chunk_index": 0,
+                "text": "Docs theme A evidence.", "token_count": 4,
+                "start_char": 0, "end_char": 22, "page_start": None,
+                "page_end": None, "section_title": None,
+                "available_at": "2024-01-01", "content_hash": "hda",
+                "cleaning_version": "v1", "block_type": None,
+            },
+            {
+                "schema_version": "1.0", "run_id": run_id,
+                "chunk_id": chunk_b, "document_id": doc_b,
+                "raw_document_id": "raw_docs_b", "chunk_index": 0,
+                "text": "Docs theme B evidence.", "token_count": 4,
+                "start_char": 0, "end_char": 22, "page_start": None,
+                "page_end": None, "section_title": None,
+                "available_at": "2024-01-01", "content_hash": "hdb",
+                "cleaning_version": "v1", "block_type": None,
+            },
+        ]
+        comm_a = {
+            "community_id": "community_docs_a",
+            "node_ids": [concept_a_id], "edge_ids": ["edge_docs_a"],
+            "size": 1, "density": 0.0,
+            "top_entities": ["DocsThemeAConcept"], "top_companies": [],
+            "theme_name": "Docs Theme A", "theme_summary": "a", "naming_model": "deterministic",
+        }
+        comm_b = {
+            "community_id": "community_docs_b",
+            "node_ids": [concept_b_id], "edge_ids": ["edge_docs_b"],
+            "size": 1, "density": 0.0,
+            "top_entities": ["DocsThemeBConcept"], "top_companies": [],
+            "theme_name": "Docs Theme B", "theme_summary": "b", "naming_model": "deterministic",
+        }
+        snapshots = [
+            {"theme_snapshot_id": "snap_docs_a", "community_id": "community_docs_a",
+             "theme_family_id": None, "state": "Emerging",
+             "theme_name": "Docs Theme A", "summary": "a", "evidence_edge_ids": ["edge_docs_a"]},
+            {"theme_snapshot_id": "snap_docs_b", "community_id": "community_docs_b",
+             "theme_family_id": None, "state": "Emerging",
+             "theme_name": "Docs Theme B", "summary": "b", "evidence_edge_ids": ["edge_docs_b"]},
+        ]
+        exp_rows = [
+            _make_exp_row(company_id, "snap_docs_a", "community_docs_a", [chunk_a]),
+            _make_exp_row(company_id, "snap_docs_b", "community_docs_b", [chunk_b]),
+        ]
+
+        pq.write_table(pa.Table.from_pylist(ents), ddir / "entities.parquet")
+        pq.write_table(pa.Table.from_pylist(edges), ddir / "edges.parquet")
+        pq.write_table(pa.Table.from_pylist(chunks), ddir / "chunks.parquet")
+        (ddir / "communities.json").write_text(
+            json.dumps(_communities_doc(run_id, AS_OF_DATE, [comm_a, comm_b]))
+        )
+        (ddir / "theme_snapshots.json").write_text(
+            json.dumps(_snapshots_doc(run_id, AS_OF_DATE, snapshots))
+        )
+        from theme_engine.exposure import _write_exposure_table  # noqa: PLC0415
+        _write_exposure_table(exp_rows, ddir / "company_theme_exposure.parquet")
+
+        # Materialize E3 (the artifact the endpoint reads).
+        prov_mod.materialize_company_theme_evidence(run_id)
+
         resp = client.get(f"/api/themes/{run_id}/companies/{company_id}/documents")
         assert resp.status_code == 200, resp.text
 
         body = resp.json()
         assert isinstance(body, list)
+        # Exposure is guaranteed -> two distinct theme groups, never empty.
+        assert len(body) == 2, f"expected 2 per-theme groups, got {len(body)}: {body}"
+        assert {item["community_id"] for item in body} == {"community_docs_a", "community_docs_b"}
         for item in body:
             assert item["company_id"] == company_id
             assert "theme_snapshot_id" in item
