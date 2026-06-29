@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
 
-from . import run_cache
+from . import run_cache, runs
 from .config import settings
 
 # Allowlisted artifact names — only these may be served.
@@ -68,12 +68,17 @@ def _reject_traversal(artifact_name: str) -> None:
         )
 
 
-def _resolve_artifact_path(run_id: str, artifact_name: str) -> Path:
+def _resolve_artifact_path(run_id: str, artifact_name: str,
+                           as_of: str | None = None) -> Path:
     """Return the absolute path to the artifact inside the run directory.
 
     For convenience the frontend can request both 'graph.json' and
     'discovery/graph.json'; this function handles both forms by looking in the
     discovery/ sub-directory for JSON/Parquet artifacts.
+
+    OI-6 R1: discovery/ artifacts resolve under the per-point subtree selected by
+    ``as_of`` (defaulting to the latest point, falling back to the flat dir for
+    legacy single-point runs).
     """
     run_dir = settings.run_output_dir / run_id
     if not run_dir.is_dir():
@@ -86,10 +91,12 @@ def _resolve_artifact_path(run_id: str, artifact_name: str) -> Path:
             bare = bare[len(prefix):]
             break
 
+    discovery_dir = runs.discovery_point_dir(run_id, as_of)
+
     # Try discovery/ sub-dir first for json/parquet artifacts, then run root.
     candidates: list[Path] = []
     if bare in _JSON_ARTIFACTS or bare in _PARQUET_ARTIFACTS:
-        candidates.append(run_dir / "discovery" / bare)
+        candidates.append(discovery_dir / bare)
     if bare in _MARKDOWN_ARTIFACTS:
         candidates.append(run_dir / bare)
     if bare in {"validation.csv"}:
@@ -128,7 +135,7 @@ def _csv_to_records(path: Path) -> list[dict[str, Any]]:
         return list(reader)
 
 
-def serve_artifact(run_id: str, artifact_name: str):
+def serve_artifact(run_id: str, artifact_name: str, as_of: str | None = None):
     """Serve an allowlisted artifact for the given run.
 
     Returns a FastAPI response object (JSONResponse or PlainTextResponse).
@@ -149,7 +156,7 @@ def serve_artifact(run_id: str, artifact_name: str):
         )
 
     # Resolve to file path
-    path = _resolve_artifact_path(run_id, artifact_name)
+    path = _resolve_artifact_path(run_id, artifact_name, as_of=as_of)
 
     suffix = path.suffix.lower()
 

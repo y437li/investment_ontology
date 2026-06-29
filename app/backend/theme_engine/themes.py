@@ -79,8 +79,8 @@ def _stable_snapshot_id(as_of_date: str, community_id: str) -> str:
     return f"theme_{date_part}_{suffix}"
 
 
-def _read_graph(run_id: str) -> dict:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "graph.json"
+def _read_graph(run_id: str, as_of: str | None = None) -> dict:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "graph.json"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -118,7 +118,7 @@ def _community_strength(
     return total_weight / max(1, len(community_edge_ids))
 
 
-def discover_themes(run_id: str) -> int:
+def discover_themes(run_id: str, as_of: str | None = None) -> int:
     """Run community detection on the entity-only structural graph.
 
     Returns the number of communities discovered.
@@ -131,9 +131,9 @@ def discover_themes(run_id: str) -> int:
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date = manifest.as_of_date
+    as_of_date = as_of if as_of is not None else manifest.as_of_date
 
-    graph_doc = _read_graph(run_id)
+    graph_doc = _read_graph(run_id, as_of)
     nodes: list[dict] = graph_doc.get("nodes", [])
     edges: list[dict] = graph_doc.get("edges", [])
     community_input_edge_ids: list[str] = graph_doc.get("community_input_edges", [])
@@ -330,8 +330,7 @@ def discover_themes(run_id: str) -> int:
         "lineages": [],
     }
 
-    discovery_dir = runs.get_run_dir(run_id) / "discovery"
-    discovery_dir.mkdir(parents=True, exist_ok=True)
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
 
     (discovery_dir / "communities.json").write_text(
         json.dumps(communities_doc, indent=2), encoding="utf-8"

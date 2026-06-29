@@ -38,8 +38,8 @@ from . import run_cache, runs
 # ---------------------------------------------------------------------------
 
 
-def _get_discovery_dir(run_id: str) -> Path:
-    return runs.get_run_dir(run_id) / "discovery"
+def _get_discovery_dir(run_id: str, as_of: str | None = None) -> Path:
+    return runs.discovery_point_dir(run_id, as_of)
 
 
 def _load_parquet(path: Path) -> list[dict]:
@@ -63,12 +63,13 @@ def _to_date_str(val: Any) -> str:
     return s[:10] if len(s) >= 10 else s
 
 
-def _require_run(run_id: str) -> str:
-    """Return run's as_of_date or raise 404."""
+def _require_run(run_id: str, as_of: str | None = None) -> str:
+    """Return the effective PIT date (the selected point or the run's as_of_date)
+    or raise 404 when the run is unknown."""
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    return str(manifest.as_of_date)
+    return as_of if as_of is not None else str(manifest.as_of_date)
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +77,7 @@ def _require_run(run_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def get_company_profile(run_id: str, company_id: str) -> dict[str, Any]:
+def get_company_profile(run_id: str, company_id: str, as_of: str | None = None) -> dict[str, Any]:
     """Build the full company detail payload.
 
     Returns
@@ -91,8 +92,8 @@ def get_company_profile(run_id: str, company_id: str) -> dict[str, Any]:
 
     Never returns None — raises HTTPException 404 if the entity is unknown.
     """
-    as_of = _require_run(run_id)
-    ddir = _get_discovery_dir(run_id)
+    as_of = _require_run(run_id, as_of)
+    ddir = _get_discovery_dir(run_id, as_of)
 
     # ── Entity lookup ──────────────────────────────────────────────────────
     entities = _load_parquet(ddir / "entities.parquet")
@@ -262,7 +263,7 @@ def _format_fact_label(fm: dict) -> str:
     return label
 
 
-def get_company_evidence_by_theme(run_id: str, company_id: str) -> list[dict[str, Any]]:
+def get_company_evidence_by_theme(run_id: str, company_id: str, as_of: str | None = None) -> list[dict[str, Any]]:
     """Return evidence for a company, grouped strictly by theme (E3).
 
     Each theme group carries only the chunk_ids attributed to THAT
@@ -274,8 +275,8 @@ def get_company_evidence_by_theme(run_id: str, company_id: str) -> list[dict[str
 
     PIT-clean: only chunks with available_at <= run.as_of are included.
     """
-    as_of = _require_run(run_id)
-    ddir = _get_discovery_dir(run_id)
+    as_of = _require_run(run_id, as_of)
+    ddir = _get_discovery_dir(run_id, as_of)
 
     # ── E3: company-theme provenance ──────────────────────────────────────
     e3_path = ddir / "company_theme_document_evidence.parquet"

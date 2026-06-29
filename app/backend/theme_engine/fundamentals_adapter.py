@@ -387,6 +387,7 @@ def ingest_xbrl(
     facts_json_path: str | Path | None,
     *,
     config_path: str | Path | None = None,
+    as_of: str | None = None,
 ) -> dict:
     """Ingest one company's EDGAR company-facts JSON into the run's discovery
     fundamentals artifact.
@@ -423,15 +424,16 @@ def ingest_xbrl(
     # Load run manifest for as_of
     rd = runs.get_run_dir(run_id)
     manifest_path = rd / "run_manifest.json"
-    as_of: date | None = None
-    if manifest_path.exists():
+    as_of_dt: date | None = None
+    as_of_str = as_of
+    if as_of_str is None and manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         as_of_str = manifest.get("as_of_date")
-        if as_of_str:
-            try:
-                as_of = date.fromisoformat(as_of_str)
-            except ValueError:
-                as_of = None
+    if as_of_str:
+        try:
+            as_of_dt = date.fromisoformat(as_of_str)
+        except ValueError:
+            as_of_dt = None
 
     # Parse XBRL facts
     rows: list[dict] = []
@@ -439,11 +441,10 @@ def ingest_xbrl(
         p = Path(facts_json_path)
         if p.exists():
             facts_json = json.loads(p.read_text(encoding="utf-8"))
-            rows = _parse_company_facts(facts_json, company_id, as_of, metric_idx, derived)
+            rows = _parse_company_facts(facts_json, company_id, as_of_dt, metric_idx, derived)
 
     # Write (or append to) the discovery artifact
-    discovery_dir = rd / "discovery"
-    discovery_dir.mkdir(parents=True, exist_ok=True)
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
     artifact_path = discovery_dir / FUNDAMENTALS_ARTIFACT
 
     new_table = _rows_to_table(rows)
@@ -468,10 +469,9 @@ def ingest_xbrl(
     }
 
 
-def read_fundamentals(run_id: str) -> list[dict]:
+def read_fundamentals(run_id: str, as_of: str | None = None) -> list[dict]:
     """Return all rows from the run's discovery fundamentals artifact."""
-    rd = runs.get_run_dir(run_id)
-    artifact_path = rd / "discovery" / FUNDAMENTALS_ARTIFACT
+    artifact_path = runs.discovery_point_dir(run_id, as_of) / FUNDAMENTALS_ARTIFACT
     if not artifact_path.exists():
         return []
     return pq.read_table(artifact_path).to_pylist()

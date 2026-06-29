@@ -11,10 +11,10 @@ from . import registry, run_cache, runs
 _EVIDENCE_EDGE_TYPES = {"mentioned_in", "co_occurs_with"}
 
 
-def community_subgraph(run_id: str, community_ids: list[str]) -> dict:
+def community_subgraph(run_id: str, community_ids: list[str], as_of: str | None = None) -> dict:
     """Union subgraph for the given communities: nodes (with level) + structural edges."""
-    rd = runs.get_run_dir(run_id)
-    comm_doc = run_cache.load_json(rd / "discovery" / "communities.json")
+    dd = runs.discovery_point_dir(run_id, as_of)
+    comm_doc = run_cache.load_json(dd / "communities.json")
     communities = comm_doc.get("communities", comm_doc)
     wanted = set(community_ids)
 
@@ -23,7 +23,7 @@ def community_subgraph(run_id: str, community_ids: list[str]) -> dict:
         if c["community_id"] in wanted:
             node_ids.update(c.get("node_ids", []))
 
-    graph = run_cache.load_json(rd / "discovery" / "graph.json")
+    graph = run_cache.load_json(dd / "graph.json")
     nodes = [{
         "id": n["entity_id"],
         "label": n.get("label") or n["entity_id"],

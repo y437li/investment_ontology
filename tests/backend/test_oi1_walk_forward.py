@@ -721,6 +721,33 @@ def test_walk_forward_requires_freeze_gate():
         run_walk_forward_validation(run_id)
 
 
+def test_walk_forward_multipoint_run_deferred_to_r2_no_leak():
+    """OI-6 R1: a multi-point authored run must NOT be evaluated as a single
+    latest-point basket across earlier points (look-ahead leakage). R1 defers
+    per-point validation to R2 and returns an illustrative deferral instead.
+    """
+    from theme_engine import freeze as freeze_mod
+    from theme_engine.models import RunCreateRequest
+
+    t1, t2 = "2024-03-31", "2024-06-30"
+    run = runs.create_run(RunCreateRequest(as_of_date=t1, as_of_dates=[t1, t2]))
+    run_id = run.run_id
+    for as_of in (t1, t2):
+        d = runs.discovery_point_dir(run_id, as_of, for_write=True)
+        for name in runs.REQUIRED_DISCOVERY_ARTIFACTS:
+            (d / name).write_text(f"seed-{as_of}-{name}", encoding="utf-8")
+        freeze_mod.freeze_discovery(run_id, as_of=as_of)
+
+    result = run_walk_forward_validation(run_id)
+
+    assert result["success"] is False
+    assert result["illustrative"] is True
+    assert result["claim_supported"] is False
+    assert result["n_points"] == 0
+    assert result["points"] == []
+    assert "R2" in result["message"]
+
+
 def test_walk_forward_with_no_as_of_dates_returns_failure():
     """run_walk_forward_validation with empty as_of_dates returns illustrative=True, claim_supported=False.
 

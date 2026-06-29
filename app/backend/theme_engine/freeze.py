@@ -32,23 +32,9 @@ from . import runs
 from .models import RunManifest
 
 # Discovery artifacts that MUST exist before freeze (matches leakage gate keys).
-# These are the core pipeline artifacts required at minimum.
-_REQUIRED_DISCOVERY_ARTIFACTS: list[str] = [
-    "raw_documents.parquet",
-    "documents.parquet",
-    "document_cleaning_log.parquet",
-    "chunks.parquet",
-    "entities.parquet",
-    "entity_aliases.parquet",
-    "edges.parquet",
-    "graph.json",
-    # Validation-consumed artifacts MUST be present + hashed at freeze, else a
-    # post-freeze regeneration is silently accepted (audit CRITICAL).
-    "communities.json",
-    "theme_snapshots.json",
-    "theme_metrics.parquet",
-    "company_theme_exposure.parquet",
-]
+# Single source of truth lives in runs.REQUIRED_DISCOVERY_ARTIFACTS; freeze sorts
+# it deterministically for hashing.
+_REQUIRED_DISCOVERY_ARTIFACTS: list[str] = sorted(runs.REQUIRED_DISCOVERY_ARTIFACTS)
 
 # Additional discovery artifacts included in hashes when present.
 # OI-3: extended to cover the full pipeline artifact set (EG-B, SENT-B/C, FI-C,
@@ -98,15 +84,17 @@ def _ensure_directory_layout(run_id: str) -> None:
     (run_dir / runs.VALIDATION_DIR).mkdir(parents=True, exist_ok=True)
 
 
-def _collect_artifact_hashes(run_id: str) -> dict[str, str]:
-    """Compute sha256 hashes for all present discovery artifacts.
+def _collect_artifact_hashes(discovery_dir: Path,
+                             key_prefix: str = "discovery") -> dict[str, str]:
+    """Compute sha256 hashes for all present discovery artifacts in *discovery_dir*.
 
-    Keys are 'discovery/<filename>' consistent with io_contracts §2 and
-    tests/test_leakage_gates.py expected keys.
+    Keys are '<key_prefix>/<filename>'.  For a flat run key_prefix is
+    'discovery' (keys 'discovery/<name>', consistent with io_contracts §2 and
+    tests/test_leakage_gates.py).  For a per-point run key_prefix is
+    'discovery/<as_of>' (keys 'discovery/<as_of>/<name>').
 
     Raises FileNotFoundError if any required artifact is missing.
     """
-    discovery_dir = runs.get_run_dir(run_id) / runs.DISCOVERY_DIR
     hashes: dict[str, str] = {}
 
     # Required artifacts — must exist
@@ -116,8 +104,7 @@ def _collect_artifact_hashes(run_id: str) -> dict[str, str]:
             raise FileNotFoundError(
                 f"discovery artifact missing before freeze: {name}"
             )
-        key = f"{runs.DISCOVERY_DIR}/{name}"
-        hashes[key] = _hash_file(p)
+        hashes[f"{key_prefix}/{name}"] = _hash_file(p)
 
     # Optional artifacts — hash if present
     optional_names_deduped: list[str] = []
@@ -130,7 +117,7 @@ def _collect_artifact_hashes(run_id: str) -> dict[str, str]:
     for name in optional_names_deduped:
         p = discovery_dir / name
         if p.exists() and p.is_file():
-            key = f"{runs.DISCOVERY_DIR}/{name}"
+            key = f"{key_prefix}/{name}"
             if key not in hashes:
                 hashes[key] = _hash_file(p)
 
@@ -138,51 +125,80 @@ def _collect_artifact_hashes(run_id: str) -> dict[str, str]:
     return dict(sorted(hashes.items()))
 
 
-def freeze_discovery(run_id: str) -> RunManifest:
-    """Freeze all discovery artifacts for the given run.
+def freeze_discovery(run_id: str, as_of: Optional[str] = None) -> RunManifest:
+    """Freeze discovery artifacts for the given run.
 
-    Steps:
-      1. Load manifest (raises if run not found).
-      2. Ensure discovery/ and validation/ directories exist.
-      3. Migrate any root-level discovery artifacts to discovery/ (legacy compat).
-      4. Compute sha256 hash of every discovery artifact.
-      5. Update manifest: discovery_artifact_hashes, discovery_frozen=true,
-         frozen_at timestamp.
-      6. Write updated manifest to disk.
-      7. Return updated RunManifest.
+    Legacy flat path (as_of is None and the run has no as_of_dates): unchanged
+    behavior — hashes flat discovery/, keys 'discovery/<name>', sets run-level
+    discovery_frozen=True and frozen_at.
 
-    Idempotent: re-running recomputes hashes from current file contents and
-    rewrites the manifest. Hash values are deterministic for unchanged files.
+    Per-point path (as_of set, or implied by a multi-point manifest): hashes
+    discovery/<as_of>/, keys 'discovery/<as_of>/<name>', MERGES into the existing
+    hash dict, records discovery_frozen_points[as_of], and flips run-level
+    discovery_frozen=True once every authored point is frozen.
+
+    Idempotent: re-freezing a point recomputes identical hashes and overwrites
+    that point's keys/timestamp; other points are untouched.
 
     Raises:
         RuntimeError: run not found.
+        ValueError: as_of is None on a multi-point run (bulk freeze is R2).
         FileNotFoundError: required discovery artifact missing.
     """
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise RuntimeError(f"run not found: {run_id}")
 
-    # Step 2: ensure directory layout (creates validation/ dir)
+    # Ensure directory layout (creates validation/ dir) + legacy root migration.
     _ensure_directory_layout(run_id)
-
-    # Step 3: migrate any legacy root-level artifacts
     runs._migrate_root_discovery_artifacts(run_id)
 
-    # Step 4: compute artifact hashes
-    artifact_hashes = _collect_artifact_hashes(run_id)
-
-    # Step 5: build updated manifest dict
+    now = _utc_now_iso()
     manifest_dict = manifest.model_dump()
-    manifest_dict["discovery_frozen"] = True
-    manifest_dict["discovery_artifact_hashes"] = artifact_hashes
-    manifest_dict["frozen_at"] = _utc_now_iso()
 
-    # Step 6: write updated manifest
+    if as_of is None and not manifest.as_of_dates:
+        # ---- Legacy flat freeze (unchanged behavior) ----
+        discovery_dir = runs.get_run_dir(run_id) / runs.DISCOVERY_DIR
+        artifact_hashes = _collect_artifact_hashes(discovery_dir, runs.DISCOVERY_DIR)
+        manifest_dict["discovery_frozen"] = True
+        manifest_dict["discovery_artifact_hashes"] = artifact_hashes
+        manifest_dict["frozen_at"] = now
+    else:
+        if as_of is None:
+            raise ValueError(
+                "as_of required to freeze a multi-point run (R1); bulk freeze is R2"
+            )
+        # ---- Per-point freeze ----
+        discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
+        key_prefix = f"{runs.DISCOVERY_DIR}/{as_of}"
+        point_hashes = _collect_artifact_hashes(discovery_dir, key_prefix)
+
+        # Merge into existing hashes (do not clobber other points' keys).
+        merged = dict(manifest_dict.get("discovery_artifact_hashes") or {})
+        # Drop any stale keys for THIS point before merging (idempotent overwrite).
+        stale_prefix = f"{key_prefix}/"
+        merged = {k: v for k, v in merged.items() if not k.startswith(stale_prefix)}
+        merged.update(point_hashes)
+        manifest_dict["discovery_artifact_hashes"] = dict(sorted(merged.items()))
+
+        frozen_points = dict(manifest_dict.get("discovery_frozen_points") or {})
+        frozen_points[as_of] = now
+        manifest_dict["discovery_frozen_points"] = frozen_points
+
+        # Run-level flag: True iff every authored point is frozen.
+        all_points = manifest.as_of_dates or [as_of]
+        run_level = all(p in frozen_points for p in all_points)
+        was_frozen = bool(manifest_dict.get("discovery_frozen"))
+        manifest_dict["discovery_frozen"] = run_level
+        if run_level and not was_frozen:
+            manifest_dict["frozen_at"] = now
+
+    # Write updated manifest
     run_dir = runs.get_run_dir(run_id)
     manifest_path = run_dir / runs.MANIFEST_NAME
     manifest_path.write_text(json.dumps(manifest_dict, indent=2), encoding="utf-8")
 
-    # Step 7: return updated RunManifest (reload from disk for fidelity)
+    # Return updated RunManifest (reload from disk for fidelity)
     updated = runs.load_manifest(run_id)
     assert updated is not None  # we just wrote it
     return updated

@@ -158,6 +158,38 @@ def test_forward_window_gate_fails_when_price_series_is_short():
     assert "forward coverage missing" in reason
 
 
+# --------------------------------------------------------------------------- #
+# OI-6 R1 companion: per-point freeze hash-key shape                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_per_point_hash_keys_use_as_of_segment():
+    """Production hashing keys a per-point run by discovery/<as_of>/<name>.
+
+    Exercises runs._compute_required_discovery_hashes (the real freeze input)
+    rather than a test-local reimplementation: a multi-point run's per-point
+    hashes must be segmented by as_of and isolated from sibling points.
+    """
+    from theme_engine import runs
+    from theme_engine.models import RunCreateRequest
+
+    t1, t2 = "2024-03-31", "2024-06-30"
+    run = runs.create_run(RunCreateRequest(as_of_date=t1, as_of_dates=[t1, t2]))
+    run_id = run.run_id
+    for as_of in (t1, t2):
+        d = runs.discovery_point_dir(run_id, as_of, for_write=True)
+        for name in runs.REQUIRED_DISCOVERY_ARTIFACTS:
+            (d / name).write_text(f"seed-{as_of}-{name}", encoding="utf-8")
+
+    keys = set(runs._compute_required_discovery_hashes(run_id, as_of=t1))
+    # Every required artifact is keyed under this point's subtree...
+    for name in runs.REQUIRED_DISCOVERY_ARTIFACTS:
+        assert f"discovery/{t1}/{name}" in keys
+    # ...and no key leaks the sibling point or the flat form.
+    assert not any(k.startswith(f"discovery/{t2}/") for k in keys)
+    assert "discovery/graph.json" not in keys
+
+
 def test_forward_window_gate_passes_with_coverage():
     market_rows = [
         ("AAPL", "2024-05-01"),

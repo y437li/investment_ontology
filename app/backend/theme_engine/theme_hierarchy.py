@@ -13,8 +13,8 @@ from typing import Optional
 from . import config, registry, runs
 
 
-def _load_communities(run_id: str) -> list[dict]:
-    p = runs.get_run_dir(run_id) / "discovery" / "communities.json"
+def _load_communities(run_id: str, as_of: str | None = None) -> list[dict]:
+    p = runs.discovery_point_dir(run_id, as_of) / "communities.json"
     doc = json.loads(p.read_text())
     return doc.get("communities", doc)
 
@@ -52,13 +52,13 @@ _TOOL = {
 
 
 def build_hierarchy(run_id: str, client=None, model: Optional[str] = None,
-                    max_main_themes: int = 7) -> dict:
+                    max_main_themes: int = 7, as_of: str | None = None) -> dict:
     """LLM-group communities into <= max_main_themes main themes; write artifact."""
-    communities = _load_communities(run_id)
+    communities = _load_communities(run_id, as_of)
     # Filter out non-substantive (0-metric / tiny / evidence-less) communities so the
     # LLM groups only real narratives; fall back to all if the filter would empty it.
     from . import theme_levels  # noqa: PLC0415 (avoid import cycle at module load)
-    keep = theme_levels.substantive_ids(run_id)
+    keep = theme_levels.substantive_ids(run_id, as_of)
     if keep:
         communities = [c for c in communities if c["community_id"] in keep] or communities
     if client is None:
@@ -115,11 +115,11 @@ def build_hierarchy(run_id: str, client=None, model: Optional[str] = None,
     main_themes.sort(key=lambda m: -m["size"])
 
     out = {"run_id": run_id, "main_themes": main_themes, "sub_theme_count": len(valid_ids)}
-    (runs.get_run_dir(run_id) / "discovery" / "theme_hierarchy.json").write_text(json.dumps(out, indent=2))
+    (runs.discovery_point_dir(run_id, as_of, for_write=True) / "theme_hierarchy.json").write_text(json.dumps(out, indent=2))
     return out
 
 
-def load_hierarchy(run_id: str) -> Optional[dict]:
+def load_hierarchy(run_id: str, as_of: str | None = None) -> Optional[dict]:
     """Return the cached theme hierarchy, or None if not built yet."""
-    p = runs.get_run_dir(run_id) / "discovery" / "theme_hierarchy.json"
+    p = runs.discovery_point_dir(run_id, as_of) / "theme_hierarchy.json"
     return json.loads(p.read_text()) if p.exists() else None

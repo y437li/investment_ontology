@@ -13,16 +13,16 @@ import pyarrow.parquet as pq
 from . import runs
 
 
-def _load(run_id: str, name: str) -> list[dict]:
-    p = runs.get_run_dir(run_id) / "discovery" / name
+def _load(run_id: str, name: str, as_of: str | None = None) -> list[dict]:
+    p = runs.discovery_point_dir(run_id, as_of) / name
     if not p.exists():
         return []
     return pq.read_table(p).to_pylist()
 
 
-def chunk_source(run_id: str, chunk_id: str) -> dict:
+def chunk_source(run_id: str, chunk_id: str, as_of: str | None = None) -> dict:
     """Full chunk + full source document + attribution for an evidence chunk."""
-    chunks = _load(run_id, "chunks.parquet")
+    chunks = _load(run_id, "chunks.parquet", as_of)
     ch = next((c for c in chunks if c.get("chunk_id") == chunk_id), None)
     if ch is None:
         raise ValueError(f"chunk not found: {chunk_id}")
@@ -35,9 +35,9 @@ def chunk_source(run_id: str, chunk_id: str) -> dict:
     )
     document_text = "\n".join(c.get("text", "") for c in doc_chunks)
 
-    doc = next((d for d in _load(run_id, "documents.parquet") if d.get("document_id") == doc_id), {})
+    doc = next((d for d in _load(run_id, "documents.parquet", as_of) if d.get("document_id") == doc_id), {})
     raw_id = ch.get("raw_document_id") or doc.get("raw_document_id")
-    raw = next((r for r in _load(run_id, "raw_documents.parquet") if r.get("document_id") == raw_id), {})
+    raw = next((r for r in _load(run_id, "raw_documents.parquet", as_of) if r.get("document_id") == raw_id), {})
 
     return {
         "chunk_id": chunk_id,

@@ -62,8 +62,8 @@ def _parse_ids(v) -> list[str]:
         return []
 
 
-def _load(run_id: str, name: str):
-    p = runs.get_run_dir(run_id) / "discovery" / name
+def _load(run_id: str, name: str, as_of: str | None = None):
+    p = runs.discovery_point_dir(run_id, as_of) / name
     if name.endswith(".json"):
         return run_cache.load_json(p)
     return run_cache.load_parquet_rows(p)
@@ -139,13 +139,13 @@ def _relevant_evidence(
     return snippet
 
 
-def _load_fm_by_chunk(run_id: str) -> dict[str, dict]:
+def _load_fm_by_chunk(run_id: str, as_of: str | None = None) -> dict[str, dict]:
     """Load financial_metrics.parquet and build chunk_id -> best fact index.
 
     Returns {} if the artifact is not yet present (graceful fallback).
     When multiple facts share a chunk_id, the highest-confidence one wins.
     """
-    p = runs.get_run_dir(run_id) / "discovery" / "financial_metrics.parquet"
+    p = runs.discovery_point_dir(run_id, as_of) / "financial_metrics.parquet"
     if not p.exists():
         return {}
     rows = run_cache.load_parquet_rows(p)
@@ -160,26 +160,26 @@ def _load_fm_by_chunk(run_id: str) -> dict[str, dict]:
     return index
 
 
-def gather_dossier(run_id: str, community_id: str) -> dict:
+def gather_dossier(run_id: str, community_id: str, as_of: str | None = None) -> dict:
     """Collect a community's relationships + evidence into a structured dossier."""
-    comm = _load(run_id, "communities.json")
+    comm = _load(run_id, "communities.json", as_of)
     communities = comm.get("communities", comm)
     c = next((x for x in communities if x.get("community_id") == community_id), None)
     if c is None:
         raise ValueError(f"community not found: {community_id}")
 
-    _entities = _load(run_id, "entities.parquet")
+    _entities = _load(run_id, "entities.parquet", as_of)
     ent = {e["entity_id"]: (e.get("canonical_name") or e.get("name")) for e in _entities}
     ent_type = {e["entity_id"]: e.get("entity_type") for e in _entities}
-    expl = {e["edge_id"]: e.get("explanation", "") for e in _load(run_id, "edge_explanations.parquet")}
-    chunks = {ch["chunk_id"]: ch.get("text", "") for ch in _load(run_id, "chunks.parquet")}
+    expl = {e["edge_id"]: e.get("explanation", "") for e in _load(run_id, "edge_explanations.parquet", as_of)}
+    chunks = {ch["chunk_id"]: ch.get("text", "") for ch in _load(run_id, "chunks.parquet", as_of)}
     edge_ids = set(c.get("edge_ids", []))
 
     # EG-D: load extracted financial facts indexed by chunk_id (graceful — {} if absent)
-    fm_by_chunk = _load_fm_by_chunk(run_id)
+    fm_by_chunk = _load_fm_by_chunk(run_id, as_of)
 
     relationships: list[dict] = []
-    for ed in _load(run_id, "edges.parquet"):
+    for ed in _load(run_id, "edges.parquet", as_of):
         if ed["edge_id"] not in edge_ids:
             continue
         ev_ids = _parse_ids(ed.get("evidence_chunk_ids"))
@@ -225,7 +225,7 @@ def _default_client_model():
     return client, config.model_for("theme_naming")
 
 
-def gather_main_dossier(run_id: str, community_ids: list[str]) -> dict:
+def gather_main_dossier(run_id: str, community_ids: list[str], as_of: str | None = None) -> dict:
     """Union the relationships across a main theme's sub-themes into one dossier."""
     rels: list[dict] = []
     seen: set = set()
@@ -233,7 +233,7 @@ def gather_main_dossier(run_id: str, community_ids: list[str]) -> dict:
     comps: set = set()
     for cid in community_ids:
         try:
-            d = gather_dossier(run_id, cid)
+            d = gather_dossier(run_id, cid, as_of)
         except ValueError:
             continue
         for r in d["relationships"]:
@@ -322,9 +322,10 @@ def _synthesize_dossier(d: dict, client, model: str) -> dict:
     return {"narrative": narrative, "reasoning_steps": steps, "reasoning_chain": reasoning_chain}
 
 
-def synthesize_narrative(run_id: str, community_id: str, client=None, model: Optional[str] = None) -> dict:
+def synthesize_narrative(run_id: str, community_id: str, client=None, model: Optional[str] = None,
+                         as_of: str | None = None) -> dict:
     """Connect the dots for a single community into a cited narrative + reasoning chain."""
-    d = gather_dossier(run_id, community_id)
+    d = gather_dossier(run_id, community_id, as_of)
     if client is None:
         client, model = _default_client_model()
     out = _synthesize_dossier(d, client, model)
@@ -333,16 +334,17 @@ def synthesize_narrative(run_id: str, community_id: str, client=None, model: Opt
 
 
 def synthesize_main_narrative(run_id: str, community_ids: list[str], client=None,
-                              model: Optional[str] = None, refresh: bool = False) -> dict:
+                              model: Optional[str] = None, refresh: bool = False,
+                              as_of: str | None = None) -> dict:
     """One STORY for a whole main theme (union of its sub-themes), cached."""
     import hashlib  # noqa: PLC0415
     key = hashlib.sha256(",".join(sorted(community_ids)).encode()).hexdigest()[:16]
-    cache = runs.get_run_dir(run_id) / "discovery" / "main_narratives" / f"{key}.json"
+    cache = runs.discovery_point_dir(run_id, as_of, for_write=True) / "main_narratives" / f"{key}.json"
     if cache.exists() and not refresh:
         cached = json.loads(cache.read_text())
-        cached["relationships"] = gather_main_dossier(run_id, community_ids)["relationships"]
+        cached["relationships"] = gather_main_dossier(run_id, community_ids, as_of)["relationships"]
         return cached
-    d = gather_main_dossier(run_id, community_ids)
+    d = gather_main_dossier(run_id, community_ids, as_of)
     if client is None:
         client, model = _default_client_model()
     out = _synthesize_dossier(d, client, model)
@@ -354,16 +356,16 @@ def synthesize_main_narrative(run_id: str, community_ids: list[str], client=None
 
 
 def get_or_synthesize(run_id: str, community_id: str, refresh: bool = False,
-                      client=None, model: Optional[str] = None) -> dict:
+                      client=None, model: Optional[str] = None, as_of: str | None = None) -> dict:
     """Return a cached community narrative, synthesizing (and caching) on first request."""
-    cache = runs.get_run_dir(run_id) / "discovery" / "narratives" / f"{community_id}.json"
+    cache = runs.discovery_point_dir(run_id, as_of, for_write=True) / "narratives" / f"{community_id}.json"
     if cache.exists() and not refresh:
         cached = json.loads(cache.read_text())
         # relationships + evidence are DETERMINISTIC; recompute them on every read so code
         # changes (node types, specific-sentence evidence) surface without an LLM re-run.
-        cached["relationships"] = gather_dossier(run_id, community_id)["relationships"]
+        cached["relationships"] = gather_dossier(run_id, community_id, as_of)["relationships"]
         return cached
-    result = synthesize_narrative(run_id, community_id, client=client, model=model)
+    result = synthesize_narrative(run_id, community_id, client=client, model=model, as_of=as_of)
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(result, indent=2))
     return result

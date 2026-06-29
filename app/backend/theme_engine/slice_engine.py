@@ -37,10 +37,10 @@ class AnchorAmbiguous(ValueError):
         self.candidates = candidates or []
 
 
-def _load_graph(run_id: str) -> dict:
+def _load_graph(run_id: str, as_of: str | None = None) -> dict:
     """Read discovery/graph.json (PIT-filtered at build time). FileNotFoundError if absent."""
-    rd = runs.get_run_dir(run_id)
-    return run_cache.load_json(rd / "discovery" / "graph.json")
+    dd = runs.discovery_point_dir(run_id, as_of)
+    return run_cache.load_json(dd / "graph.json")
 
 
 def _candidate(node: dict) -> dict:
@@ -108,6 +108,7 @@ def extract_slice(
     extraction_methods: list[str] | None = None,
     min_weight: float = 0.0,
     max_nodes: int = 200,
+    as_of: str | None = None,
 ) -> dict:
     """Deterministic BFS over the PIT structural graph from the resolved anchor.
 
@@ -132,7 +133,7 @@ def extract_slice(
             if tok not in _LEVEL_VOCAB:
                 raise ValueError(f"unknown level: {tok}")
 
-    graph = _load_graph(run_id)
+    graph = _load_graph(run_id, as_of)
     anchor_node = resolve_anchor(graph, anchor)
 
     # ---- Node index with attached level ----

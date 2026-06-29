@@ -608,9 +608,9 @@ def test_freeze_hashes_are_deterministic():
     ]:
         (discovery_dir / name).write_bytes(b"stable_content_" + name.encode())
 
-    # Compute hashes twice
-    hashes_a = freeze_mod._collect_artifact_hashes(run_id)
-    hashes_b = freeze_mod._collect_artifact_hashes(run_id)
+    # Compute hashes twice (OI-6 R1: helper now takes the resolved dir + prefix)
+    hashes_a = freeze_mod._collect_artifact_hashes(discovery_dir)
+    hashes_b = freeze_mod._collect_artifact_hashes(discovery_dir)
 
     assert hashes_a == hashes_b, (
         "Hash computation is not deterministic for the same file contents"

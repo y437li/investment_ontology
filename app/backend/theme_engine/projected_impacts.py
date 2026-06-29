@@ -120,8 +120,8 @@ def _to_date_str(val: Any) -> str:
     return s[:10]
 
 
-def _read_graph(run_id: str) -> dict:
-    artifact = runs.get_run_dir(run_id) / "discovery" / "graph.json"
+def _read_graph(run_id: str, as_of: str | None = None) -> dict:
+    artifact = runs.discovery_point_dir(run_id, as_of) / "graph.json"
     if not artifact.exists():
         raise HTTPException(
             status_code=404,
@@ -216,6 +216,7 @@ def select_triggers(graph: dict) -> list[dict]:
 def compute_projected_impacts(
     run_id: str,
     shock: float = _DEFAULT_SHOCK,
+    as_of: str | None = None,
 ) -> int:
     """Compute forward-inference projected impacts and write projected_impacts.parquet.
 
@@ -245,9 +246,9 @@ def compute_projected_impacts(
     manifest = runs.load_manifest(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
-    as_of_date: str = manifest.as_of_date
+    as_of_date: str = as_of if as_of is not None else manifest.as_of_date
 
-    graph = _read_graph(run_id)
+    graph = _read_graph(run_id, as_of)
     edge_index = _build_edge_index(graph)
 
     triggers = select_triggers(graph)
@@ -312,7 +313,7 @@ def compute_projected_impacts(
     # Sort deterministically by (trigger_id, company_id) for reproducibility
     rows.sort(key=lambda r: (r["trigger_id"], r["company_id"]))
 
-    out_path = runs.get_run_dir(run_id) / "discovery" / "projected_impacts.parquet"
+    out_path = runs.discovery_point_dir(run_id, as_of, for_write=True) / "projected_impacts.parquet"
     _write_projected_impacts_table(rows, out_path)
 
     return len(rows)

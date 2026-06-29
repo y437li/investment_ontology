@@ -98,11 +98,14 @@ def _eid(label: str) -> str:
     return "ent_macro_" + hashlib.sha256(label.encode()).hexdigest()[:12]
 
 
-def integrate_macro(run_id: str, universe_path: str | None = None) -> dict:
+def integrate_macro(run_id: str, universe_path: str | None = None,
+                    as_of_point: str | None = None) -> dict:
     """Append macro MacroIndicator nodes + macro->company structural edges to a run."""
     rd = runs.get_run_dir(run_id)
+    dd = runs.discovery_point_dir(run_id, as_of_point, for_write=True)
     import json  # noqa: PLC0415
-    as_of = _to_date(json.loads((rd / "run_manifest.json").read_text())["as_of_date"])
+    pit_date = as_of_point if as_of_point is not None else json.loads((rd / "run_manifest.json").read_text())["as_of_date"]
+    as_of = _to_date(pit_date)
     cfg = _load_macro_config()
     if not cfg.get("series"):
         return {"macro_nodes": 0, "macro_edges": 0}
@@ -116,7 +119,7 @@ def integrate_macro(run_id: str, universe_path: str | None = None) -> dict:
             sector_companies.setdefault(c.get("sector", ""), set()).add(_norm(c.get("name", "")))
 
     # run companies: normalized name -> entity_id
-    ent_tbl = pq.read_table(rd / "discovery" / "entities.parquet")
+    ent_tbl = pq.read_table(dd / "entities.parquet")
     ent_cols = ent_tbl.column_names
     ents = ent_tbl.to_pylist()
     company_id = {_norm(e.get("canonical_name") or e.get("name")): e["entity_id"]
@@ -170,9 +173,9 @@ def integrate_macro(run_id: str, universe_path: str | None = None) -> dict:
                     "generated_by": "macro_adapter", "created_at": as_of.isoformat(),
                 })
 
-    _append(rd / "discovery" / "entities.parquet", ent_cols, new_ents)
-    _append(rd / "discovery" / "edges.parquet", None, new_edges)
-    _append(rd / "discovery" / "edge_explanations.parquet", None, new_expl)
+    _append(dd / "entities.parquet", ent_cols, new_ents)
+    _append(dd / "edges.parquet", None, new_edges)
+    _append(dd / "edge_explanations.parquet", None, new_expl)
     return {"macro_nodes": len(new_ents), "macro_edges": len(new_edges)}
 
 

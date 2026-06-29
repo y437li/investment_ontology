@@ -29,3 +29,6 @@ dist/
 .env
 .env.local
 
+
+# Claude Code agent worktrees
+.claude/worktrees/

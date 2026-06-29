@@ -190,8 +190,7 @@ def _row_to_parquet_row(row: dict[str, str], idx: int, documents_root: Path) -> 
     }
 
 
-def _write_raw_documents(run_dir: Path, rows: list[dict[str, str]], documents_root: Path) -> None:
-    discovery_dir = run_dir / "discovery"
+def _write_raw_documents(discovery_dir: Path, rows: list[dict[str, str]], documents_root: Path) -> None:
     discovery_dir.mkdir(parents=True, exist_ok=True)
     out_path = discovery_dir / "raw_documents.parquet"
     if not rows:
@@ -206,6 +205,7 @@ def import_manifest(
     run_id: str,
     documents_dir: str,
     source_manifest_path: str,
+    as_of: str | None = None,
 ) -> tuple[int, int, list[str]]:
     manifest = runs.load_manifest(run_id)
     if manifest is None:
@@ -233,6 +233,6 @@ def import_manifest(
     rejected = len(quarantine_reasons)
     quarantined = rejected
 
-    run_dir = runs.get_run_dir(run_id)
-    _write_raw_documents(run_dir, accepted_rows, documents_root)
+    discovery_dir = runs.discovery_point_dir(run_id, as_of, for_write=True)
+    _write_raw_documents(discovery_dir, accepted_rows, documents_root)
     return included, quarantined, quarantine_reasons
