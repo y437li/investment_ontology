@@ -1953,3 +1953,150 @@ score_projections(run_id: str) -> dict
     # Returns dict with keys: success, scored_rows, windows_scored,
     #   artifacts, message.
 ```
+
+---
+
+## §DB: DuckDB View Layer (GitHub #25)
+
+### DB.1 Purpose and Scope
+
+`app/backend/theme_engine/db.py` provides a SQL inspection layer over run
+artifacts via DuckDB.  It is for **post-hoc analysis only** — never for
+discovery-stage computation.
+
+Physical database path (§4): `data/db/theme_engine.duckdb`
+
+Connections opened by `db.open_run()` and `db.open_all_runs()` are in-memory
+connections that register views over `read_parquet()` glob patterns.  The
+DuckDB file path is the designated local query layer per §4; the in-memory
+connections materialize fresh views on each call so that newly-added runs are
+always visible without refreshing a persistent file.
+
+### DB.2 View Sets
+
+Views are registered in two named sets derived from `leakage.py` (single
+source of truth for artifact classification):
+
+**Discovery views** — prefix `v_disc_`
+
+Registered from `data/runs/<run_id>/discovery/<artifact>.parquet`.  Artifact
+classification comes from `leakage.DISCOVERY_ARTIFACTS`.  Examples:
+
+```text
+v_disc_raw_documents          → discovery/raw_documents.parquet
+v_disc_documents              → discovery/documents.parquet
+v_disc_chunks                 → discovery/chunks.parquet
+v_disc_entities               → discovery/entities.parquet
+v_disc_entity_aliases         → discovery/entity_aliases.parquet
+v_disc_edges                  → discovery/edges.parquet
+v_disc_company_theme_exposure → discovery/company_theme_exposure.parquet
+v_disc_fundamentals_asreported → discovery/fundamentals_asreported.parquet
+v_disc_financial_metrics       → discovery/financial_metrics.parquet
+v_disc_management_sentiment_fused → discovery/management_sentiment_fused.parquet
+v_disc_projected_impacts       → discovery/projected_impacts.parquet
+... (all .parquet members of leakage.DISCOVERY_ARTIFACTS)
+```
+
+**Validation views** — prefix `v_val_`
+
+Registered from `data/runs/<run_id>/validation/<artifact>.parquet`.
+Artifact classification comes from `leakage.VALIDATION_ONLY_ARTIFACTS`.
+Examples:
+
+```text
+v_val_fundamentals        → validation/fundamentals.parquet
+v_val_market_prices       → validation/market_prices.parquet
+v_val_projection_scores   → validation/projection_scores.parquet
+v_val_portfolio_baskets   → validation/portfolio_baskets.parquet
+```
+
+Views whose artifact has not been produced for any run are silently skipped
+at registration time (``duckdb.IOException`` on empty glob is caught).
+
+### DB.3 run_id Column
+
+Every view exposes a ``run_id`` column as the first column, derived from the
+file path via:
+
+```sql
+regexp_extract(filename, '.*/runs/([^/]+)/discovery/', 1) AS run_id
+```
+
+For validation views, the regex uses `/validation/` instead of `/discovery/`.
+
+If the underlying Parquet schema already contains a ``run_id`` column, DuckDB
+automatically renames it to ``run_id_1``.  Users should always reference the
+path-derived ``run_id`` (column position 1) as the canonical run identifier.
+
+### DB.4 Read-Only Data Enforcement
+
+Data immutability is enforced by DuckDB view semantics:
+
+- `INSERT INTO v_disc_*` → `CatalogException: not a table`
+- `UPDATE v_disc_*`      → `BinderException: can only update base table`
+- `DELETE FROM v_disc_*` → `BinderException: can only delete from base table`
+
+The underlying Parquet files cannot be modified through a DuckDB view.
+
+### DB.5 Public API
+
+```python
+from theme_engine import db
+
+# All-runs cross-run inspection (most common use case)
+with db.open_all_runs() as conn:
+    rows = conn.execute("""
+        SELECT run_id, count(*) AS n
+        FROM v_disc_chunks
+        GROUP BY run_id
+    """).fetchall()
+
+# Single-run inspection
+with db.open_run("run_20240630_120000") as conn:
+    rows = conn.execute("""
+        SELECT edge_id, edge_type, confidence
+        FROM v_disc_edges
+        WHERE confidence > 0.8
+    """).fetchall()
+
+# Diagnostic: which views are available?
+info = db.registered_views()          # all-runs scope
+info = db.registered_views("run_id")  # single-run scope
+# Returns: {"discovery": ["v_disc_chunks", ...], "validation": [...]}
+```
+
+### DB.6 Inspection-Only Isolation Contract
+
+``db.py`` MUST NOT be imported by any discovery-stage module:
+
+- `graph_build.py`, `extraction.py`, `exposure.py`, `themes.py`
+- `entity_resolution.py`, `chunking.py`, `run_cache.py`, `propagation.py`
+- any other module that participates in the per-run discovery pipeline
+
+Discovery computation reads artifacts directly via ``run_cache.load_parquet_rows()``
+or ``run_cache.load_json()``.  Using ``db.py`` in discovery would introduce an
+unnecessary DuckDB dependency into the hot path and risk confusion between
+SQL-layer views and the authoritative run artifacts.
+
+The constraint is tested by a source-scan in the test suite:
+
+```python
+# tests/backend/test_duckdb_views.py
+def test_no_discovery_module_imports_db():
+    ...
+```
+
+### DB.7 Validation Views Are Post-Hoc Only
+
+Validation views (``v_val_*``) read from `validation/` sub-directories which
+contain future data (market prices, realized returns, post-as_of fundamentals).
+These views are ONLY for post-hoc analysis after a run is fully validated.
+
+Do NOT use ``v_val_*`` views in:
+- Any discovery-stage computation
+- Any query that feeds back into theme scores, exposure, or entity extraction
+- Any notebook or script that runs inline with the discovery pipeline
+
+The naming convention (`v_disc_` vs `v_val_`) makes cross-contamination
+explicit: a query joining ``v_disc_chunks`` and ``v_val_market_prices`` is
+visibly mixing the two sets.
