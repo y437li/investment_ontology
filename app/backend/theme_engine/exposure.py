@@ -229,9 +229,10 @@ def compute_exposure(run_id: str, include_weak_signals: bool = False) -> int:
         eid = ent.get("entity_id") or ""
         if not eid:
             continue
-        # Point-in-time: only entities first seen at or before as_of_date
+        # Point-in-time gate — FAIL-CLOSED: undated rows are excluded (cannot
+        # prove availability at as_of_date) and future-dated rows are excluded.
         first_seen = _to_date_str(ent.get("first_seen_at", ""))
-        if first_seen and first_seen > as_of_date:
+        if (not first_seen) or first_seen > as_of_date:
             continue
         entity_by_id[eid] = ent
 
@@ -264,9 +265,12 @@ def compute_exposure(run_id: str, include_weak_signals: bool = False) -> int:
 
     contributing_edges: list[dict] = []
     for edge in edges_raw:
-        # Point-in-time gate (double-check at this layer)
+        # Point-in-time gate — FAIL-CLOSED: undated rows are excluded (cannot
+        # prove availability at as_of_date) and future-dated rows are excluded.
+        # Future-dated edges are excluded here rather than clamped to least-recent
+        # recency (#2: exclude > clamp, consistent with PIT discipline).
         first_seen = _to_date_str(edge.get("first_seen_at", ""))
-        if first_seen and first_seen > as_of_date:
+        if (not first_seen) or first_seen > as_of_date:
             continue
         # OI-2 extraction method gate
         method = edge.get("extraction_method", "")

@@ -30,6 +30,7 @@ Forbidden phrases:
 from __future__ import annotations
 
 import csv
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +39,8 @@ from typing import Any, Optional
 from fastapi import HTTPException
 
 from . import run_cache, runs
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Illustrative caveat text (mirrors validation._SINGLE_SNAPSHOT_CAVEAT)
@@ -152,7 +155,8 @@ def _read_theme_metrics(run_dir: Path) -> list[dict]:
         return []
     try:
         return run_cache.load_parquet_rows(p)
-    except Exception:
+    except Exception as exc:
+        _log.warning("report: failed to read theme_metrics.parquet at %s: %s", p, exc)
         return []
 
 
@@ -162,7 +166,8 @@ def _read_exposure(run_dir: Path) -> list[dict]:
         return []
     try:
         return run_cache.load_parquet_rows(p)
-    except Exception:
+    except Exception as exc:
+        _log.warning("report: failed to read company_theme_exposure.parquet at %s: %s", p, exc)
         return []
 
 
@@ -174,7 +179,8 @@ def _read_validation_csv(run_dir: Path) -> list[dict]:
         with open(p, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             return list(reader)
-    except Exception:
+    except Exception as exc:
+        _log.warning("report: failed to read validation.csv at %s: %s", p, exc)
         return []
 
 
