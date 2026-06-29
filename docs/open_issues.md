@@ -60,7 +60,8 @@ Dispatch note:
   - `validation.py` implements `run_walk_forward_validation()` (panel runner) and enforces `illustrative=true, claim_supported=false` on all single-snapshot `run_validation()` results. `claim_supported=true` requires `n_points >= sweep.min_points_for_claim` from the walk-forward panel.
   - `agents/validation_agent.md` updated to reflect walk-forward and illustrative discipline.
   - Tests in `tests/backend/test_oi1_walk_forward.py` prove: panel computes correctly; single-snapshot is always illustrative; no code path emits `claim_supported=true` from single snapshot; PIT per point respected.
-- Files modified: `theme_discovery_engine_v1.md` (§22, §27 M6), `configs/validation.example.yml`, `app/backend/theme_engine/validation.py`, `agents/validation_agent.md`, `tests/backend/test_oi1_walk_forward.py`.
+- Files: `theme_discovery_engine_v1.md` (§22, §27 M6), `configs/validation.example.yml`, `app/backend/theme_engine/validation.py`, `agents/validation_agent.md`, `tests/backend/test_oi1_walk_forward.py`.
+- Acceptance: `run_walk_forward_validation()` computes a >=3-point monthly panel with per-point excess vs baseline and pooled hit-rate / mean-excess; every single-snapshot result carries `illustrative=true, claim_supported=false`; `claim_supported=true` requires `n_points >= sweep.min_points_for_claim`; PIT enforced per point; the tests above pass.
 
 ## OI-2 Discipline for interpretive edges (`benefits` / `hurts` / `exposed_to` / `causes`)
 

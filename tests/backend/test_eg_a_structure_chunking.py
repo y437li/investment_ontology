@@ -468,12 +468,7 @@ class TestNoFlattenedTable:
             "Item 1A. Risk Factors\n\n"
             "SynCorp faces competition risk.\n"
         )
-        scratchpad = Path(
-            "/private/tmp/claude-501/-Users-yangli-Library-CloudStorage-"
-            "OneDrive-Personal-Investment-Investment-Ontology/"
-            "8c400b2c-b49d-477c-a102-0c5c8c43d06f/scratchpad"
-        )
-        scratchpad.mkdir(parents=True, exist_ok=True)
+        scratchpad = Path(tempfile.mkdtemp(prefix="eg_a_chunk_"))
         tmp_path = scratchpad / "syncorp_test.txt"
         tmp_path.write_text(content, encoding="utf-8")
 
