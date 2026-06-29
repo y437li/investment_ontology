@@ -163,51 +163,31 @@ def test_forward_window_gate_fails_when_price_series_is_short():
 # --------------------------------------------------------------------------- #
 
 
-def validate_per_point_hash_keys(
-    hash_map: dict[str, str],
-    as_of: str,
-) -> tuple[bool, list[str]]:
-    """Validate that a per-point run's required hash keys are of the form
-    ``discovery/<as_of>/<name>`` (not the flat ``discovery/<name>`` form).
-
-    Returns ``(ok, missing_keys)``.
-    """
-    required_names = {
-        "raw_documents.parquet",
-        "documents.parquet",
-        "document_cleaning_log.parquet",
-        "chunks.parquet",
-        "entities.parquet",
-        "entity_aliases.parquet",
-        "edges.parquet",
-        "graph.json",
-    }
-    expected = {f"discovery/{as_of}/{n}" for n in required_names}
-    missing = sorted(expected - set(hash_map))
-    return not missing, missing
-
-
 def test_per_point_hash_keys_use_as_of_segment():
-    as_of = "2024-06-30"
-    hash_map = {
-        f"discovery/{as_of}/raw_documents.parquet": "sha256:a",
-        f"discovery/{as_of}/documents.parquet": "sha256:b",
-        f"discovery/{as_of}/document_cleaning_log.parquet": "sha256:c",
-        f"discovery/{as_of}/chunks.parquet": "sha256:d",
-        f"discovery/{as_of}/entities.parquet": "sha256:e",
-        f"discovery/{as_of}/entity_aliases.parquet": "sha256:f",
-        f"discovery/{as_of}/edges.parquet": "sha256:g",
-        f"discovery/{as_of}/graph.json": "sha256:h",
-        # a sibling point's keys must not be confused for this point's keys
-        "discovery/2024-03-31/graph.json": "sha256:other",
-    }
-    ok, missing = validate_per_point_hash_keys(hash_map, as_of)
-    assert ok is True, f"missing per-point keys: {missing}"
-    # The flat key form must NOT satisfy a per-point gate.
-    flat_map = {"discovery/graph.json": "sha256:flat"}
-    ok2, missing2 = validate_per_point_hash_keys(flat_map, as_of)
-    assert ok2 is False
-    assert f"discovery/{as_of}/graph.json" in missing2
+    """Production hashing keys a per-point run by discovery/<as_of>/<name>.
+
+    Exercises runs._compute_required_discovery_hashes (the real freeze input)
+    rather than a test-local reimplementation: a multi-point run's per-point
+    hashes must be segmented by as_of and isolated from sibling points.
+    """
+    from theme_engine import runs
+    from theme_engine.models import RunCreateRequest
+
+    t1, t2 = "2024-03-31", "2024-06-30"
+    run = runs.create_run(RunCreateRequest(as_of_date=t1, as_of_dates=[t1, t2]))
+    run_id = run.run_id
+    for as_of in (t1, t2):
+        d = runs.discovery_point_dir(run_id, as_of, for_write=True)
+        for name in runs.REQUIRED_DISCOVERY_ARTIFACTS:
+            (d / name).write_text(f"seed-{as_of}-{name}", encoding="utf-8")
+
+    keys = set(runs._compute_required_discovery_hashes(run_id, as_of=t1))
+    # Every required artifact is keyed under this point's subtree...
+    for name in runs.REQUIRED_DISCOVERY_ARTIFACTS:
+        assert f"discovery/{t1}/{name}" in keys
+    # ...and no key leaks the sibling point or the flat form.
+    assert not any(k.startswith(f"discovery/{t2}/") for k in keys)
+    assert "discovery/graph.json" not in keys
 
 
 def test_forward_window_gate_passes_with_coverage():

@@ -112,30 +112,6 @@ def _get_run_id_from_path(path: Path) -> Optional[str]:
         return None
 
 
-def _point_from_path(path: Path) -> Optional[str]:
-    """Return the as_of point for a per-point discovery artifact, else None.
-
-    For ``<run>/discovery/<X>/<...>/<file>`` (a per-point subtree) returns ``X``.
-    For flat ``<run>/discovery/<file>`` returns None.  For validation paths and
-    non-run paths returns None.
-    """
-    from .config import settings  # local import to avoid load-time side-effects
-
-    try:
-        run_output = settings.run_output_dir.resolve()
-        rel = path.resolve().relative_to(run_output)
-    except (ValueError, IndexError):
-        return None
-    parts = rel.parts  # (run_id, 'discovery', <maybe point>, ..., file)
-    if len(parts) < 3 or parts[1] != "discovery":
-        return None
-    # parts[2] is a point only if there is a further path component beneath it
-    # (i.e. it is a directory level above the filename), not the filename itself.
-    if len(parts) >= 4:
-        return parts[2]
-    return None
-
-
 def _is_frozen(run_id: str, as_of: Optional[str] = None) -> bool:
     """Return whether *run_id*'s discovery is frozen for the given scope.
 

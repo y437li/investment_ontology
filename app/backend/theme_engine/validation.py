@@ -998,12 +998,6 @@ def run_walk_forward_validation(run_id: str) -> dict:
     wf_config = config.get("walk_forward", {}) or {}
     sweep_config = config.get("sweep", {}) or {}
 
-    # OI-6 R1: prefer the manifest's authored point-list when present; the
-    # walk_forward config remains the fallback for legacy single-config runs.
-    as_of_dates_raw: list[str] = (
-        list(manifest.as_of_dates) if manifest.as_of_dates
-        else (wf_config.get("as_of_dates", []) or [])
-    )
     # min_points_for_claim from sweep section; fall back to walk_forward.min_snapshots.
     # OI-1 hard rule (defense-in-depth): never below 3 — a claim must rest on a
     # >=3-point panel regardless of config hygiene, so a misconfigured value of 1
@@ -1027,6 +1021,40 @@ def run_walk_forward_validation(run_id: str) -> dict:
 
     basket_top_n: int = int(config.get("basket_top_n", 10))
     random_seed: int = int(config.get("random_seed", 42))
+
+    # OI-6 R1: per-point walk-forward (each point evaluated against its OWN frozen
+    # discovery/<t_i>/) is the R2 loop. In R1 only a single point's discovery is
+    # populated, so running this single-basket panel across an authored multi-point
+    # manifest would evaluate earlier points t_i against the LATEST point's basket
+    # — injecting available_at > t_i composition into t_i (look-ahead leakage).
+    # Hard-guard: defer multi-point validation to R2 rather than leak. Single-point
+    # and legacy (as_of_dates unset) runs keep the OI-1 walk_forward behaviour below.
+    authored_points = sorted(
+        {str(p).strip()[:10] for p in (manifest.as_of_dates or []) if str(p).strip()}
+    )
+    if len(authored_points) > 1:
+        return {
+            "success": False,
+            "n_points": 0,
+            "min_points_for_claim": min_points_for_claim,
+            "claim_supported": False,
+            "illustrative": True,
+            "points": [],
+            "mean_excess": None,
+            "hit_rate": None,
+            "forward_window": forward_window,
+            "baseline": baseline_name,
+            "message": (
+                "Multi-point walk-forward validation is deferred to OI-6 R2 "
+                "(per-point discovery basket rebuild). R1 stores per-point layout "
+                "but does not yet drive per-point validation; refusing to evaluate "
+                f"{len(authored_points)} points against a single basket (look-ahead)."
+            ),
+        }
+
+    # Legacy / single-snapshot OI-1 walk-forward point-list (entry dates over the
+    # one frozen discovery snapshot).
+    as_of_dates_raw: list[str] = wf_config.get("as_of_dates", []) or []
 
     if not as_of_dates_raw:
         return {
