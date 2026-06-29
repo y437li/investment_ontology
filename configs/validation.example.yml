@@ -31,13 +31,17 @@ walk_forward:
   min_snapshot_gap_days: 28
 
 # Sweep config: parameters for run_walk_forward_validation panel execution.
-# forward_window: holding window applied at each as_of point.
+# forward_window: holding window applied at each as_of point (OI-7 LOCKED: 3M).
+# on_insufficient_coverage: policy when a point lacks full forward price coverage.
+#   "skip"   — the point is excluded from n_points and not measured (OI-7 LOCKED).
+#   "shrink" — not allowed; always skip.
 # baseline: benchmark used for per-point excess calculation.
 # min_points_for_claim: minimum valid points before claim_supported=true is emitted.
 #   Single-snapshot (n_points < min_points_for_claim) always yields illustrative=true,
 #   claim_supported=false. A claim requires a walk-forward panel with sufficient points.
 sweep:
-  forward_window: 1M
+  forward_window: 3M
+  on_insufficient_coverage: skip
   baseline: equal_weight_universe
   min_points_for_claim: 3
 

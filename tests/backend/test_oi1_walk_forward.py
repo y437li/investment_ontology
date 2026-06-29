@@ -315,23 +315,26 @@ def _write_market_prices(run_id: str, rows: list[dict]) -> None:
 
 
 def _wf_prices_spanning_3_points(company_id: str, run_id: str = "") -> list[dict]:
-    """Market prices spanning all 3 walk-forward as_of points (1M forward window each).
+    """Market prices spanning all 3 walk-forward as_of points with 3M forward window each.
+
+    Updated for OI-7 (sweep.forward_window=3M): each point's window extends 3 months
+    past its as_of date, so prices must cover the full 3M period for each point.
 
     Points:
-      - 2024-03-31: entry 2024-04-01 @ 100, exit 2024-04-30 @ 105  (+5%)
-      - 2024-06-30: entry 2024-07-01 @ 110, exit 2024-07-31 @ 116  (+5.45%)
-      - 2024-09-30: entry 2024-10-01 @ 120, exit 2024-10-31 @ 126  (+5%)
+      - 2024-03-31: entry 2024-04-01 @ 100, exit 2024-06-28 @ 105  (+5%)  window→2024-06-30
+      - 2024-06-30: entry 2024-07-01 @ 110, exit 2024-09-30 @ 116  (+5.45%) window→2024-09-30
+      - 2024-09-30: entry 2024-10-01 @ 120, exit 2024-12-31 @ 126  (+5%)  window→2024-12-31
     """
     return [
-        # Point 1: 2024-03-31 (entry after, exit within 1M window [2024-04-30])
+        # Point 1: 2024-03-31 (entry after, exit within 3M window [2024-06-30])
         _make_price_row(company_id, "2024-04-01", 100.0, 100.0, run_id=run_id),
-        _make_price_row(company_id, "2024-04-30", 105.0, 105.0, run_id=run_id),
-        # Point 2: 2024-06-30 (entry after, exit within 1M window [2024-07-31])
+        _make_price_row(company_id, "2024-06-28", 105.0, 105.0, run_id=run_id),
+        # Point 2: 2024-06-30 (entry after, exit within 3M window [2024-09-30])
         _make_price_row(company_id, "2024-07-01", 110.0, 110.0, run_id=run_id),
-        _make_price_row(company_id, "2024-07-31", 116.0, 116.0, run_id=run_id),
-        # Point 3: 2024-09-30 (entry after, exit within 1M window [2024-10-31])
+        _make_price_row(company_id, "2024-09-30", 116.0, 116.0, run_id=run_id),
+        # Point 3: 2024-09-30 (entry after, exit within 3M window [2024-12-31])
         _make_price_row(company_id, "2024-10-01", 120.0, 120.0, run_id=run_id),
-        _make_price_row(company_id, "2024-10-31", 126.0, 126.0, run_id=run_id),
+        _make_price_row(company_id, "2024-12-31", 126.0, 126.0, run_id=run_id),
     ]
 
 
