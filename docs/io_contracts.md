@@ -691,6 +691,17 @@ macro_linkage: float | null
 commodity_linkage: float | null
 ```
 
+Rules:
+
+- `strength` = average edge confidence (propagation_weight) over the community's structural
+  edges; in **[0, 1]**. Size-independent (does not scale with node/edge count).
+  This is the community-cohesion strength metric — distinct from `projected_impacts.strength`
+  which is `abs(aggregate)` ordinal rank (see §FI-C).
+- `momentum`, `birth_score`, `novelty` are `null` in single-snapshot runs (require
+  multi-period lineage).
+- `cohesion` = graph density of the community's structural subgraph; in [0, 1].
+- `saturation` = community size / total structural nodes; in [0, 1].
+
 ## 18. `company_theme_exposure.parquet`
 
 One row per company-theme pair.

@@ -160,9 +160,12 @@ def integrate_macro(run_id: str, universe_path: str | None = None) -> dict:
                 })
                 new_expl.append({
                     "schema_version": schema_version, "edge_id": eid,
+                    # io_contracts §11: metadata_inferred edges must carry source_record_id
+                    # in the explanation context so audit remains reconstructable.
                     "explanation": (f"{label} = {val_txt} ({snap['trend']} vs ~3mo prior, "
                                     f"as of {snap['obs_date']}); {sens['rationale']}. "
-                                    f"Source: macro series (point-in-time, vintage {as_of.isoformat()})."),
+                                    f"Source: macro series {spec['id']} "
+                                    f"(point-in-time, vintage {as_of.isoformat()})."),
                     "evidence_chunk_ids": [], "confidence": 0.6,
                     "generated_by": "macro_adapter", "created_at": as_of.isoformat(),
                 })
