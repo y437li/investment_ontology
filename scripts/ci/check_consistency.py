@@ -92,8 +92,13 @@ def main() -> int:
           "available_at` is mandatory" in read(SPEC), "missing in spec §6")
 
     # 7. LEAKAGE GUARD: no raw input/run/db/cache data committed (only .gitkeep).
+    # Reference data (e.g. data/lexicons/ — the Loughran-McDonald tone lexicon a
+    # code path depends on) is allowlisted: it is neither raw input nor run/cache
+    # data, and shipping it keeps CI hermetic (no download at test time).
+    _DATA_ALLOWLIST = ("data/lexicons/",)
     leaked = [f for f in git_tracked("data/")
-              if not f.endswith(".gitkeep") and "/.git" not in f]
+              if not f.endswith(".gitkeep") and "/.git" not in f
+              and not f.startswith(_DATA_ALLOWLIST)]
     check("no committed data/ payloads", not leaked, f"committed: {leaked}")
 
     # 8. Every OI in open_issues.md is dispatchable (Owner / Files / Acceptance).
