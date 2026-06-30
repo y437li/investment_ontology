@@ -145,6 +145,42 @@ def run_panel_validation(run_id: str) -> dict:
     return _json.loads(panel_path.read_text(encoding="utf-8"))
 
 
+@app.get("/api/runs/{run_id}/panel/lineage")
+def run_panel_lineage(run_id: str) -> dict:
+    """OI-6 R3b: read-only cross-point theme lineage (schema 2.0).
+
+    Returns the parsed panel/theme_lineage.json artifact (derived, NOT frozen),
+    written by discovery_panel.build_panel for a multi-point authored run.
+    404 if the panel has not been produced. Consumed by the R3b Vue UI.
+    """
+    import json as _json
+
+    lineage_path = runs.panel_dir(run_id) / "theme_lineage.json"
+    if not lineage_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"theme lineage not found for run {run_id}",
+        )
+    return _json.loads(lineage_path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/runs/{run_id}/panel/trajectories")
+def run_panel_trajectories(run_id: str) -> list[dict]:
+    """OI-6 R3b: read-only per-company cross-point exposure trajectories.
+
+    Reads panel/exposure_trajectories.parquet (derived, NOT frozen) and returns
+    it as JSON records, mirroring the parquet-serving pattern. 404 if the panel
+    has not been produced. Consumed by the R3b Vue UI.
+    """
+    traj_path = runs.panel_dir(run_id) / "exposure_trajectories.parquet"
+    if not traj_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"exposure trajectories not found for run {run_id}",
+        )
+    return artifacts_mod._parquet_to_records(traj_path)
+
+
 @app.post("/api/data/import", response_model=DataImportResponse)
 def import_data(req: DataImportRequest) -> DataImportResponse:
     _guard_not_frozen(req.run_id)

@@ -6,6 +6,7 @@ import ImportView from '../views/ImportView.vue'
 import GraphView from '../views/GraphView.vue'
 import ThemesView from '../views/ThemesView.vue'
 import ValidationView from '../views/ValidationView.vue'
+import PanelView from '../views/PanelView.vue'
 import ReportView from '../views/ReportView.vue'
 import InteractionView from '../views/InteractionView.vue'
 import CompanyView from '../views/CompanyView.vue'
@@ -50,6 +51,13 @@ const routes = [
     path: '/runs/:runId/validation',
     name: 'Validation',
     component: ValidationView,
+    props: true
+  },
+  {
+    // OI-6 R3b: multi-period panel (lineage, exposure trajectories, validation)
+    path: '/runs/:runId/panel',
+    name: 'Panel',
+    component: PanelView,
     props: true
   },
   {
