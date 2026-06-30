@@ -560,6 +560,44 @@ def test_pit_future_chunk_dropped():
     assert rows == [], f"Expected empty sentiment table for future chunk; got: {rows}"
 
 
+def test_pit_empty_available_at_chunk_dropped_fail_closed():
+    """A chunk with an EMPTY available_at must yield zero records (fail-closed, OI-8).
+
+    A missing/empty available_at cannot prove the chunk was knowable at as_of, so
+    it must be EXCLUDED — not silently included (the old fail-open bug)."""
+    pre_records = [
+        SentimentRecord(
+            company_id="ACME",
+            speaker_role="management",
+            direction="positive",
+            confidence_tone="high",
+            hedging=False,
+            forward_stance="optimistic",
+            evidence_chunk_id="",
+            confidence=0.90,
+        )
+    ]
+    run_id, discovery = _make_run_with_tone(
+        chunk_text="Acme Corp management: strong results ahead.",
+        chunk_company_id="ACME",
+        available_at="",             # EMPTY available_at -> fail-closed exclude
+        as_of_date="2024-12-31",
+        document_type="earnings_transcript",
+        section_title="MD&A",
+        speaker_role="management",
+    )
+
+    count = run_sentiment_extraction(
+        run_id, sentiment_extractor=FakeSentimentExtractor(pre_records)
+    )
+    assert count == 0, (
+        f"Expected 0 records from an empty-available_at chunk; got {count}. "
+        "Fail-closed PIT must drop chunks with missing available_at."
+    )
+    rows = pq.read_table(discovery / "management_sentiment.parquet").to_pylist()
+    assert rows == [], f"Expected empty sentiment table for empty-available_at chunk; got: {rows}"
+
+
 # ---------------------------------------------------------------------------
 # 7. LEXICON-GROUNDING: lexicon_hits populated when tone data present
 # ---------------------------------------------------------------------------

@@ -52,6 +52,11 @@ class RunManifest(BaseModel):
     created_at: str
     code_version: str
     input_hash: str
+    # io_contracts §2 required manifest fields (safe defaults; populated at create).
+    schema_version: str = "1.0"
+    validation_mode: str = "single_snapshot"
+    sweep_id: Optional[str] = None
+    sweep_position: Optional[int] = None
     # Forward-compatible: set by later milestones, present from creation.
     discovery_frozen: bool = False
     discovery_artifact_hashes: Optional[dict[str, str]] = None

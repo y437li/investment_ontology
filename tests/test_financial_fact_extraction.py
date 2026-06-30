@@ -500,6 +500,40 @@ def test_pit_future_chunk_dropped():
     assert rows == [], f"Expected empty metrics table for future chunk; got: {rows}"
 
 
+def test_pit_empty_available_at_chunk_dropped_fail_closed():
+    """A chunk with an EMPTY available_at must yield zero claims (fail-closed, OI-8).
+
+    A missing/empty available_at cannot prove the chunk was knowable at as_of, so
+    it must be EXCLUDED — not silently included (the old fail-open bug)."""
+    claim_that_should_not_emit = QuantifiedClaim(
+        company_id="ACME",
+        metric_name="revenue",
+        value=7.0,
+        unit="CAD_billions",
+        period="Q1 2024",
+        direction="",
+        is_guidance=False,
+        evidence_chunk_id="",
+        confidence=0.9,
+    )
+    run_id, discovery = _make_run(
+        chunk_text="Acme Corp revenue was $7 billion in Q1 2024.",
+        chunk_company_id="ACME",
+        available_at="",            # EMPTY available_at -> fail-closed exclude
+        as_of_date="2024-12-31",
+    )
+
+    count = run_fact_extraction(
+        run_id, fact_extractor=FakeFactExtractor([claim_that_should_not_emit])
+    )
+    assert count == 0, (
+        f"Expected 0 claims from an empty-available_at chunk; got {count}. "
+        "Fail-closed PIT must drop chunks with missing available_at."
+    )
+    rows = pq.read_table(discovery / "financial_metrics.parquet").to_pylist()
+    assert rows == [], f"Expected empty metrics table for empty-available_at chunk; got: {rows}"
+
+
 # ---------------------------------------------------------------------------
 # 6. Period normalizer unit tests
 # ---------------------------------------------------------------------------

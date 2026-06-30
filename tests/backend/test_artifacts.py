@@ -235,6 +235,43 @@ def test_traversal_encoded_returns_400():
 
 
 # ---------------------------------------------------------------------------
+# (f2) run_id path traversal -> 400 (audit CLUSTER A)
+# ---------------------------------------------------------------------------
+
+
+def test_run_id_traversal_dotdot_returns_400():
+    """A run_id of '..' (percent-decoded by Starlette) must not escape the run dir."""
+    from theme_engine.artifacts import serve_artifact
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        serve_artifact(run_id="..", artifact_name="graph.json")
+    assert exc_info.value.status_code == 400
+
+    # Also reject embedded traversal and separators.
+    for bad_run_id in ["../../etc", "a/b", "..\\..\\windows", "/abs"]:
+        with pytest.raises(HTTPException) as exc_info:
+            serve_artifact(run_id=bad_run_id, artifact_name="graph.json")
+        assert exc_info.value.status_code == 400, bad_run_id
+
+
+def test_run_id_traversal_resolve_path_guarded():
+    """_resolve_artifact_path also rejects a traversal run_id (defence-in-depth)."""
+    from theme_engine.artifacts import _resolve_artifact_path
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        _resolve_artifact_path("..", "graph.json")
+    assert exc_info.value.status_code == 400
+
+
+def test_run_id_traversal_encoded_via_http_not_200():
+    """Percent-encoded '..' run_id over HTTP must never serve content."""
+    resp = client.get("/api/artifacts/%2e%2e/graph.json")
+    assert resp.status_code in {400, 404, 422}, resp.status_code
+
+
+# ---------------------------------------------------------------------------
 # (g) Missing run -> 404
 # ---------------------------------------------------------------------------
 

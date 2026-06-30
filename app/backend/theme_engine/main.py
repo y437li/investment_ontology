@@ -147,6 +147,7 @@ def run_panel_validation(run_id: str) -> dict:
 
 @app.post("/api/data/import", response_model=DataImportResponse)
 def import_data(req: DataImportRequest) -> DataImportResponse:
+    _guard_not_frozen(req.run_id)
     raw_documents, quarantined, quarantine_reasons = data_import.import_manifest(
         run_id=req.run_id,
         documents_dir=req.documents_dir,
@@ -164,6 +165,7 @@ def import_data(req: DataImportRequest) -> DataImportResponse:
 
 @app.post("/api/data/clean", response_model=DataCleanResponse)
 def clean_data(req: DataCleanRequest) -> DataCleanResponse:
+    _guard_not_frozen(req.run_id)
     included, quarantined, quarantine_reasons = data_cleaning.clean_documents(
         run_id=req.run_id,
         documents_dir=req.documents_dir,
@@ -183,6 +185,7 @@ def clean_data(req: DataCleanRequest) -> DataCleanResponse:
 
 @app.post("/api/data/chunk", response_model=DataChunkResponse)
 def chunk_data(req: DataChunkRequest) -> DataChunkResponse:
+    _guard_not_frozen(req.run_id)
     chunk_count = chunking.chunk_documents(run_id=req.run_id)
     return DataChunkResponse(
         success=True,
@@ -194,6 +197,7 @@ def chunk_data(req: DataChunkRequest) -> DataChunkResponse:
 
 @app.post("/api/extraction/run", response_model=ExtractionRunResponse)
 def extraction_run(req: ExtractionRunRequest) -> ExtractionRunResponse:
+    _guard_not_frozen(req.run_id)
     entity_count, edge_count = extraction.run_extraction(run_id=req.run_id)
     return ExtractionRunResponse(
         success=True,
@@ -210,6 +214,7 @@ def extraction_run(req: ExtractionRunRequest) -> ExtractionRunResponse:
 
 @app.post("/api/extraction/resolve", response_model=ExtractionResolveResponse)
 def extraction_resolve(req: ExtractionResolveRequest) -> ExtractionResolveResponse:
+    _guard_not_frozen(req.run_id)
     alias_count = entity_resolution.resolve_entities(run_id=req.run_id)
     return ExtractionResolveResponse(
         success=True,
@@ -265,6 +270,7 @@ def altdata_integrate(req: GraphBuildRequest):
 
 @app.post("/api/graph/build", response_model=GraphBuildResponse)
 def graph_build_endpoint(req: GraphBuildRequest) -> GraphBuildResponse:
+    _guard_not_frozen(req.run_id)
     node_count, edge_count = graph_build.build_graph(run_id=req.run_id)
     return GraphBuildResponse(
         success=True,
@@ -586,6 +592,7 @@ def provenance_materialize(req: GraphBuildRequest):
 
     Must be called AFTER /api/exposure/compute.
     """
+    _guard_not_frozen(req.run_id)
     try:
         result = provenance_mod.materialize_provenance(req.run_id)
     except HTTPException:

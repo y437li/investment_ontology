@@ -186,14 +186,14 @@ def get_company_sentiment(run_id: str, company_id: str, as_of: str | None = None
 
     all_rows = _load_parquet(fused_path)
 
-    # Filter to this company + PIT gate (defence-in-depth re-gate)
+    # Filter to this company + PIT gate (defence-in-depth re-gate).
+    # Fail-closed (OI-8): a row with a missing/empty available_at cannot be proven
+    # knowable at as_of, so it is EXCLUDED (never treated as always-available).
     company_rows = [
         r for r in all_rows
         if r.get("company_id") == company_id
-        and (
-            not _to_date_str(r.get("available_at"))
-            or _to_date_str(r.get("available_at")) <= as_of
-        )
+        and _to_date_str(r.get("available_at"))
+        and _to_date_str(r.get("available_at")) <= as_of
     ]
 
     if not company_rows:

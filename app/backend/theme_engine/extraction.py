@@ -1906,8 +1906,10 @@ def run_fact_extraction(
         if not chunk_id or not text:
             continue
 
-        # PIT filter: skip chunks not yet available as of run date.
-        if available_at and available_at > as_of_date:
+        # PIT filter (fail-closed, OI-8): skip chunks not yet available as of the
+        # run date AND chunks with a missing/empty available_at (cannot prove the
+        # chunk was knowable at as_of, so it must be excluded).
+        if not available_at or available_at > as_of_date:
             continue
 
         result = fact_extractor.extract_facts(chunk_id=chunk_id, chunk_text=text)
@@ -2732,8 +2734,10 @@ def run_sentiment_extraction(
         if not chunk_id or not text:
             continue
 
-        # PIT filter: skip chunks not yet available as of run date.
-        if available_at and available_at > as_of_date:
+        # PIT filter (fail-closed, OI-8): skip chunks not yet available as of the
+        # run date AND chunks with a missing/empty available_at (cannot prove the
+        # chunk was knowable at as_of, so it must be excluded).
+        if not available_at or available_at > as_of_date:
             continue
 
         # Enrich chunk with pre-computed speaker_role from SENT-A (if available)

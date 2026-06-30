@@ -257,14 +257,19 @@ def _coerce_scalar(v: str) -> Any:
 def _load_market_prices(run_id: str) -> list[dict]:
     """Load market_prices.parquet from the validation/ directory.
 
-    This is FUTURE data. Must only be called after freeze gate passes.
+    This is FUTURE data. Must only be called after the freeze gate passes.
+
+    Routed through ``run_cache.load_parquet_rows`` so the OI-3 pre-freeze read
+    guard is enforced: validation/ artifacts cannot be read before discovery is
+    frozen (``LeakageError`` is raised otherwise).  A direct ``pq.read_table``
+    would bypass that boundary.
     """
+    from . import run_cache  # local import avoids circular dependency at load time
+
     prices_path = runs.get_run_dir(run_id) / runs.VALIDATION_DIR / "market_prices.parquet"
     if not prices_path.exists():
         return []
-    table = pq.read_table(prices_path)
-    rows = table.to_pylist()
-    return rows
+    return run_cache.load_parquet_rows(prices_path)
 
 
 def _apply_leakage_filter(
@@ -278,7 +283,8 @@ def _apply_leakage_filter(
     Keeps only rows where:
       - price_date is STRICTLY > as_of_date   (no leak at entry)
       - price_date is <= window_end           (within the holding window)
-      - available_at is not in the future relative to price_date  (no restatement leak)
+      - available_at is PRESENT and not in the future relative to price_date
+        (rows with a future or missing available_at fail-closed; no restatement leak)
 
     ``window_start`` and ``window_end`` are computed from as_of_date + holding window.
     ``as_of_date`` is the snapshot cutoff; ``window_start == as_of_date + 1 day`` logically,
@@ -295,11 +301,13 @@ def _apply_leakage_filter(
         # Within holding window
         if pd > window_end:
             continue
-        # Availability guard: available_at must be <= price_date
-        # (a row whose available_at > price_date is a restated/backfilled row
-        #  and must NOT be treated as if known at price_date)
+        # Availability guard (fail-closed, OI-8): available_at must be present AND
+        # <= price_date.  A row whose available_at > price_date is a
+        # restated/backfilled row; a row with a MISSING/empty available_at cannot
+        # be proven knowable at price_date.  Both must be EXCLUDED — never treated
+        # as if known at price_date.
         av = _to_date(row.get("available_at"))
-        if av is not None and av > pd:
+        if av is None or av > pd:
             continue
         filtered.append(row)
     return filtered

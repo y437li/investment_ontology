@@ -145,10 +145,13 @@ def get_company_profile(run_id: str, company_id: str, as_of: str | None = None) 
     fundamentals_available = fundamentals_path.exists()
     fund_rows_all: list[dict] = _load_parquet(fundamentals_path)
     # Filter to this company + PIT gate
+    # PIT gate (fail-closed, OI-8): a row with a missing/empty available_at cannot
+    # be proven knowable at as_of, so it is EXCLUDED (never treated as available).
     fund_rows = [
         r for r in fund_rows_all
         if r.get("company_id") == company_id
-        and (_to_date_str(r.get("available_at")) <= as_of if r.get("available_at") else True)
+        and _to_date_str(r.get("available_at"))
+        and _to_date_str(r.get("available_at")) <= as_of
     ]
     fund_rows_clean: list[dict] = [
         {

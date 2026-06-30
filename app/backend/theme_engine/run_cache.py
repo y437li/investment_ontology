@@ -93,7 +93,14 @@ _DEFAULT_MAX_ENTRIES: int = 256
 # transition (False → True, never back), so we only store True permanently.
 # Per-point freeze means one run can have point A frozen and point B not, so a
 # run-keyed permanent-True is unsafe — the key carries the point.
-_frozen_status_cache: dict[tuple[str, Optional[str]], bool] = {}
+#
+# Thread-safety + bounds: accessed by multiple request threads, so a dedicated
+# lock (distinct from the _RunCache lock) guards every read/write/clear, and the
+# cache is a bounded LRU (OrderedDict) so it cannot grow without limit.  The
+# "once frozen, permanently True" semantics are preserved within the cap.
+_FROZEN_CACHE_MAX: int = 4096
+_frozen_status_cache: "OrderedDict[tuple[str, Optional[str]], bool]" = OrderedDict()
+_frozen_lock: Lock = Lock()
 
 
 def _get_run_id_from_path(path: Path) -> Optional[str]:
@@ -122,10 +129,12 @@ def _is_frozen(run_id: str, as_of: Optional[str] = None) -> bool:
     given ``(run_id, as_of)`` scope it is cached permanently (freeze is one-way).
     """
     key = (run_id, as_of)
-    if _frozen_status_cache.get(key) is True:
-        return True
+    with _frozen_lock:
+        if _frozen_status_cache.get(key) is True:
+            _frozen_status_cache.move_to_end(key)  # LRU touch
+            return True
 
-    # Cache miss — load manifest
+    # Cache miss — load manifest (outside the lock; disk I/O must not block peers)
     from . import runs as _runs  # local import to avoid circular at module level
 
     manifest = _runs.load_manifest(run_id)
@@ -138,7 +147,12 @@ def _is_frozen(run_id: str, as_of: Optional[str] = None) -> bool:
         frozen = as_of in (manifest.discovery_frozen_points or {})
 
     if frozen:
-        _frozen_status_cache[key] = True
+        with _frozen_lock:
+            _frozen_status_cache[key] = True
+            _frozen_status_cache.move_to_end(key)
+            # Bounded LRU: drop oldest entries once over the cap.
+            while len(_frozen_status_cache) > _FROZEN_CACHE_MAX:
+                _frozen_status_cache.popitem(last=False)
         return True
     return False
 
@@ -177,7 +191,8 @@ def clear_frozen_cache() -> None:
     Useful in tests that create and freeze runs in the same session so the
     cache does not carry stale state between test cases.
     """
-    _frozen_status_cache.clear()
+    with _frozen_lock:
+        _frozen_status_cache.clear()
 
 
 # --------------------------------------------------------------------------- #

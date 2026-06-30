@@ -381,6 +381,45 @@ def test_sentiment_pit_filter():
     assert data["readings"][0]["evidence_chunk_id"] == "chunk_early"
 
 
+def test_sentiment_empty_available_at_excluded_fail_closed():
+    """A fused row with an EMPTY available_at is EXCLUDED (fail-closed, OI-8).
+
+    The old gate treated a missing available_at as always-available (fail-open);
+    a row that cannot be proven knowable at as_of must now be dropped."""
+    as_of = "2024-06-30"
+    run_id = _build_minimal_run(
+        as_of=as_of,
+        chunk_rows=[
+            {
+                "schema_version": "1.0",
+                "run_id": "dummy",
+                "chunk_id": "chunk_noavail",
+                "document_id": "doc_001",
+                "raw_document_id": "raw_001",
+                "text": "Chunk text.",
+                "available_at": "2024-05-01",
+                "section_title": None,
+                "block_type": "paragraph",
+            },
+        ],
+        fused_rows=[
+            _make_fused_row(
+                evidence_chunk_id="chunk_noavail",
+                available_at="",             # EMPTY -> exclude (fail-closed)
+            ),
+        ],
+    )
+
+    resp = client.get(f"/api/themes/{run_id}/companies/ent_co1/sentiment")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    assert data["available"] is False
+    assert data["readings"] == [], (
+        "A fused row with empty available_at must be excluded (fail-closed)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # 5. AGREEMENT_FIELDS
 # ---------------------------------------------------------------------------

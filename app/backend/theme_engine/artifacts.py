@@ -68,6 +68,27 @@ def _reject_traversal(artifact_name: str) -> None:
         )
 
 
+def _reject_run_id_traversal(run_id: str) -> None:
+    """Raise 400 if run_id looks like a traversal attempt (audit: path traversal).
+
+    ``run_id`` is a single directory component under ``run_output_dir``.  Starlette
+    percent-decodes path params (``%2e%2e`` -> ``..``), so a malicious run_id like
+    ``..`` could escape the run dir via ``run_output_dir / run_id``.  Reject any
+    run_id containing ``..``, a path separator, or an absolute-path prefix.
+    """
+    if (
+        ".." in run_id
+        or run_id.startswith("/")
+        or run_id.startswith("\\")
+        or "/" in run_id
+        or "\\" in run_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid run_id: {run_id!r}",
+        )
+
+
 def _resolve_artifact_path(run_id: str, artifact_name: str,
                            as_of: str | None = None) -> Path:
     """Return the absolute path to the artifact inside the run directory.
@@ -80,6 +101,7 @@ def _resolve_artifact_path(run_id: str, artifact_name: str,
     ``as_of`` (defaulting to the latest point, falling back to the flat dir for
     legacy single-point runs).
     """
+    _reject_run_id_traversal(run_id)
     run_dir = settings.run_output_dir / run_id
     if not run_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
@@ -140,6 +162,7 @@ def serve_artifact(run_id: str, artifact_name: str, as_of: str | None = None):
 
     Returns a FastAPI response object (JSONResponse or PlainTextResponse).
     """
+    _reject_run_id_traversal(run_id)
     _reject_traversal(artifact_name)
 
     # Normalise: strip leading 'discovery/' or 'validation/' to get the bare name
