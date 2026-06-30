@@ -173,3 +173,29 @@ def test_discovery_writers_blocked_after_freeze():
         resp = client.post(route, json={"run_id": run_id})
         assert resp.status_code == 409, f"{route} should be 409 when frozen, got {resp.status_code}"
         assert "frozen" in resp.text.lower()
+
+
+def test_discovery_required_writers_blocked_after_freeze():
+    """Required-artifact discovery writers (import/clean/chunk/extraction/graph/
+    provenance) are also rejected with 409 once the run is frozen — they overwrite
+    frozen+hashed artifacts and would break the hash gate (audit CLUSTER B)."""
+    run = client.post("/api/runs/create", json={"as_of_date": "2024-06-30"}).json()
+    run_id = run["run_id"]
+    _seed_discovery_artifacts(run_id)
+    assert client.post("/api/discovery/freeze", json={"run_id": run_id}).status_code == 200
+
+    # Each of these endpoints WRITES required discovery artifacts; all must 409.
+    cases = [
+        ("/api/data/import",
+         {"run_id": run_id, "documents_dir": "x", "source_manifest_path": "y"}),
+        ("/api/data/clean", {"run_id": run_id}),
+        ("/api/data/chunk", {"run_id": run_id}),
+        ("/api/extraction/run", {"run_id": run_id}),
+        ("/api/extraction/resolve", {"run_id": run_id}),
+        ("/api/graph/build", {"run_id": run_id}),
+        ("/api/provenance/materialize", {"run_id": run_id}),
+    ]
+    for route, payload in cases:
+        resp = client.post(route, json=payload)
+        assert resp.status_code == 409, f"{route} should be 409 when frozen, got {resp.status_code}: {resp.text}"
+        assert "frozen" in resp.text.lower()

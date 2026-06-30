@@ -329,6 +329,12 @@ def create_run(req: RunCreateRequest) -> RunManifest:
     as_of_dates = req.as_of_dates or None
     as_of_date = as_of_dates[-1] if as_of_dates else req.as_of_date
 
+    # io_contracts §2: a multi-point authored run is a walk-forward validation;
+    # a single/legacy point is a single_snapshot run.
+    validation_mode = (
+        "walk_forward" if (as_of_dates and len(as_of_dates) > 1) else "single_snapshot"
+    )
+
     manifest = RunManifest(
         run_id=run_id,
         as_of_date=as_of_date,
@@ -338,6 +344,7 @@ def create_run(req: RunCreateRequest) -> RunManifest:
         created_at=_utc_now_iso(),
         code_version=_code_version(),
         input_hash=_input_hash([universe, pipeline, validation]),
+        validation_mode=validation_mode,
         discovery_frozen=False,
         sweep_parent_id=req.sweep_parent_id,
         as_of_dates=as_of_dates,

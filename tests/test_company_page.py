@@ -516,6 +516,40 @@ def test_fundamentals_pit_filter():
     assert rows[0]["metric_value"] == 50.0
 
 
+def test_fundamentals_empty_available_at_excluded_fail_closed():
+    """A fundamentals row with an EMPTY available_at is EXCLUDED (fail-closed, OI-8).
+
+    A missing available_at cannot prove the row was knowable at as_of, so it must
+    not be returned (the old behaviour silently included such rows)."""
+    as_of = "2024-06-30"
+    run_id = _build_minimal_run(
+        as_of=as_of,
+        fund_rows=[
+            {   # No available_at -> must be EXCLUDED (fail-closed)
+                "company_id": "ent_co1",
+                "period_end": "2024-03-31",
+                "metric_name": "revenue",
+                "metric_value": 50.0,
+                "unit": "CAD_billions",
+                "currency": "CAD",
+                "filing_date": "2024-05-01",
+                "available_at": "",             # EMPTY -> exclude
+                "source": "edgar_xbrl",
+                "source_id": "x001",
+            },
+        ]
+    )
+
+    resp = client.get(f"/api/themes/{run_id}/companies/ent_co1")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    assert data["fundamentals"]["rows"] == [], (
+        "A row with empty available_at must be excluded (fail-closed)."
+    )
+    assert data["fundamentals"]["available"] is False
+
+
 # ---------------------------------------------------------------------------
 # 4. EVIDENCE_BY_THEME: no cross-theme bleed (company in >=2 themes)
 # ---------------------------------------------------------------------------

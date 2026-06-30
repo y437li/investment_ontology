@@ -513,6 +513,52 @@ def test_availability_guard_excludes_restated_future_prices():
     )
 
 
+def test_leakage_filter_excludes_empty_available_at_fail_closed():
+    """A price row with a MISSING/empty available_at is EXCLUDED (fail-closed, OI-8).
+
+    The old availability guard skipped only rows with available_at > price_date,
+    silently INCLUDING rows whose available_at was empty/None. Such a row cannot
+    be proven knowable at price_date and must now be dropped."""
+    as_of = AS_OF
+    window_end = _add_months(as_of, 1)  # 2024-07-30
+
+    # In-window price (2024-07-15) but NO available_at -> must be excluded.
+    rows_no_avail = [
+        {"company_id": "c1", "price_date": "2024-07-15",
+         "close": 100.0, "adjusted_close": 100.0, "available_at": None},
+    ]
+    assert _apply_leakage_filter(rows_no_avail, as_of, as_of, window_end) == [], (
+        "A row with empty available_at must be excluded (fail-closed)."
+    )
+
+    # Sanity: an identical row WITH a valid available_at is kept.
+    rows_with_avail = [
+        {"company_id": "c1", "price_date": "2024-07-15",
+         "close": 100.0, "adjusted_close": 100.0, "available_at": "2024-07-15"},
+    ]
+    kept = _apply_leakage_filter(rows_with_avail, as_of, as_of, window_end)
+    assert len(kept) == 1
+
+
+def test_market_prices_read_blocked_before_freeze_via_run_cache():
+    """_load_market_prices routes through run_cache, so reading validation/ data
+    before discovery is frozen raises LeakageError (audit CLUSTER C5)."""
+    from theme_engine.validation import _load_market_prices
+    from theme_engine.leakage import LeakageError
+    from theme_engine import run_cache
+
+    run_id = _make_run(AS_OF_DATE)
+    company_id, _, _, _ = _seed_minimal_discovery(run_id)
+    # Seed validation/market_prices.parquet but do NOT freeze.
+    prices = [_make_price_row(company_id, "2024-07-01", 100.0, 100.0, run_id=run_id)]
+    _write_market_prices(run_id, prices)
+    run_cache.clear()
+    run_cache.clear_frozen_cache()
+
+    with pytest.raises(LeakageError):
+        _load_market_prices(run_id)
+
+
 # ---------------------------------------------------------------------------
 # (a) Baskets reproducible + conform to io_contracts §21
 # ---------------------------------------------------------------------------
