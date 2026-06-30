@@ -11,16 +11,18 @@ Three responsibilities:
    rule-based when no LLM env), per-point freeze, then ``build_panel``.
 
 2. ``build_panel`` — write the run-level panel artifacts:
-   - ``panel/theme_lineage.json``       (concept-spine lineage, schema 2.0)
+   - ``panel/theme_lineage.json``       (company-membership lineage, schema 2.1)
    - ``panel/exposure_trajectories.parquet`` (per-company cross-point)
    - ``panel/panel_summary.json``       (cached summary read by the endpoint)
 
 3. ``panel_summary`` — read-only ``PanelSummary`` (cached or recomputed live).
 
-Lineage is the deterministic ``concept_spine_jaccard_v1`` matcher: theme
-identity is tracked by the community concept spine (OI-5: EconomicConcept,
-Commodity, MacroIndicator, Event entity ids), NOT by company membership.
-No randomness, no LLM.
+Lineage is the deterministic ``company_membership_jaccard_v2`` matcher over
+SUBSTANTIVE themes only (``_is_substantive``: size >= 3 with >= 1 company).
+Cross-point identity is the set of MEMBER COMPANIES: independent per-point
+re-extraction makes concept ids/names drift (so concept-set Jaccard collapses),
+but company membership is stable, so company overlap reliably links the same
+theme across points. No randomness, no LLM.
 
 Hermetic: with no LLM env the extraction stage uses the rule-based extractor
 (``extraction.build_default_extractor``) — no network.
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -50,15 +53,31 @@ from . import (
     concept_resolution,
     runs,
     themes,
+    theme_hierarchy as theme_hierarchy_mod,
 )
 from .exposure import EXPOSURE_COLUMNS
 
 # Lineage constants (concept_spine_jaccard_v1)
-LINEAGE_METHOD = "concept_spine_jaccard_v1"
-LINEAGE_MODE = "multi_point_concept_spine"
-LINEAGE_SCHEMA_VERSION = "2.0"
-MATCH_THRESHOLD = 0.5  # tau
+LINEAGE_METHOD = "company_membership_jaccard_v2"
+LINEAGE_MODE = "multi_point_company_membership"
+LINEAGE_SCHEMA_VERSION = "2.1"
+MATCH_THRESHOLD = 0.5  # tau (company-membership Jaccard)
 REVIVE_THRESHOLD = 0.5  # tau_revive
+
+# Substantive-theme gate. Raw communities.json contains many single-entity
+# communities (Louvain singletons over a sparse graph) that swamp the lineage
+# timeline and trajectories with one-off noise. The panel (lineage, trajectories,
+# per-point theme_count) operates on SUBSTANTIVE themes only: a community that
+# binds >= MIN_SUBSTANTIVE_SIZE nodes AND has at least one company member.
+MIN_SUBSTANTIVE_SIZE = 3
+
+
+def _is_substantive(comm: dict) -> bool:
+    """True if a community is a real theme (not singleton noise)."""
+    size = comm.get("size")
+    if size is None:
+        size = len(comm.get("node_ids", []))
+    return size >= MIN_SUBSTANTIVE_SIZE and bool(comm.get("top_companies"))
 
 TRAJECTORY_SCHEMA_VERSION = "1.0"
 SUMMARY_SCHEMA_VERSION = "1.0"
@@ -151,6 +170,15 @@ def run_panel(
         exposure_mod.compute_exposure(
             run_id, include_weak_signals=include_weak_signals, as_of=t_i
         )
+        # Main-theme hierarchy (LLM grouping into <=7 main themes) — built BEFORE
+        # freeze so the frontend landing has main themes for every point. Gated on
+        # an LLM being configured and best-effort, so the loop stays hermetic in
+        # tests (no LLM_API_KEY -> skipped instantly, no network).
+        if os.environ.get("LLM_API_KEY"):
+            try:
+                theme_hierarchy_mod.build_hierarchy(run_id, as_of=t_i)
+            except Exception as exc:  # noqa: BLE001 - hierarchy is optional
+                print(f"[panel] hierarchy skipped for {t_i}: {exc}", flush=True)
         provenance_mod.materialize_provenance(run_id, as_of=t_i)
         freeze_mod.freeze_discovery(run_id, as_of=t_i)
 
@@ -276,7 +304,15 @@ def _spine_lineage(run_id: str) -> dict:
             cid = comm.get("community_id")
             if not cid:
                 continue
-            spine = frozenset(comm.get("concept_spine", []))
+            if not _is_substantive(comm):
+                continue  # skip singleton/noise communities
+            # Cross-point identity = COMPANY membership. Independent per-point
+            # re-extraction makes concept ids/names drift (diluting concept-set
+            # Jaccard), but the set of member companies is stable, so company
+            # overlap is what reliably links the same theme across points.
+            spine = frozenset(
+                str(c).strip().lower() for c in comm.get("top_companies", []) if c
+            )
             nodes[(i, cid)] = {
                 "point_idx": i,
                 "as_of": p,
@@ -459,9 +495,9 @@ def _spine_lineage(run_id: str) -> dict:
         first_seen = points[first_idx]
         last_seen = points[last_idx]
 
-        spine_union: set = set()
+        member_companies: set = set()
         for m in members:
-            spine_union |= nodes[m]["spine"]
+            member_companies |= nodes[m]["spine"]
 
         # theme_name: label at last present point (member with min community_id).
         last_members = sorted(
@@ -503,7 +539,7 @@ def _spine_lineage(run_id: str) -> dict:
                 "theme_name": theme_name,
                 "first_seen": first_seen,
                 "last_seen": last_seen,
-                "concept_spine_union": sorted(spine_union),
+                "member_companies": sorted(member_companies),
                 "states_by_point": states,
                 "snapshots": snapshots,
             }
@@ -540,11 +576,6 @@ def _build_trajectories(run_id: str, lineage: dict) -> list[dict]:
     nodes: dict = lineage["_nodes"]
     point_index = {p: i for i, p in enumerate(lineage["points"])}
 
-    # Synthetic-singleton fallback for any community not in the lineage map.
-    def _synthetic_family(as_of: str, cid: str, snap_id: str) -> str:
-        basis = f"family:{run_id}:{snap_id or (as_of + ':' + cid)}"
-        return "family_" + hashlib.sha256(basis.encode("utf-8")).hexdigest()[:8]
-
     rows: list[dict] = []
     for as_of in lineage["points"]:
         i = point_index[as_of]
@@ -554,11 +585,10 @@ def _build_trajectories(run_id: str, lineage: dict) -> list[dict]:
             fid = family_by_node.get(key)
             lin = lineage_by_node.get(key)
             if fid is None:
-                snap_id = er.get("theme_snapshot_id") or ""
-                fid = _synthetic_family(as_of, cid, snap_id)
-                lifecycle = "emerged"
-            else:
-                lifecycle = lin["lifecycle_event"] if lin else "emerged"
+                # Community not in the substantive lineage (singleton/noise) —
+                # excluded from trajectories so the panel tracks real themes only.
+                continue
+            lifecycle = lin["lifecycle_event"] if lin else "emerged"
             rows.append(
                 {
                     "schema_version": TRAJECTORY_SCHEMA_VERSION,
@@ -628,7 +658,10 @@ def _compute_points_summary(run_id: str, manifest) -> list[dict]:
     for p in runs.list_as_of_points(run_id):
         comm_doc = _read_communities(run_id, p)
         present = comm_doc is not None
-        theme_count = len(comm_doc.get("communities", [])) if present else 0
+        theme_count = (
+            sum(1 for c in comm_doc.get("communities", []) if _is_substantive(c))
+            if present else 0
+        )
         pair_count = len(_read_exposure_rows(run_id, p))
         out.append(
             {

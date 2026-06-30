@@ -4,9 +4,9 @@ Hermetic (rule-based extractor, no network):
   - test_loop_produces_per_point_discovery: run_panel drives a 2-point loop;
     each point's discovery/<as_of>/ is isolated (PIT-gated corpus) and carries
     the correct as_of_date; the run-level flag flips once both points freeze.
-  - test_concept_spine_lineage_links_theme_across_points: a theme family spans
-    T1+T2 via shared concept spine even though point-local community_ids differ
-    and company membership changes; lifecycle persisted, confidence >= 0.5.
+  - test_company_membership_lineage_links_theme_across_points: a theme family
+    spans T1+T2 via shared COMPANY membership even though point-local community_ids
+    differ and the binding concept changes; lifecycle persisted, confidence >= 0.5.
   - test_exposure_trajectory_per_company: two ordered rows per (family, company)
     across as_of with differing exposure_score.
 """
@@ -194,12 +194,34 @@ def test_loop_produces_per_point_discovery(tmp_path: Path):
     assert (runs.panel_dir(rid) / "panel_summary.json").exists()
 
 
-def test_concept_spine_lineage_links_theme_across_points():
+def test_is_substantive_filters_singletons():
+    """A theme is substantive only if size >= 3 AND it has >= 1 company."""
+    assert discovery_panel._is_substantive(
+        {"size": 3, "top_companies": ["c1"]}
+    ) is True
+    # too small
+    assert discovery_panel._is_substantive(
+        {"size": 2, "top_companies": ["c1"]}
+    ) is False
+    # big but no company member -> not a theme (concept-only cluster)
+    assert discovery_panel._is_substantive(
+        {"size": 9, "top_companies": []}
+    ) is False
+    # size derived from node_ids when 'size' absent
+    assert discovery_panel._is_substantive(
+        {"node_ids": ["a", "b", "c"], "top_companies": ["c1"]}
+    ) is True
+    assert discovery_panel._is_substantive(
+        {"node_ids": ["a"], "top_companies": ["c1"]}
+    ) is False
+
+
+def test_company_membership_lineage_links_theme_across_points():
     run_cache.clear()
     run = runs.create_run(RunCreateRequest(as_of_date=T2, as_of_dates=[T1, T2]))
     rid = run.run_id
 
-    # T1: one community with spine {ec1}, companies {c1, c2}.
+    # T1: one substantive community with companies {c1, c2} bound by concept ec1.
     _seed_point(
         rid, T1,
         [_ent("c1", "Company"), _ent("c2", "Company"),
@@ -207,38 +229,39 @@ def test_concept_spine_lineage_links_theme_across_points():
         [_edge("e1", "c1", "ec1", "exposed_to"),
          _edge("e2", "c2", "ec1", "exposed_to")],
     )
-    # T2: a decoy community (eca) is seeded FIRST so the shared-spine community
-    # lands at a DIFFERENT point-local index (community_001) than at T1
-    # (community_000).  Company membership also changes (c2 -> c5) to prove the
-    # link is by concept spine, not by company membership.
+    # T2: a decoy community (companies a3,a4) is seeded FIRST so the continuing
+    # community lands at a DIFFERENT point-local index than at T1.  The continuing
+    # community keeps the SAME companies {c1, c2} but binds them via a DIFFERENT
+    # concept (ec2, not ec1) — proving the cross-point link is by COMPANY
+    # membership, not by concept spine (which drifts under per-point re-extraction).
     _seed_point(
         rid, T2,
         [_ent("a3", "Company"), _ent("a4", "Company"),
          _ent("eca", "EconomicConcept"),
-         _ent("c1", "Company"), _ent("c5", "Company"),
-         _ent("ec1", "EconomicConcept")],
+         _ent("c1", "Company"), _ent("c2", "Company"),
+         _ent("ec2", "EconomicConcept")],
         [_edge("e3", "a3", "eca", "exposed_to"),
          _edge("e4", "a4", "eca", "exposed_to"),
-         _edge("e1", "c1", "ec1", "exposed_to"),
-         _edge("e5", "c5", "ec1", "exposed_to")],
+         _edge("e1", "c1", "ec2", "exposed_to"),
+         _edge("e5", "c2", "ec2", "exposed_to")],
     )
 
     discovery_panel.build_panel(rid)
     lineage = json.loads(
         (runs.panel_dir(rid) / "theme_lineage.json").read_text()
     )
-    assert lineage["schema_version"] == "2.0"
-    assert lineage["lineage_mode"] == "multi_point_concept_spine"
-    assert lineage["method"] == "concept_spine_jaccard_v1"
+    assert lineage["schema_version"] == "2.1"
+    assert lineage["lineage_mode"] == "multi_point_company_membership"
+    assert lineage["method"] == "company_membership_jaccard_v2"
 
-    # Find the family whose spine is {ec1} and that spans both points.
+    # Find the family whose member companies are {c1, c2} spanning both points.
     fam = next(
         f for f in lineage["families"]
-        if f["concept_spine_union"] == ["ec1"]
+        if f["member_companies"] == ["c1", "c2"]
         and {s["as_of_date"] for s in f["snapshots"]} == {T1, T2}
     )
     snaps_by_point = {s["as_of_date"]: s for s in fam["snapshots"]}
-    # Point-local community_ids DIFFER across points, but the spine matches.
+    # Point-local community_ids DIFFER across points, but companies match.
     assert snaps_by_point[T1]["community_id"] != snaps_by_point[T2]["community_id"]
     assert snaps_by_point[T1]["theme_snapshot_id"] != snaps_by_point[T2]["theme_snapshot_id"]
     assert fam["states_by_point"][T1] == "emerged"
