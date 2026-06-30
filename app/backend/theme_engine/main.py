@@ -21,6 +21,7 @@ from .models import (
     FreezeResponse,
     ValidationRunRequest,
     ValidationRunResponse,
+    WalkForwardValidationResponse,
     RunManifest,
     RunStatus,
     PanelSummary,
@@ -123,6 +124,25 @@ def run_panel_summary(run_id: str) -> PanelSummary:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return PanelSummary(**data)
+
+
+@app.get("/api/runs/{run_id}/panel/validation")
+def run_panel_validation(run_id: str) -> dict:
+    """OI-6 R3a: read-only per-point out-of-sample validation panel.
+
+    Returns the parsed panel/validation_panel.json artifact (derived, NOT frozen),
+    produced by run_walk_forward_validation for a multi-point authored run.
+    404 if the panel has not been produced. Consumed by the R3b Vue UI.
+    """
+    import json as _json
+
+    panel_path = runs.panel_dir(run_id) / validation_mod.VALIDATION_PANEL_FILENAME
+    if not panel_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"validation panel not found for run {run_id}",
+        )
+    return _json.loads(panel_path.read_text(encoding="utf-8"))
 
 
 @app.post("/api/data/import", response_model=DataImportResponse)
@@ -514,6 +534,40 @@ def validation_run(req: ValidationRunRequest) -> ValidationRunResponse:
         as_of_date=result.get("as_of_date"),
         holding_window=result.get("holding_window"),
         required_end=result.get("required_end"),
+    )
+
+
+@app.post("/api/validation/walk-forward", response_model=WalkForwardValidationResponse)
+def validation_walk_forward(req: ValidationRunRequest) -> WalkForwardValidationResponse:
+    """OI-6 R3a: per-point out-of-sample walk-forward validation.
+
+    Multi-point authored runs are evaluated genuinely point-by-point: each point
+    is scored against its OWN frozen discovery/<t_i>/ basket over the OI-7 3M
+    forward window with PIT prices. Writes the derived panel/validation_panel.json.
+
+    Precondition (OI-3): every authored point's discovery must be frozen and
+    hash-matched (enforced by validate_ready_for_validation).
+    """
+    try:
+        result = validation_mod.run_walk_forward_validation(req.run_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (PermissionError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    return WalkForwardValidationResponse(
+        success=result.get("success", False),
+        n_points=result.get("n_points", 0),
+        min_points_for_claim=result.get("min_points_for_claim", 3),
+        claim_supported=result.get("claim_supported", False),
+        illustrative=result.get("illustrative", True),
+        mean_excess=result.get("mean_excess"),
+        hit_rate=result.get("hit_rate"),
+        forward_window=result.get("forward_window", "3M"),
+        baseline=result.get("baseline", "equal_weight_universe"),
+        points=result.get("points", []),
+        panel_artifact=result.get("panel_artifact"),
+        message=result.get("message"),
     )
 
 

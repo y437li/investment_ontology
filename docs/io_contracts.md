@@ -1181,6 +1181,66 @@ Rules:
 - Do not suppress negative results.
 - Each row must link to a reproducible `basket_id` in `portfolio_baskets.parquet`.
 
+## 22a. `validation_panel.json` (OI-6 R3a)
+
+Per-point out-of-sample walk-forward validation panel.
+
+- **Path:** `<run_dir>/panel/validation_panel.json` (written via
+  `runs.panel_dir(run_id, for_write=True)`; a sibling of `panel/theme_lineage.json`,
+  `panel/exposure_trajectories.parquet`, `panel/panel_summary.json`).
+- **Derived, NOT frozen:** the panel is recomputed from the frozen per-point
+  discovery artifacts and is never added to `REQUIRED_DISCOVERY_ARTIFACTS` or any
+  hash gate (consistent with the R2 panel).
+- **Post-freeze only:** produced solely by `run_walk_forward_validation` for a
+  multi-point authored run, after `validate_ready_for_validation` confirms every
+  authored point's `discovery/<t_i>/` is frozen and hash-matched. Because it lives
+  under `panel/` (not `validation/`), it is not subject to the `validation/`
+  pre-freeze read guard, yet it is still only written post-freeze.
+
+Semantics: genuine out-of-sample. Each authored point `t_i` is scored against its
+OWN frozen `discovery/<t_i>/` basket over the OI-7 3-month forward window with
+skip-not-shrink coverage and PIT prices (`price_date` strictly `> t_i`). No loader
+is ever called with another point's `as_of` (anti-look-ahead invariant).
+
+Top-level fields:
+
+```text
+schema_version       string  "1.0"
+run_id               string
+forward_window       string  e.g. "3M"
+baseline             string  e.g. "equal_weight_universe"
+coverage_policy      string  "skip"
+min_points_for_claim int     >= 3 (defense-in-depth floor)
+n_points             int     count of covered/valid points (excess != null)
+n_points_authored    int     len(manifest.as_of_dates)
+mean_excess          float|null  mean per-point excess over valid points
+hit_rate             float|null  fraction of valid points with excess > 0
+claim_supported      bool    n_points >= min_points_for_claim
+illustrative         bool    not claim_supported
+generated_at         string  ISO timestamp
+points               array   per-point objects (ascending as_of)
+```
+
+Per-point object (`points[]`):
+
+```text
+as_of           string  "YYYY-MM-DD"
+window_end      string|null  _add_months(as_of, 3); null if unparseable date
+basket_return   float|null   theme aggregate equal-weight forward return (PIT)
+baseline_return float|null
+excess          float|null   basket_return - baseline_return (null if either null/skipped)
+covered         bool    true iff the point had >=3M forward coverage AND returns computed
+skipped         bool    true iff excluded from n_points
+skipped_reason  string|null  e.g. "insufficient_forward_coverage: ...",
+                             "unparseable_date: ...", "discovery_load_failed: ..."
+```
+
+The same per-point list (under `points`) plus `panel_artifact =
+"panel/validation_panel.json"` is mirrored in the `run_walk_forward_validation`
+return dict. The R3b Vue UI consumes `GET /api/runs/{run_id}/panel/validation`,
+which returns the parsed panel (404 if absent). The driving endpoint is
+`POST /api/validation/walk-forward`.
+
 ## 23. `report.md`
 
 Required sections:

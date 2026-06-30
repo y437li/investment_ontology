@@ -162,6 +162,27 @@ class ValidationRunResponse(BaseModel):
     required_end: Optional[str] = None
 
 
+class WalkForwardValidationResponse(BaseModel):
+    """OI-6 R3a: per-point out-of-sample walk-forward validation result.
+
+    Returned by POST /api/validation/walk-forward. ``points`` mirrors the
+    per-point entries of the derived panel/validation_panel.json artifact.
+    """
+
+    success: bool
+    n_points: int
+    min_points_for_claim: int
+    claim_supported: bool
+    illustrative: bool
+    mean_excess: Optional[float] = None
+    hit_rate: Optional[float] = None
+    forward_window: str
+    baseline: str
+    points: list[dict]
+    panel_artifact: Optional[str] = None
+    message: Optional[str] = None
+
+
 class PanelPoint(BaseModel):
     """OI-6 R2: per-point summary inside a PanelSummary."""
 
