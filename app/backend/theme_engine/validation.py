@@ -63,6 +63,10 @@ from . import runs
 
 SCHEMA_VERSION = "1.0"
 
+# OI-6 R3a: per-point out-of-sample validation panel (derived, NOT frozen).
+VALIDATION_PANEL_SCHEMA_VERSION = "1.0"
+VALIDATION_PANEL_FILENAME = "validation_panel.json"
+
 # io_contracts §21 columns (exact order)
 BASKET_COLUMNS: list[str] = [
     "schema_version",
@@ -965,6 +969,213 @@ def _write_validation_csv(rows: list[dict], out_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _run_multipoint_walk_forward(
+    run_id: str,
+    manifest: Any,
+    authored_points: list[str],
+    *,
+    all_price_rows: list[dict],
+    forward_window: str,
+    win_months: int,
+    baseline_name: str,
+    basket_top_n: int,
+    random_seed: int,
+    min_points_for_claim: int,
+    coverage_policy: str,
+) -> dict:
+    """OI-6 R3a: genuine per-point out-of-sample walk-forward evaluation.
+
+    Iterates ``authored_points`` (ascending). Each point ``t_i`` is scored against
+    its OWN frozen ``discovery/<t_i>/`` basket over the OI-7 forward window with
+    skip-not-shrink coverage and PIT prices (``price_date`` strictly > ``t_i``).
+
+    Anti-look-ahead invariant: every discovery read for point ``t_i`` passes
+    ``as_of=t_i``; no loader is ever called with ``as_of=None``, another point's
+    date, or ``manifest.as_of_date``. The single shared market_prices load is fine
+    because the PIT boundary is enforced per point at ``_compute_basket_return``.
+
+    Writes a derived (NOT frozen) per-point panel artifact to
+    ``panel/validation_panel.json`` and returns the pooled panel dict.
+    """
+    points: list[dict] = []
+    for t_i in authored_points:
+        # 1. Parse the point.
+        try:
+            as_of_pt = date.fromisoformat(t_i[:10])
+        except ValueError:
+            points.append({
+                "as_of": t_i,
+                "window_end": None,
+                "basket_return": None,
+                "baseline_return": None,
+                "excess": None,
+                "covered": False,
+                "skipped": True,
+                "skipped_reason": f"unparseable_date: {t_i!r}",
+            })
+            continue
+
+        window_end = _add_months(as_of_pt, win_months)
+
+        # 2. Load THIS point's frozen discovery (as_of=t_i routes to discovery/<t_i>/).
+        # Defensive: a corrupt/missing per-point artifact records the point as
+        # covered=False rather than aborting the whole panel.
+        try:
+            exposure_rows_i = _load_exposure(run_id, as_of=t_i)
+            snapshots_i = _load_theme_snapshots(run_id, as_of=t_i)
+            entities_i = _load_entities(run_id, as_of=t_i)
+        except (ValueError, FileNotFoundError) as exc:
+            points.append({
+                "as_of": t_i,
+                "window_end": window_end.isoformat(),
+                "basket_return": None,
+                "baseline_return": None,
+                "excess": None,
+                "covered": False,
+                "skipped": True,
+                "skipped_reason": f"discovery_load_failed: {exc}",
+            })
+            continue
+
+        # 3. Build THIS point's basket (as_of_date=t_i, NOT manifest.as_of_date).
+        basket_rows_i = _build_theme_baskets(
+            run_id=run_id,
+            as_of_date=t_i,
+            exposure_rows=exposure_rows_i,
+            snapshots=snapshots_i,
+            basket_top_n=basket_top_n,
+        )
+
+        # 4. Per-point universe + aggregate basket from THIS point only.
+        universe_company_ids_i = sorted(
+            {str(r.get("company_id") or "") for r in exposure_rows_i if r.get("company_id")}
+        )
+        agg_company_ids_i = sorted(
+            {str(r.get("company_id") or "") for r in basket_rows_i if r.get("company_id")}
+        )
+        agg_weights_i = {cid: 1.0 for cid in agg_company_ids_i}
+
+        # 6. OI-7 coverage gate (skip-not-shrink); window is never clamped.
+        if not _check_forward_coverage(all_price_rows, as_of_pt, window_end):
+            points.append({
+                "as_of": t_i,
+                "window_end": window_end.isoformat(),
+                "basket_return": None,
+                "baseline_return": None,
+                "excess": None,
+                "covered": False,
+                "skipped": True,
+                "skipped_reason": (
+                    f"insufficient_forward_coverage: requires max(price_date) >= "
+                    f"{window_end.isoformat()} for {forward_window} window; "
+                    f"coverage_policy=skip"
+                ),
+            })
+            continue
+
+        # 7. Theme basket return (PIT: price_date strictly > as_of_pt).
+        if agg_company_ids_i:
+            theme_ret, _, _, _ = _compute_basket_return(
+                agg_company_ids_i, agg_weights_i, all_price_rows, as_of_pt, window_end
+            )
+        else:
+            theme_ret = None
+
+        # 8. Baseline return computed from THIS point's universe/entities.
+        if baseline_name == "equal_weight_universe":
+            baseline_ret, _ = _compute_equal_weight_universe_return(
+                all_price_rows, as_of_pt, window_end, universe_company_ids_i
+            )
+        elif baseline_name == "sector_equal_weight":
+            baseline_ret, _, _ = _compute_sector_equal_weight_return(
+                all_price_rows, as_of_pt, window_end, universe_company_ids_i, entities_i
+            )
+        elif baseline_name == "random_community_baseline":
+            baseline_ret, _ = _compute_random_community_baseline(
+                all_price_rows, as_of_pt, window_end,
+                universe_company_ids_i, basket_top_n, random_seed,
+            )
+        else:
+            baseline_ret = None
+
+        # 9. Excess.
+        excess: Optional[float] = None
+        if theme_ret is not None and baseline_ret is not None:
+            excess = theme_ret - baseline_ret
+
+        # 10. Covered record.
+        points.append({
+            "as_of": t_i,
+            "window_end": window_end.isoformat(),
+            "basket_return": theme_ret,
+            "baseline_return": baseline_ret,
+            "excess": excess,
+            "covered": True,
+            "skipped": False,
+            "skipped_reason": None,
+        })
+
+    # --- Pooled stats (covered/valid points only) ---
+    valid_points = [p for p in points if p["excess"] is not None]
+    n_points = len(valid_points)
+
+    mean_excess: Optional[float] = None
+    hit_rate: Optional[float] = None
+    if valid_points:
+        excesses = [p["excess"] for p in valid_points]
+        mean_excess = sum(excesses) / len(excesses)
+        hit_rate = sum(1 for e in excesses if e > 0) / len(excesses)
+
+    claim_supported: bool = n_points >= min_points_for_claim
+    illustrative: bool = not claim_supported
+
+    n_points_authored = len(manifest.as_of_dates or [])
+
+    # --- Per-point validation panel artifact (derived, NOT frozen) ---
+    generated_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    panel_doc = {
+        "schema_version": VALIDATION_PANEL_SCHEMA_VERSION,
+        "run_id": run_id,
+        "forward_window": forward_window,
+        "baseline": baseline_name,
+        "coverage_policy": "skip",
+        "min_points_for_claim": min_points_for_claim,
+        "n_points": n_points,
+        "n_points_authored": n_points_authored,
+        "mean_excess": mean_excess,
+        "hit_rate": hit_rate,
+        "claim_supported": claim_supported,
+        "illustrative": illustrative,
+        "generated_at": generated_at,
+        "points": points,
+    }
+    panel_path = runs.panel_dir(run_id, for_write=True) / VALIDATION_PANEL_FILENAME
+    panel_path.write_text(json.dumps(panel_doc, indent=2), encoding="utf-8")
+    panel_artifact = f"{runs.PANEL_DIR}/{VALIDATION_PANEL_FILENAME}"
+
+    status = "SUPPORTED" if claim_supported else "ILLUSTRATIVE"
+    message = (
+        f"Per-point walk-forward panel: {n_points}/{len(authored_points)} valid "
+        f"points. Claim {status} (n_points={n_points}, "
+        f"min_points_for_claim={min_points_for_claim})."
+    )
+
+    return {
+        "success": True,
+        "n_points": n_points,
+        "min_points_for_claim": min_points_for_claim,
+        "claim_supported": claim_supported,
+        "illustrative": illustrative,
+        "points": points,
+        "mean_excess": mean_excess,
+        "hit_rate": hit_rate,
+        "forward_window": forward_window,
+        "baseline": baseline_name,
+        "panel_artifact": panel_artifact,
+        "message": message,
+    }
+
+
 def run_walk_forward_validation(run_id: str) -> dict:
     """Execute walk-forward panel validation across config's as_of_dates (OI-1 §22).
 
@@ -1022,35 +1233,26 @@ def run_walk_forward_validation(run_id: str) -> dict:
     basket_top_n: int = int(config.get("basket_top_n", 10))
     random_seed: int = int(config.get("random_seed", 42))
 
-    # OI-6 R1: per-point walk-forward (each point evaluated against its OWN frozen
-    # discovery/<t_i>/) is the R2 loop. In R1 only a single point's discovery is
-    # populated, so running this single-basket panel across an authored multi-point
-    # manifest would evaluate earlier points t_i against the LATEST point's basket
-    # — injecting available_at > t_i composition into t_i (look-ahead leakage).
-    # Hard-guard: defer multi-point validation to R2 rather than leak. Single-point
-    # and legacy (as_of_dates unset) runs keep the OI-1 walk_forward behaviour below.
+    # OI-6 R3a: per-point out-of-sample walk-forward. A multi-point authored run
+    # is evaluated genuinely point-by-point: each point t_i is scored against its
+    # OWN frozen discovery/<t_i>/ basket over the OI-7 3M forward window with
+    # PIT prices (price_date strictly > t_i). validate_ready_for_validation has
+    # already verified every authored point is frozen and hash-matched, so the
+    # per-point loop can rely on each discovery/<t_i>/ being present and intact.
+    # Single-point and legacy (as_of_dates unset) runs keep the OI-1 walk_forward
+    # behaviour below.
     authored_points = sorted(
         {str(p).strip()[:10] for p in (manifest.as_of_dates or []) if str(p).strip()}
     )
     if len(authored_points) > 1:
-        return {
-            "success": False,
-            "n_points": 0,
-            "min_points_for_claim": min_points_for_claim,
-            "claim_supported": False,
-            "illustrative": True,
-            "points": [],
-            "mean_excess": None,
-            "hit_rate": None,
-            "forward_window": forward_window,
-            "baseline": baseline_name,
-            "message": (
-                "Multi-point walk-forward validation is deferred to OI-6 R2 "
-                "(per-point discovery basket rebuild). R1 stores per-point layout "
-                "but does not yet drive per-point validation; refusing to evaluate "
-                f"{len(authored_points)} points against a single basket (look-ahead)."
-            ),
-        }
+        return _run_multipoint_walk_forward(
+            run_id, manifest, authored_points,
+            all_price_rows=_load_market_prices(run_id),
+            forward_window=forward_window, win_months=_window_months(forward_window),
+            baseline_name=baseline_name, basket_top_n=basket_top_n,
+            random_seed=random_seed, min_points_for_claim=min_points_for_claim,
+            coverage_policy=coverage_policy,
+        )
 
     # Legacy / single-snapshot OI-1 walk-forward point-list (entry dates over the
     # one frozen discovery snapshot).

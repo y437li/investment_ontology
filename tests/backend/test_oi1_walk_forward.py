@@ -28,8 +28,18 @@ from fastapi.testclient import TestClient
 
 from theme_engine.config import settings
 from theme_engine.main import app
-from theme_engine import runs
+from theme_engine import (
+    exposure as exposure_mod,
+    freeze as freeze_mod,
+    graph_build,
+    runs,
+    themes,
+)
+from theme_engine.extraction import ENTITIES_COLUMNS, EDGES_COLUMNS
+from theme_engine.models import RunCreateRequest
 from theme_engine.validation import (
+    VALIDATION_PANEL_FILENAME,
+    VALIDATION_PANEL_SCHEMA_VERSION,
     _add_months,
     _compute_basket_return,
     run_validation,
@@ -336,6 +346,70 @@ def _wf_prices_spanning_3_points(company_id: str, run_id: str = "") -> list[dict
         _make_price_row(company_id, "2024-10-01", 120.0, 120.0, run_id=run_id),
         _make_price_row(company_id, "2024-12-31", 126.0, 126.0, run_id=run_id),
     ]
+
+
+# ---------------------------------------------------------------------------
+# OI-6 R3a: per-point discovery seeding (parseable per-point artifacts)
+# ---------------------------------------------------------------------------
+
+
+def _ent(eid: str, etype: str, first_seen: str = "2024-01-01") -> dict:
+    r = {c: "" for c in ENTITIES_COLUMNS}
+    r.update(
+        entity_id=eid, entity_type=etype, name=eid, canonical_name=eid,
+        first_seen_at=first_seen, confidence="0.9",
+        extraction_method="document_stated", review_status="accepted",
+    )
+    return r
+
+
+def _edge(eid: str, src: str, tgt: str, etype: str = "exposed_to",
+          first_seen: str = "2024-01-01", confidence: str = "0.9") -> dict:
+    r = {c: "" for c in EDGES_COLUMNS}
+    r.update(
+        edge_id=eid, source_entity_id=src, target_entity_id=tgt,
+        edge_type=etype, first_seen_at=first_seen, confidence=confidence,
+        extraction_method="document_stated",
+    )
+    return r
+
+
+def _seed_minimal_discovery_point(
+    run_id: str,
+    as_of: str,
+    *,
+    companies: list[str],
+    concept: str = "ec_wf",
+) -> None:
+    """Write parseable per-point discovery into discovery/<as_of>/ (OI-6 R3a).
+
+    Mirrors test_oi6_r2_panel_loop._seed_point: write entities/edges parquet then
+    drive graph_build -> themes -> exposure for that point so the point has a real,
+    distinct, parseable composition. Each company in ``companies`` is exposed to a
+    shared concept; exposure rows carry company_id == entity_id.
+    """
+    ents = [_ent(c, "Company") for c in companies] + [_ent(concept, "EconomicConcept")]
+    edges = [
+        _edge(f"edge_{as_of}_{c}", c, concept, "exposed_to", first_seen=as_of)
+        for c in companies
+    ]
+    d = runs.discovery_point_dir(run_id, as_of, for_write=True)
+    pq.write_table(pa.Table.from_pylist(ents), d / "entities.parquet")
+    pq.write_table(pa.Table.from_pylist(edges), d / "edges.parquet")
+    graph_build.build_graph(run_id, as_of=as_of)
+    themes.discover_themes(run_id, as_of=as_of)
+    exposure_mod.compute_exposure(run_id, as_of=as_of)
+    # Upstream ingest artifacts are stubs here; freeze only requires their presence
+    # (their bytes are hashed but not read by validation).
+    for name in (
+        "raw_documents.parquet",
+        "documents.parquet",
+        "document_cleaning_log.parquet",
+        "chunks.parquet",
+        "entity_aliases.parquet",
+    ):
+        if not (d / name).exists():
+            (d / name).write_bytes(b"stub")
 
 
 # ---------------------------------------------------------------------------
@@ -721,31 +795,233 @@ def test_walk_forward_requires_freeze_gate():
         run_walk_forward_validation(run_id)
 
 
-def test_walk_forward_multipoint_run_deferred_to_r2_no_leak():
-    """OI-6 R1: a multi-point authored run must NOT be evaluated as a single
-    latest-point basket across earlier points (look-ahead leakage). R1 defers
-    per-point validation to R2 and returns an illustrative deferral instead.
-    """
-    from theme_engine import freeze as freeze_mod
-    from theme_engine.models import RunCreateRequest
+def test_walk_forward_multipoint_run_evaluates_per_point():
+    """OI-6 R3a: a multi-point authored run is evaluated genuinely per-point.
 
-    t1, t2 = "2024-03-31", "2024-06-30"
-    run = runs.create_run(RunCreateRequest(as_of_date=t1, as_of_dates=[t1, t2]))
+    Each authored point t_i is scored against its OWN frozen discovery/<t_i>/
+    basket over the 3M forward window. No deferral; success=True; per-point
+    results; claim_supported gated on n_points >= min_points_for_claim.
+    """
+    t1, t2, t3 = WF_POINT_1, WF_POINT_2, WF_POINT_3
+    run = runs.create_run(RunCreateRequest(as_of_date=t3, as_of_dates=[t1, t2, t3]))
     run_id = run.run_id
-    for as_of in (t1, t2):
-        d = runs.discovery_point_dir(run_id, as_of, for_write=True)
-        for name in runs.REQUIRED_DISCOVERY_ARTIFACTS:
-            (d / name).write_text(f"seed-{as_of}-{name}", encoding="utf-8")
-        freeze_mod.freeze_discovery(run_id, as_of=as_of)
+
+    for as_of in (t1, t2, t3):
+        _seed_minimal_discovery_point(run_id, as_of, companies=["c1"])
+    _write_market_prices(run_id, _wf_prices_spanning_3_points("c1", run_id=run_id))
+    runs.freeze_all_points(run_id)
 
     result = run_walk_forward_validation(run_id)
 
-    assert result["success"] is False
-    assert result["illustrative"] is True
-    assert result["claim_supported"] is False
-    assert result["n_points"] == 0
-    assert result["points"] == []
-    assert "R2" in result["message"]
+    assert result["success"] is True, f"Expected success: {result}"
+    assert "R2" not in (result.get("message") or "")
+    covered = [p for p in result["points"] if p.get("covered")]
+    assert len(covered) == 3, f"Expected 3 covered points: {result['points']}"
+    valid = [p for p in result["points"] if p.get("excess") is not None]
+    assert result["n_points"] == len(valid)
+    assert {p["as_of"] for p in result["points"]} == {t1, t2, t3}
+    assert result["claim_supported"] == (
+        result["n_points"] >= result["min_points_for_claim"]
+    )
+
+
+def test_multipoint_authored_run_oos_panel_uses_per_point_discovery():
+    """3-point run, all covered: per-point OOS panel + artifact with schema."""
+    t1, t2, t3 = WF_POINT_1, WF_POINT_2, WF_POINT_3
+    run = runs.create_run(RunCreateRequest(as_of_date=t3, as_of_dates=[t1, t2, t3]))
+    run_id = run.run_id
+
+    for as_of in (t1, t2, t3):
+        _seed_minimal_discovery_point(run_id, as_of, companies=["c1"])
+    _write_market_prices(run_id, _wf_prices_spanning_3_points("c1", run_id=run_id))
+    runs.freeze_all_points(run_id)
+
+    result = run_walk_forward_validation(run_id)
+
+    assert result["success"] is True
+    assert result["n_points"] >= 3
+    assert {p["as_of"] for p in result["points"]} == {t1, t2, t3}
+
+    valid = [p for p in result["points"] if p.get("excess") is not None]
+    for pt in valid:
+        assert pt["as_of"] in {t1, t2, t3}
+        assert pt["basket_return"] is not None
+        assert pt["baseline_return"] is not None
+        expected_excess = pt["basket_return"] - pt["baseline_return"]
+        assert abs(pt["excess"] - expected_excess) < 1e-9
+
+    # Pooled stats arithmetically consistent.
+    excesses = [p["excess"] for p in valid]
+    assert abs(result["mean_excess"] - sum(excesses) / len(excesses)) < 1e-9
+    expected_hit = sum(1 for e in excesses if e > 0) / len(excesses)
+    assert abs(result["hit_rate"] - expected_hit) < 1e-9
+
+    # Panel artifact exists with documented schema.
+    panel_path = runs.panel_dir(run_id) / VALIDATION_PANEL_FILENAME
+    assert panel_path.exists(), "validation_panel.json not written"
+    assert result["panel_artifact"] == f"panel/{VALIDATION_PANEL_FILENAME}"
+    doc = json.loads(panel_path.read_text(encoding="utf-8"))
+    assert doc["schema_version"] == VALIDATION_PANEL_SCHEMA_VERSION
+    assert doc["run_id"] == run_id
+    assert doc["forward_window"] == "3M"
+    assert doc["coverage_policy"] == "skip"
+    assert doc["min_points_for_claim"] >= 3
+    assert doc["n_points"] == result["n_points"]
+    assert doc["n_points_authored"] == 3
+    assert doc["claim_supported"] == result["claim_supported"]
+    assert doc["illustrative"] == result["illustrative"]
+    assert "generated_at" in doc
+    assert len(doc["points"]) == 3
+    for pt in doc["points"]:
+        for key in ("as_of", "window_end", "basket_return", "baseline_return",
+                    "excess", "covered", "skipped", "skipped_reason"):
+            assert key in pt, f"panel point missing {key}: {pt}"
+
+
+def test_multipoint_each_point_uses_its_own_discovery_not_latest():
+    """Anti-leakage: T1's basket derives from T1's company, T2's from T2's.
+
+    T1 discovery has company A only (prices only in T1's window); T2 discovery has
+    company B only (prices only in T2's window). If T1 had (wrongly) used the
+    latest (T2) basket of company B, T1's return would be None (B has no price in
+    T1's window). Proves no cross-point bleed.
+    """
+    t1, t2 = WF_POINT_1, WF_POINT_2
+    run = runs.create_run(RunCreateRequest(as_of_date=t2, as_of_dates=[t1, t2]))
+    run_id = run.run_id
+
+    _seed_minimal_discovery_point(run_id, t1, companies=["companyA"])
+    _seed_minimal_discovery_point(run_id, t2, companies=["companyB"])
+
+    prices = [
+        # company A: only inside T1's window [>2024-03-31, <=2024-06-30]
+        _make_price_row("companyA", "2024-04-01", 100.0, 100.0, run_id=run_id),
+        _make_price_row("companyA", "2024-06-28", 105.0, 105.0, run_id=run_id),
+        # company B: only inside T2's window [>2024-06-30, <=2024-09-30]
+        _make_price_row("companyB", "2024-07-01", 110.0, 110.0, run_id=run_id),
+        _make_price_row("companyB", "2024-09-30", 116.0, 116.0, run_id=run_id),
+    ]
+    _write_market_prices(run_id, prices)
+    runs.freeze_all_points(run_id)
+
+    result = run_walk_forward_validation(run_id)
+    assert result["success"] is True
+
+    p1 = next(p for p in result["points"] if p["as_of"] == t1)
+    p2 = next(p for p in result["points"] if p["as_of"] == t2)
+
+    # T1 basket return derives from company A (100 -> 105 = +5%).
+    assert p1["basket_return"] is not None
+    assert abs(p1["basket_return"] - (105.0 - 100.0) / 100.0) < 1e-6
+    # T2 basket return derives from company B (110 -> 116 ≈ +5.45%).
+    assert p2["basket_return"] is not None
+    assert abs(p2["basket_return"] - (116.0 - 110.0) / 110.0) < 1e-6
+    # The two returns differ -> each point used its own discovery, not a shared one.
+    assert p1["basket_return"] != p2["basket_return"]
+
+    # Counter-proof: company B (the latest basket) has NO price in T1's window,
+    # so substituting it for T1 would have yielded None, not +5%.
+    win_end_t1 = _add_months(date.fromisoformat(t1), 3)
+    ret_if_leaked, _, _, _ = _compute_basket_return(
+        ["companyB"], {"companyB": 1.0}, prices, date.fromisoformat(t1), win_end_t1
+    )
+    assert ret_if_leaked is None
+
+
+def test_multipoint_point_with_insufficient_forward_coverage_is_skipped():
+    """3-point run where T3's [T3, T3+3M] window lacks prices -> T3 skipped.
+
+    skip-not-shrink: T3 has covered=False/excess=None with an
+    insufficient_forward_coverage reason and is excluded from n_points; T1/T2 valid.
+    """
+    t1, t2, t3 = WF_POINT_1, WF_POINT_2, WF_POINT_3
+    run = runs.create_run(RunCreateRequest(as_of_date=t3, as_of_dates=[t1, t2, t3]))
+    run_id = run.run_id
+
+    for as_of in (t1, t2, t3):
+        _seed_minimal_discovery_point(run_id, as_of, companies=["c1"])
+
+    # Prices cover T1 and T2 windows but stop at 2024-09-30, so T3's window
+    # (ending 2024-12-31) is NOT covered.
+    prices = [
+        _make_price_row("c1", "2024-04-01", 100.0, 100.0, run_id=run_id),
+        _make_price_row("c1", "2024-06-28", 105.0, 105.0, run_id=run_id),
+        _make_price_row("c1", "2024-07-01", 110.0, 110.0, run_id=run_id),
+        _make_price_row("c1", "2024-09-30", 116.0, 116.0, run_id=run_id),
+    ]
+    _write_market_prices(run_id, prices)
+    runs.freeze_all_points(run_id)
+
+    result = run_walk_forward_validation(run_id)
+    assert result["success"] is True
+    assert result["n_points"] == 2, f"Expected 2 valid points: {result['points']}"
+
+    p3 = next(p for p in result["points"] if p["as_of"] == t3)
+    assert p3["covered"] is False
+    assert p3["excess"] is None
+    assert "insufficient_forward_coverage" in (p3["skipped_reason"] or "")
+    # skip-not-shrink: T3 window_end stays at +3M (never clamped to coverage).
+    assert p3["window_end"] == _add_months(date.fromisoformat(t3), 3).isoformat()
+
+    for pt in (t1, t2):
+        p = next(x for x in result["points"] if x["as_of"] == pt)
+        assert p["excess"] is not None
+
+
+def test_multipoint_claim_supported_iff_n_points_ge_min():
+    """claim_supported is True iff n_points >= min_points_for_claim (>=3 floor)."""
+    # Setup A: 3 covered points -> claim_supported True, illustrative False.
+    t1, t2, t3 = WF_POINT_1, WF_POINT_2, WF_POINT_3
+    run_a = runs.create_run(RunCreateRequest(as_of_date=t3, as_of_dates=[t1, t2, t3]))
+    rid_a = run_a.run_id
+    for as_of in (t1, t2, t3):
+        _seed_minimal_discovery_point(rid_a, as_of, companies=["c1"])
+    _write_market_prices(rid_a, _wf_prices_spanning_3_points("c1", run_id=rid_a))
+    runs.freeze_all_points(rid_a)
+
+    res_a = run_walk_forward_validation(rid_a)
+    assert res_a["n_points"] == 3
+    assert res_a["claim_supported"] is True
+    assert res_a["illustrative"] is False
+
+    # Setup B: 2 covered points, min=3 -> claim_supported False, illustrative True.
+    run_b = runs.create_run(RunCreateRequest(as_of_date=t2, as_of_dates=[t1, t2]))
+    rid_b = run_b.run_id
+    for as_of in (t1, t2):
+        _seed_minimal_discovery_point(rid_b, as_of, companies=["c1"])
+    prices_b = [
+        _make_price_row("c1", "2024-04-01", 100.0, 100.0, run_id=rid_b),
+        _make_price_row("c1", "2024-06-28", 105.0, 105.0, run_id=rid_b),
+        _make_price_row("c1", "2024-07-01", 110.0, 110.0, run_id=rid_b),
+        _make_price_row("c1", "2024-09-30", 116.0, 116.0, run_id=rid_b),
+    ]
+    _write_market_prices(rid_b, prices_b)
+    runs.freeze_all_points(rid_b)
+
+    res_b = run_walk_forward_validation(rid_b)
+    assert res_b["n_points"] == 2
+    assert res_b["min_points_for_claim"] >= 3
+    assert res_b["claim_supported"] is False
+    assert res_b["illustrative"] is True
+
+
+def test_multipoint_unfrozen_or_partial_freeze_rejected():
+    """Partial freeze (only T1 of a 2-point run) -> PermissionError.
+
+    Run-level discovery_frozen stays False until every authored point is frozen
+    (runs.py:377-380), so validate_ready_for_validation rejects the run.
+    """
+    t1, t2 = WF_POINT_1, WF_POINT_2
+    run = runs.create_run(RunCreateRequest(as_of_date=t2, as_of_dates=[t1, t2]))
+    run_id = run.run_id
+
+    _seed_minimal_discovery_point(run_id, t1, companies=["c1"])
+    _seed_minimal_discovery_point(run_id, t2, companies=["c1"])
+    # Freeze ONLY T1.
+    freeze_mod.freeze_discovery(run_id, as_of=t1)
+
+    with pytest.raises(PermissionError):
+        run_walk_forward_validation(run_id)
 
 
 def test_walk_forward_with_no_as_of_dates_returns_failure():
